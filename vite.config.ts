@@ -3,12 +3,15 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
 
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        ...(command === 'build'
+          ? { pg: path.resolve(__dirname, 'src/db/pg-browser-stub.ts') }
+          : {}),
       },
     },
     server: {
