@@ -37,6 +37,11 @@ declare global {
  * Returns whether PostgreSQL configuration is present in environment variables.
  */
 export function getDbConfig(): DbConfig {
+  // PostgreSQL is server-only; keep the browser bundle in demo-memory mode.
+  if (typeof window !== 'undefined') {
+    return { configured: false, type: 'none' };
+  }
+
   // Option 1: Cloud SQL / Google Cloud runtime variables
   if (process.env.SQL_HOST && process.env.SQL_USER && process.env.SQL_DB_NAME) {
     return {
