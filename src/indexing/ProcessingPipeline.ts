@@ -33,7 +33,7 @@ export class ProcessingPipeline {
     let autoMatchedCount = 0;
     let priceChangesCount = 0;
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const observationDate = batch.collectedAt.slice(0, 10);
 
     // Consultăm ofertele curente din memorie/stocare pentru detecția schimbărilor de preț
     const existingOffers = StorageService.getProductOffers();
@@ -73,6 +73,12 @@ export class ProcessingPipeline {
           sourceId: batch.sourceId,
           price: item.effectivePrice,
           originalPrice: item.normalPrice !== item.effectivePrice ? item.normalPrice : undefined,
+          normalPrice: item.normalPrice,
+          promoPrice: item.promoPrice,
+          loyaltyPrice: item.loyaltyPrice,
+          rawRecordId: item.rawRecordId,
+          region: item.region,
+          batchId: batch.batchId,
           unitPrice: item.unitPrice,
           unitPriceMeasure: item.unitPriceMeasure,
           isPromo: item.isPromo,
@@ -80,7 +86,7 @@ export class ProcessingPipeline {
           loyaltyCardRequired: item.loyaltyCardRequired,
           loyaltyCardName: item.loyaltyCardName,
           validUntil: item.validUntil,
-          observationDate: todayStr,
+          observationDate,
           source: 'official_feed',
           confidenceLevel: matchResult.confidence >= 0.9 ? 'high' : 'medium',
           verificationStatus: item.isExpired ? 'expired' : 'verified',
@@ -91,14 +97,20 @@ export class ProcessingPipeline {
 
         // Generăm observația istorică (pentru auditul imuabil append-only)
         const obs: PriceObservation = {
-          id: `obs-${batch.retailerId}-${targetProd.id}-${todayStr}-${item.effectivePrice.toFixed(2)}`,
+          id: `obs-${batch.batchId}-${item.rawRecordId}-${targetProd.id}`,
           productId: targetProd.id,
           storeId: batch.retailerId,
           sourceId: batch.sourceId,
           price: item.effectivePrice,
-          date: todayStr,
+          date: observationDate,
           source: 'official_feed',
-          loyaltyCardUsed: item.loyaltyCardRequired
+          loyaltyCardUsed: item.loyaltyCardRequired,
+          normalPrice: item.normalPrice,
+          promoPrice: item.promoPrice,
+          loyaltyPrice: item.loyaltyPrice,
+          rawRecordId: item.rawRecordId,
+          region: item.region,
+          batchId: batch.batchId
         };
 
         observations.push(obs);
@@ -160,14 +172,21 @@ export class ProcessingPipeline {
           await client.query(
             `INSERT INTO product_offers (
               id, product_id, store_id, source_id, price, original_price,
+              normal_price, promo_price, loyalty_price, raw_record_id, region, batch_id,
               unit_price, unit_price_measure, is_promo, promo_details,
               loyalty_card_required, loyalty_card_name, valid_until,
               observation_date, source, confidence_level, verification_status,
               last_checked, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW(), NOW())
             ON CONFLICT (product_id, store_id) DO UPDATE SET
               price = EXCLUDED.price,
               original_price = EXCLUDED.original_price,
+              normal_price = EXCLUDED.normal_price,
+              promo_price = EXCLUDED.promo_price,
+              loyalty_price = EXCLUDED.loyalty_price,
+              raw_record_id = EXCLUDED.raw_record_id,
+              region = EXCLUDED.region,
+              batch_id = EXCLUDED.batch_id,
               unit_price = EXCLUDED.unit_price,
               unit_price_measure = EXCLUDED.unit_price_measure,
               is_promo = EXCLUDED.is_promo,
@@ -186,6 +205,12 @@ export class ProcessingPipeline {
               off.sourceId || null,
               off.price,
               off.originalPrice || null,
+              off.normalPrice || null,
+              off.promoPrice || null,
+              off.loyaltyPrice || null,
+              off.rawRecordId || null,
+              off.region || 'Național',
+              off.batchId || batch.batchId,
               off.unitPrice,
               off.unitPriceMeasure,
               off.isPromo,
@@ -205,8 +230,9 @@ export class ProcessingPipeline {
         for (const obs of observations) {
           await client.query(
             `INSERT INTO price_observations (
-              id, product_id, store_id, source_id, price, date, loyalty_card_used, source
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+              id, product_id, store_id, source_id, price, normal_price, promo_price, loyalty_price,
+              raw_record_id, region, batch_id, date, loyalty_card_used, source
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             ON CONFLICT (product_id, store_id, date, price) DO NOTHING`,
             [
               obs.id,
@@ -214,6 +240,12 @@ export class ProcessingPipeline {
               obs.storeId,
               obs.sourceId || null,
               obs.price,
+              obs.normalPrice || null,
+              obs.promoPrice || null,
+              obs.loyaltyPrice || null,
+              obs.rawRecordId || null,
+              obs.region || 'Național',
+              obs.batchId || batch.batchId,
               obs.date,
               obs.loyaltyCardUsed || false,
               obs.source
