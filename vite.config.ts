@@ -13,6 +13,11 @@ export default defineConfig(({ command }) => {
         pg: path.resolve(__dirname, 'src/db/pg-browser-stub.ts'),
       },
     },
+    // Prevent Vite from pre-bundling `pg` before the browser alias is applied.
+    // The client must use the lightweight stub instead of Node's Buffer-dependent build.
+    optimizeDeps: {
+      exclude: ['pg'],
+    },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.

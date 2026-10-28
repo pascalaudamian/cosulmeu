@@ -196,7 +196,7 @@ Produs Pret Invalid,-5.00,1,buc,TestBrand,,,,`;
 
   const degradedLidl = RetailerRegistry.getRetailer('lidl');
   assert(degradedLidl?.status === 'degraded', 'După 3 eșecuri consecutive, circuit breaker-ul comută starea pe degraded');
-  assert(degradedLidl?.suspensionReason?.includes('3 eșecuri consecutive'), 'Motivul suspendării menționează eșecurile consecutive');
+  assert(Boolean(degradedLidl?.suspensionReason?.includes('3 eșecuri consecutive')), 'Motivul suspendării menționează eșecurile consecutive');
 
   // Reactivare manuală de către administrator
   RetailerRegistry.updateRetailerStatus('lidl', 'configured', 'Reactivat manual');

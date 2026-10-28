@@ -69,6 +69,12 @@ export interface ProductOffer {
   verificationStatus: VerificationStatus;
   lastChecked: string;
   isSponsored?: boolean;
+  normalPrice?: number;
+  promoPrice?: number;
+  loyaltyPrice?: number;
+  rawRecordId?: string;
+  region?: string;
+  batchId?: string;
 }
 
 export interface PriceObservation {
@@ -81,6 +87,12 @@ export interface PriceObservation {
   receiptId?: string;
   loyaltyCardUsed?: boolean;
   source: DataSourceType;
+  normalPrice?: number;
+  promoPrice?: number;
+  loyaltyPrice?: number;
+  rawRecordId?: string;
+  region?: string;
+  batchId?: string;
 }
 
 export interface DataSource {

@@ -121,7 +121,9 @@ export class ProductMatcher {
       }
     }
 
-    if (bestMatch && highestScore >= 0.68) {
+    // Without a verified barcode, use a conservative threshold so medium-confidence
+    // fuzzy matches remain reviewable instead of silently changing the catalog.
+    if (bestMatch && highestScore >= 0.70) {
       return {
         matchedProduct: bestMatch,
         confidence: highestScore,
