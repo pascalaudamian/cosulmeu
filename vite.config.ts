@@ -9,9 +9,8 @@ export default defineConfig(({ command }) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
-        ...(command === 'build'
-          ? { pg: path.resolve(__dirname, 'src/db/pg-browser-stub.ts') }
-          : {}),
+        // `pg` is server-only; always replace it in the browser bundle.
+        pg: path.resolve(__dirname, 'src/db/pg-browser-stub.ts'),
       },
     },
     server: {
