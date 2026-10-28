@@ -1,0 +1,10 @@
+{
+  "name": "Coșul Meu - Comparator Prețuri & Bonuri",
+  "description": "Aplicație inteligentă pentru cumpărături în România: comparare prețuri supermarketuri, optimizare coș, scanare bonuri fiscale cu AI și evoluție prețuri.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

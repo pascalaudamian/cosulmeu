@@ -1,0 +1,13 @@
+# FIȘIER DEMONSTRATIV DE TEST - COȘUL MEU (DATE FICTIVE PENTRU TESTARE END-TO-END)
+# FORMAT: denumire,pret,gramaj,unitate,marca,cod_bare,promotie,valabil_pana,card_fidelitate
+denumire,pret,gramaj,unitate,marca,cod_bare,promotie,valabil_pana,card_fidelitate
+Lapte proaspat Napolact 1.5% 1L [TEST-GTIN],6.49,1,l,Napolact,5941014002341,,,
+Piept de pui Agricola 1kg [TEST-PROMO-FIDELITATE],24.99,1,kg,Agricola,5941199003310,-15% Lidl Plus,2026-11-20,Lidl Plus
+Paine feliata alba Toast 500g [TEST-GRAMAJ-G],4.29,500,g,Vel Pitar,5941033001091,,,
+Ulei floarea soarelui 750ml [TEST-VOLUM-ML],5.89,750,ml,Untdelemn de la Bunica,5941031002011,,,
+Lapte proaspat Napolact DUPLICAT [TEST-DUPLICAT],6.99,1,l,Napolact,5941014002341,,,
+Produs Pret Zero Fictiv [TEST-INVALID-ZERO],0,1,buc,TestBrand,9991110001,,,
+Produs Pret Negativ Fictiv [TEST-INVALID-NEGATIV],-12.50,1,kg,TestBrand,9991110002,,,
+Produs Pret Text Fictiv [TEST-INVALID-TEXT],GRATUIT,1,buc,TestBrand,9991110003,,,
+Iaurt fin traditie greceasca 400g [TEST-AMBIGUU],5.49,400,g,Olympus,,,,
+Lapte praf uscat cutie 500g [TEST-INCOMPATIBIL],19.99,500,g,Napolact,,,,
