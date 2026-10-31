@@ -256,9 +256,26 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
   const handleConfirmAndSave = () => {
     if (!parsedReceipt) return;
     StorageService.addReceipt(parsedReceipt);
+
+    // Înregistrează produsele de pe bon ca și candidați pentru motorul de căutare și indexare pe retaileri
+    const discoveryCandidates = parsedReceipt.items.map((it, idx) => ({
+      id: `rec-prod-${parsedReceipt.id}-${idx}`,
+      receiptId: parsedReceipt.id,
+      rawName: it.rawName,
+      extractedPrice: it.unitPrice,
+      extractedQuantity: it.quantity,
+      category: it.category,
+      targetSearchStatus: 'pending' as const,
+      matchedProductId: it.matchedProductId,
+      searchAttempts: 0,
+      createdAt: new Date().toISOString()
+    }));
+    StorageService.addReceiptProducts(discoveryCandidates);
+
     onReceiptSaved(parsedReceipt);
     setSaveSuccess(true);
   };
+
 
   // Calculate items sum vs receipt total discrepancy
   const itemsSum = parsedReceipt

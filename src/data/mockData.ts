@@ -91,6 +91,19 @@ export const STORES: Store[] = [
     locationsCount: 950,
     sampleAddress: 'Piața Romană 9, București',
     isPartner: false
+  },
+  {
+    id: 'metro',
+    name: 'Metro Cash & Carry',
+    slug: 'metro',
+    chain: 'Metro România',
+    brandColor: 'bg-yellow-500',
+    accentColor: 'text-blue-900',
+    type: 'hypermarket',
+    rating: 4.4,
+    locationsCount: 30,
+    sampleAddress: 'Bd. Iuliu Maniu 500, București Militari',
+    isPartner: false
   }
 ];
 

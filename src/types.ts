@@ -75,6 +75,13 @@ export interface ProductOffer {
   rawRecordId?: string;
   region?: string;
   batchId?: string;
+  freshnessScore?: number;
+  qualityScore?: number;
+  freshnessStatus?: 'very_recent' | 'recent' | 'stale' | 'expired';
+  lastCollectedAt?: string;
+  lastVerifiedAt?: string;
+  isFlaggedAnomaly?: boolean;
+  anomalyReason?: string;
 }
 
 export interface PriceObservation {

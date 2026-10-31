@@ -158,6 +158,28 @@ export const INITIAL_RETAILER_ENTRIES: RetailerRegistryEntry[] = [
     pendingCandidatesCount: 0,
     isProtectedByAuth: true,
     requiresPartnerToken: true
+  },
+  {
+    retailerId: 'metro',
+    sourceId: 'src-metro-collector',
+    name: 'Metro Cash & Carry România',
+    chain: 'Metro România',
+    accessMethod: 'public_catalog_feed',
+    status: 'pending_authorization',
+    collectionIntervalSeconds: 86400,
+    cronExpression: '0 4 * * *',
+    timezone: 'Europe/Bucharest',
+    rateLimitRpm: 15,
+    maxBatchItems: 400,
+    timeoutMs: 10000,
+    maxRetries: 3,
+    consecutiveFailures: 0,
+    suspensionReason: 'În așteptarea configurării accesului la catalogul public digital / acreditare prețuri engros și retail Metro România.',
+    offersCount: 6,
+    autoMatchRate: 85,
+    pendingCandidatesCount: 0,
+    isProtectedByAuth: true,
+    requiresPartnerToken: true
   }
 ];
 

@@ -38,15 +38,15 @@ function assert(condition: boolean, message: string) {
 async function runIndexingTests() {
   console.log('🧪 Rulare teste pentru Motorul Hibrid de Indexare a Prețurilor (7 Retaileri)...\n');
 
-  // --- 1. Verificarea Registrului și a Celor 7 Retaileri ---
-  console.log('--- 1. Contractul de Colector și Registrul celor 7 Retaileri ---');
+  // --- 1. Verificarea Registrului și a Celor 8 Retaileri ---
+  console.log('--- 1. Contractul de Colector și Registrul celor 8 Retaileri (inclusiv Metro) ---');
   RetailerRegistry.resetToDefault();
   const allRetailers = RetailerRegistry.getAllRetailers();
-  assert(allRetailers.length === 7, `Registrul conține exact 7 retaileri românești (obținut: ${allRetailers.length})`);
+  assert(allRetailers.length === 8, `Registrul conține exact 8 retaileri românești (obținut: ${allRetailers.length})`);
 
-  const expectedRetailerIds = ['lidl', 'kaufland', 'carrefour', 'penny', 'auchan', 'profi', 'mega-image'];
+  const expectedRetailerIds = ['lidl', 'kaufland', 'carrefour', 'penny', 'auchan', 'profi', 'mega-image', 'metro'];
   const hasAll = expectedRetailerIds.every(id => allRetailers.some(r => r.retailerId === id));
-  assert(hasAll, 'Toți cei 7 retaileri (Lidl, Kaufland, Carrefour, Penny, Auchan, Profi, Mega Image) sunt prezenți');
+  assert(hasAll, 'Toți cei 8 retaileri (Lidl, Kaufland, Carrefour, Penny, Auchan, Profi, Mega Image, Metro) sunt prezenți');
 
   // Testare independență și eligibilitate pentru fiecare retailer
   for (const rid of expectedRetailerIds) {
@@ -99,6 +99,27 @@ Produs Pret Invalid,-5.00,1,buc,TestBrand,,,,`;
   const breadItem = valid.find(v => v.rawName.includes('Paine Toast'));
   assert(breadItem?.normalizedUnit === 'kg', 'Pâinea la 500g a fost normalizată la kg');
   assert(breadItem?.unitPrice === 8.58, `Prețul unitar pentru pâine (500g la 4.29) este 8.58 lei/kg (obținut: ${breadItem?.unitPrice})`);
+
+  // Test scanare catalog pagină web / carduri HTML
+  const sampleWebHtml = `
+  <!DOCTYPE html>
+  <html>
+    <body>
+      <div class="product-item">
+        <h3 class="product-title">Ulei floarea soarelui 1L</h3>
+        <span class="price-value">6.99 lei</span>
+        <span class="promo-badge">-15% Ofertă Specială</span>
+      </div>
+      <div class="product-item">
+        <h3 class="product-title">Zahăr Mărgăritar 1kg</h3>
+        <span class="price-value">4.49 lei</span>
+      </div>
+    </body>
+  </html>`;
+  const webBatch = await lidlCollector.collectBatch({ payload: sampleWebHtml, dryRun: true });
+  assert(webBatch.rawRecordsCount === 2, `Scanarea paginii HTML a extras 2 produse (obținut: ${webBatch.rawRecordsCount})`);
+  assert(webBatch.rawRecords[0].rawName === 'Ulei floarea soarelui 1L', 'Denumirea din cardul HTML este extrasă corect');
+  assert(webBatch.rawRecords[0].normalPrice === '6.99', 'Prețul din pagina web este extras corect');
 
   // --- 4. Pipeline de Procesare: Auto-match vs Candidați Ambigui ---
   console.log('\n--- 4. Pipeline de Procesare: Identificare & Ambiguități ---');
@@ -208,7 +229,7 @@ Produs Pret Invalid,-5.00,1,buc,TestBrand,,,,`;
   // GET /api/indexing/retailers
   const retailersRes = await makeRequest('GET', '/api/indexing/retailers');
   assert(retailersRes.status === 200, `GET /api/indexing/retailers returnează 200 OK (obținut: ${retailersRes.status})`);
-  assert(retailersRes.body.count === 7, `API-ul returnează cei 7 retaileri (obținut: ${retailersRes.body.count})`);
+  assert(retailersRes.body.count === 8, `API-ul returnează cei 8 retaileri (obținut: ${retailersRes.body.count})`);
 
   // GET /api/indexing/status
   const statusRes = await makeRequest('GET', '/api/indexing/status');

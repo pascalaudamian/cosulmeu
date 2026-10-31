@@ -11,6 +11,17 @@ import {
   ProductMatchCandidate
 } from '../types';
 import {
+  PromotionRecord,
+  ReceiptDiscoveryItem,
+  RetailerProductRecord,
+  IndexingRunRecord,
+  QualityAnomalyRecord,
+  RecollectionTask,
+  DailyQualityReportRecord,
+  PriceFreshnessThresholds,
+  PriceQualityWeights
+} from '../indexing/types';
+import {
   INITIAL_SHOPPING_LISTS,
   SAMPLE_RECEIPTS,
   INITIAL_USER_PROFILE,
@@ -35,8 +46,17 @@ const KEYS = {
   DATA_SOURCES: 'cosul_meu_data_sources_v1',
   SYNC_RUNS: 'cosul_meu_sync_runs_v1',
   PRODUCT_OFFERS: 'cosul_meu_product_offers_v1',
-  MATCH_CANDIDATES: 'cosul_meu_match_candidates_v1'
+  MATCH_CANDIDATES: 'cosul_meu_match_candidates_v1',
+  PROMOTIONS: 'cosul_meu_promotions_v1',
+  RECEIPT_PRODUCTS: 'cosul_meu_receipt_products_v1',
+  RETAILER_PRODUCTS: 'cosul_meu_retailer_products_v1',
+  INDEXING_RUNS: 'cosul_meu_indexing_runs_v1',
+  QUALITY_ANOMALIES: 'cosul_meu_quality_anomalies_v1',
+  RECOLLECTION_QUEUE: 'cosul_meu_recollection_queue_v1',
+  DAILY_QUALITY_REPORTS: 'cosul_meu_daily_quality_reports_v1',
+  QUALITY_CONFIG: 'cosul_meu_quality_config_v1'
 };
+
 
 const memoryStore: Record<string, string> = {};
 
@@ -292,6 +312,10 @@ export class StorageService {
     return [...PRODUCTS, ...custom];
   }
 
+  static getProducts(): Product[] {
+    return this.getAllProducts();
+  }
+
   // Product Offers (dynamic & persistent)
   static getProductOffers(): ProductOffer[] {
     try {
@@ -488,6 +512,122 @@ export class StorageService {
     this.saveMatchCandidates([...current, ...nonDups]);
   }
 
+  // Promotions Storage
+  static getPromotions(): PromotionRecord[] {
+    try {
+      const data = safeGetItem(KEYS.PROMOTIONS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static savePromotions(promos: PromotionRecord[]): void {
+    try {
+      safeSetItem(KEYS.PROMOTIONS, JSON.stringify(promos));
+    } catch (e) {
+      console.error('Eroare la salvarea promoțiilor:', e);
+    }
+  }
+
+  static addPromotions(newPromos: PromotionRecord[]): void {
+    const existing = this.getPromotions();
+    const map = new Map<string, PromotionRecord>();
+    for (const p of existing) map.set(p.id, p);
+    for (const p of newPromos) map.set(p.id, p);
+    this.savePromotions(Array.from(map.values()));
+  }
+
+  // Receipt Products Discovery
+  static getReceiptProducts(): ReceiptDiscoveryItem[] {
+    try {
+      const data = safeGetItem(KEYS.RECEIPT_PRODUCTS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveReceiptProducts(items: ReceiptDiscoveryItem[]): void {
+    try {
+      safeSetItem(KEYS.RECEIPT_PRODUCTS, JSON.stringify(items));
+    } catch (e) {
+      console.error('Eroare la salvarea produselor din bonuri:', e);
+    }
+  }
+
+  static addReceiptProducts(items: ReceiptDiscoveryItem[]): void {
+    const existing = this.getReceiptProducts();
+    const existingKeys = new Set(existing.map(i => `${i.rawName.toLowerCase().trim()}`));
+    const newOnes = items.filter(i => !existingKeys.has(i.rawName.toLowerCase().trim()));
+    this.saveReceiptProducts([...existing, ...newOnes]);
+  }
+
+  static updateReceiptProductStatus(id: string, status: 'pending' | 'searched' | 'matched' | 'ignored', matchedProductId?: string): void {
+    const current = this.getReceiptProducts();
+    const updated = current.map(item => {
+      if (item.id === id) {
+        return {
+          ...item,
+          targetSearchStatus: status,
+          matchedProductId: matchedProductId ?? item.matchedProductId,
+          lastSearchedAt: new Date().toISOString()
+        };
+      }
+      return item;
+    });
+    this.saveReceiptProducts(updated);
+  }
+
+  // Retailer Products
+  static getRetailerProducts(): RetailerProductRecord[] {
+    try {
+      const data = safeGetItem(KEYS.RETAILER_PRODUCTS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveRetailerProducts(prods: RetailerProductRecord[]): void {
+    try {
+      safeSetItem(KEYS.RETAILER_PRODUCTS, JSON.stringify(prods));
+    } catch (e) {
+      console.error('Eroare la salvarea produselor retailer:', e);
+    }
+  }
+
+  static addRetailerProducts(prods: RetailerProductRecord[]): void {
+    const existing = this.getRetailerProducts();
+    const map = new Map<string, RetailerProductRecord>();
+    for (const p of existing) map.set(p.id, p);
+    for (const p of prods) map.set(p.id, p);
+    this.saveRetailerProducts(Array.from(map.values()));
+  }
+
+  // Indexing Runs
+  static getIndexingRuns(): IndexingRunRecord[] {
+    try {
+      const data = safeGetItem(KEYS.INDEXING_RUNS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveIndexingRuns(runs: IndexingRunRecord[]): void {
+    try {
+      safeSetItem(KEYS.INDEXING_RUNS, JSON.stringify(runs));
+    } catch (e) {
+      console.error('Eroare la salvarea execuțiilor de indexare:', e);
+    }
+  }
+
+  static addIndexingRun(run: IndexingRunRecord): void {
+    const existing = this.getIndexingRuns();
+    this.saveIndexingRuns([run, ...existing.slice(0, 49)]); // păstrăm ultimele 50 de execuții
+  }
+
   // Demo Banner Dismiss
   static isDemoBannerDismissed(): boolean {
     return safeGetItem(KEYS.DISMISSED_DEMO) === 'true';
@@ -495,6 +635,145 @@ export class StorageService {
 
   static setDemoBannerDismissed(dismissed: boolean): void {
     safeSetItem(KEYS.DISMISSED_DEMO, dismissed ? 'true' : 'false');
+  }
+
+  // Quality Anomalies Storage
+  static getQualityAnomalies(): QualityAnomalyRecord[] {
+    try {
+      const data = safeGetItem(KEYS.QUALITY_ANOMALIES);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveQualityAnomalies(anomalies: QualityAnomalyRecord[]): void {
+    try {
+      safeSetItem(KEYS.QUALITY_ANOMALIES, JSON.stringify(anomalies));
+    } catch (e) {
+      console.error('Eroare la salvarea anomaliilor de calitate:', e);
+    }
+  }
+
+  static addQualityAnomaly(anomaly: QualityAnomalyRecord): void {
+    const existing = this.getQualityAnomalies();
+    // Prevenim dublurile identice pentru același produs și retailer
+    const filtered = existing.filter(a => !(a.productId === anomaly.productId && a.retailerId === anomaly.retailerId && a.anomalyType === anomaly.anomalyType && a.status === 'pending_review'));
+    this.saveQualityAnomalies([anomaly, ...filtered]);
+  }
+
+  static updateQualityAnomalyStatus(id: string, status: 'pending_review' | 'resolved_approved' | 'resolved_rejected', reviewedBy?: string): void {
+    const current = this.getQualityAnomalies();
+    const updated = current.map(a => {
+      if (a.id === id) {
+        return {
+          ...a,
+          status,
+          reviewedAt: new Date().toISOString(),
+          reviewedBy: reviewedBy || 'admin'
+        };
+      }
+      return a;
+    });
+    this.saveQualityAnomalies(updated);
+  }
+
+  // Recollection Queue Storage
+  static getRecollectionQueue(): RecollectionTask[] {
+    try {
+      const data = safeGetItem(KEYS.RECOLLECTION_QUEUE);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveRecollectionQueue(tasks: RecollectionTask[]): void {
+    try {
+      safeSetItem(KEYS.RECOLLECTION_QUEUE, JSON.stringify(tasks));
+    } catch (e) {
+      console.error('Eroare la salvarea cozii de recolectare:', e);
+    }
+  }
+
+  static addRecollectionTasks(tasks: RecollectionTask[]): void {
+    const existing = this.getRecollectionQueue();
+    const existingKeys = new Set(existing.filter(t => t.status === 'queued' || t.status === 'in_progress').map(t => `${t.productId}__${t.retailerId}`));
+    const newTasks = tasks.filter(t => !existingKeys.has(`${t.productId}__${t.retailerId}`));
+    this.saveRecollectionQueue([...existing, ...newTasks].sort((a, b) => a.priority - b.priority));
+  }
+
+  static updateRecollectionTaskStatus(id: string, status: 'queued' | 'in_progress' | 'completed' | 'failed'): void {
+    const current = this.getRecollectionQueue();
+    const updated = current.map(t => {
+      if (t.id === id) {
+        return {
+          ...t,
+          status,
+          attempts: status === 'failed' || status === 'completed' ? t.attempts + 1 : t.attempts
+        };
+      }
+      return t;
+    });
+    this.saveRecollectionQueue(updated);
+  }
+
+  // Daily Quality Reports Storage
+  static getDailyQualityReports(): DailyQualityReportRecord[] {
+    try {
+      const data = safeGetItem(KEYS.DAILY_QUALITY_REPORTS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveDailyQualityReports(reports: DailyQualityReportRecord[]): void {
+    try {
+      safeSetItem(KEYS.DAILY_QUALITY_REPORTS, JSON.stringify(reports));
+    } catch (e) {
+      console.error('Eroare la salvarea rapoartelor zilnice:', e);
+    }
+  }
+
+  static addDailyQualityReport(report: DailyQualityReportRecord): void {
+    const existing = this.getDailyQualityReports();
+    const filtered = existing.filter(r => r.reportDate !== report.reportDate);
+    this.saveDailyQualityReports([report, ...filtered]);
+  }
+
+  // Quality Configuration
+  static getQualityConfig(): { thresholds: PriceFreshnessThresholds; weights: PriceQualityWeights } {
+    try {
+      const data = safeGetItem(KEYS.QUALITY_CONFIG);
+      if (data) return JSON.parse(data);
+    } catch {}
+
+    return {
+      thresholds: {
+        veryRecentHours: 24,
+        recentHours: 48,
+        staleHours: 72
+      },
+      weights: {
+        freshness: 0.25,
+        formatValidity: 0.15,
+        sourceProvenance: 0.10,
+        productMatchConfidence: 0.15,
+        unitConsistency: 0.10,
+        verificationStatus: 0.10,
+        anomalyAbsence: 0.10,
+        retailerReliability: 0.05
+      }
+    };
+  }
+
+  static saveQualityConfig(config: { thresholds: PriceFreshnessThresholds; weights: PriceQualityWeights }): void {
+    try {
+      safeSetItem(KEYS.QUALITY_CONFIG, JSON.stringify(config));
+    } catch (e) {
+      console.error('Eroare la salvarea configurației de calitate:', e);
+    }
   }
 
   // Reset & Export
@@ -507,6 +786,13 @@ export class StorageService {
     this.saveDataSources(DATA_SOURCES);
     this.saveSyncRuns(INITIAL_SYNC_RUNS);
     this.saveMatchCandidates(INITIAL_MATCH_CANDIDATES);
+    this.savePromotions([]);
+    this.saveReceiptProducts([]);
+    this.saveRetailerProducts([]);
+    this.saveIndexingRuns([]);
+    this.saveQualityAnomalies([]);
+    this.saveRecollectionQueue([]);
+    this.saveDailyQualityReports([]);
   }
 
   static exportDataAsJson(): string {

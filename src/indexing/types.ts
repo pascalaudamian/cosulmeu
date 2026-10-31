@@ -167,3 +167,308 @@ export interface PriceCollector {
     duplicatesCount: number;
   };
 }
+
+export interface ScrapedProductCandidate {
+  rawName: string;
+  brand?: string;
+  packageWeightOrVolume?: number;
+  packageUnit?: UnitType;
+  barcode?: string;
+  normalPrice: number;
+  promoPrice?: number;
+  loyaltyPrice?: number;
+  promoDescription?: string;
+  promoPeriod?: { from?: string; until?: string };
+  sourceUrl?: string;
+  region?: string;
+  collectedAt: string;
+}
+
+export interface PromotionRecord {
+  id: string;
+  retailerId: string;
+  productId?: string;
+  retailerProductId?: string;
+  barcode?: string;
+  brand?: string;
+  title: string;
+  description?: string;
+  normalPrice?: number;
+  promoPrice: number;
+  loyaltyPrice?: number;
+  loyaltyCardName?: string;
+  startsAt?: string;
+  endsAt?: string;
+  conditions?: string;
+  sourceUrl?: string;
+  discoveredAt: string;
+}
+
+export interface ReceiptDiscoveryItem {
+  id: string;
+  receiptId?: string;
+  rawName: string;
+  extractedBrand?: string;
+  extractedPrice?: number;
+  extractedQuantity?: number;
+  category?: string;
+  targetSearchStatus: 'pending' | 'searched' | 'matched' | 'ignored';
+  matchedProductId?: string;
+  searchAttempts: number;
+  lastSearchedAt?: string;
+  createdAt: string;
+}
+
+export interface RetailerProductRecord {
+  id: string;
+  retailerId: string;
+  productId?: string;
+  externalSku?: string;
+  url?: string;
+  scrapedName: string;
+  scrapedBrand?: string;
+  scrapedPackageWeightOrVolume?: number;
+  scrapedPackageUnit?: string;
+  barcode?: string;
+  lastScrapedAt: string;
+  status: 'active' | 'archived';
+}
+
+export interface IndexingJobRecord {
+  id: string;
+  retailerId: string;
+  jobType: 'daily_scrape' | 'targeted_receipt_search' | 'promotions_discovery';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'retrying';
+  targetQuery?: string;
+  scheduledAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  errorMessage?: string;
+  retryCount: number;
+  maxRetries: number;
+}
+
+export interface IndexingRunRecord {
+  id: string;
+  jobId?: string;
+  retailerId: string;
+  startedAt: string;
+  completedAt?: string;
+  status: 'running' | 'completed' | 'failed';
+  productsCollected: number;
+  promotionsCollected: number;
+  errorsCount: number;
+  durationMs: number;
+  summary: string;
+}
+
+export interface IndexingMonitorStats {
+  activeRetailersCount: number;
+  totalRetailersCount: number;
+  totalOffersCount: number;
+  totalObservationsCount: number;
+  totalPromotionsCount: number;
+  pendingReceiptProductsCount: number;
+  lastRunTimestamp?: string;
+  nextRunTimestamp?: string;
+  averageAutoMatchRate: number;
+  systemHealth: 'healthy' | 'degraded' | 'paused';
+  recentRuns: IndexingRunRecord[];
+}
+
+// ============================================================================
+// PRICE QUALITY MONITOR & FRESHNESS SCORE TYPES
+// ============================================================================
+
+export type PriceFreshnessStatus =
+  | 'very_recent' // 0 - 24 ore
+  | 'recent'      // 24 - 48 ore
+  | 'stale'       // 48 - 72 ore
+  | 'expired';    // Peste 72 ore (neverificat)
+
+export interface PriceFreshnessThresholds {
+  veryRecentHours: number; // default 24
+  recentHours: number;     // default 48
+  staleHours: number;      // default 72
+}
+
+export interface PriceFreshnessEvaluation {
+  status: PriceFreshnessStatus;
+  score: number; // 0 - 100
+  ageHours: number;
+  lastObservationDate?: string;
+  lastCollectedAt?: string;
+  lastVerifiedAt?: string;
+  labelRo: string;
+}
+
+export interface PriceQualityWeights {
+  freshness: number;              // default 0.25 (25%)
+  formatValidity: number;         // default 0.15 (15%)
+  sourceProvenance: number;       // default 0.10 (10%)
+  productMatchConfidence: number; // default 0.15 (15%)
+  unitConsistency: number;        // default 0.10 (10%)
+  verificationStatus: number;     // default 0.10 (10%)
+  anomalyAbsence: number;         // default 0.10 (10%)
+  retailerReliability: number;    // default 0.05 (5%)
+}
+
+export interface PriceQualityEvaluation {
+  overallScore: number;     // 0 - 100
+  freshnessScore: number;   // 0 - 100
+  freshnessStatus: PriceFreshnessStatus;
+  breakdown: {
+    freshness: number;
+    formatValidity: number;
+    sourceProvenance: number;
+    productMatchConfidence: number;
+    unitConsistency: number;
+    verificationStatus: number;
+    anomalyAbsence: number;
+    retailerReliability: number;
+  };
+  penalties: string[];
+  isFlagged: boolean;
+  anomalyReason?: string;
+}
+
+export type RetailerCollectorMonitorState =
+  | 'ACTIVE'
+  | 'RUNNING'
+  | 'DEGRADED'
+  | 'FAILED'
+  | 'DISABLED'
+  | 'WAITING_FOR_AUTHORIZATION';
+
+export interface RetailerQualityMetrics {
+  retailerId: string;
+  retailerName: string;
+  chain: string;
+  status: RetailerCollectorMonitorState;
+  lastExecution?: string;
+  lastSuccessfulExecution?: string;
+  nextScheduledRun?: string;
+  trackedProductsCount: number;
+  collectedPricesCount: number;
+  activePromotionsCount: number;
+  expiredPricesCount: number;
+  errorCount: number;
+  successRate: number; // 0 - 100%
+  avgCollectionDurationMs: number;
+  avgQualityScore: number;
+  avgFreshnessScore: number;
+}
+
+export type AnomalyType =
+  | 'sudden_price_spike'
+  | 'unusual_price_drop'
+  | 'zero_or_negative_price'
+  | 'extreme_price_outlier'
+  | 'suspicious_weight_change'
+  | 'expired_promotion_claimed'
+  | 'mispresented_loyalty_price'
+  | 'uncertain_or_mismatched_product';
+
+export interface QualityAnomalyRecord {
+  id: string;
+  productId: string;
+  productName: string;
+  retailerId: string;
+  offerId?: string;
+  anomalyType: AnomalyType;
+  severity: 'high' | 'medium' | 'low';
+  currentPrice: number;
+  previousPrice?: number;
+  baselinePrice?: number;
+  deviationPercentage?: number;
+  details: string;
+  status: 'pending_review' | 'resolved_approved' | 'resolved_rejected';
+  detectedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+}
+
+export interface RecollectionTask {
+  id: string;
+  productId: string;
+  productName: string;
+  retailerId: string;
+  priority: 1 | 2 | 3 | 4 | 5; // 1 = Expired, 2 = Anomalies, 3 = Uncertain, 4 = Popular, 5 = Promo expiry
+  reason: string;
+  status: 'queued' | 'in_progress' | 'completed' | 'failed';
+  scheduledAt: string;
+  attempts: number;
+  createdAt: string;
+}
+
+export interface DailyQualityReportRecord {
+  id: string;
+  reportDate: string; // YYYY-MM-DD
+  totalTrackedProducts: number;
+  totalNewPrices: number;
+  totalUpdatedPrices: number;
+  totalNewPromotions: number;
+  totalExpiredPrices: number;
+  totalUnmatchedProducts: number;
+  totalAnomaliesCount: number;
+  totalCollectionErrors: number;
+  overallAverageQualityScore: number;
+  overallAverageFreshnessScore: number;
+  freshnessDistribution: {
+    veryRecent: number;
+    recent: number;
+    stale: number;
+    expired: number;
+  };
+  retailersBreakdown: Record<string, {
+    trackedProducts: number;
+    collectedPrices: number;
+    activePromos: number;
+    expiredPrices: number;
+    successRate: number;
+    qualityScore: number;
+    status: string;
+  }>;
+  summary: string;
+  generatedAt: string;
+}
+
+export interface IndexQualityOverview {
+  totalTrackedProducts: number;
+  veryRecentCount: number;
+  recentCount: number;
+  staleCount: number;
+  expiredCount: number;
+  averageQualityScore: number;
+  averageFreshnessScore: number;
+  anomaliesCount: number;
+  uncertainMatchesCount: number;
+  problematicRetailersCount: number;
+  retailersMetrics: RetailerQualityMetrics[];
+  recentAnomalies: QualityAnomalyRecord[];
+  freshnessDistribution: {
+    veryRecent: number;
+    recent: number;
+    stale: number;
+    expired: number;
+  };
+  qualityByRetailer: {
+    retailerId: string;
+    retailerName: string;
+    qualityScore: number;
+    freshnessScore: number;
+    successRate: number;
+    status: RetailerCollectorMonitorState;
+  }[];
+  anomaliesTimeline7d: {
+    date: string;
+    count: number;
+  }[];
+  freshnessEvolution7d: {
+    date: string;
+    freshnessScore: number;
+    qualityScore: number;
+  }[];
+}
+
+

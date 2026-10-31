@@ -90,7 +90,7 @@ export class ProcessingPipeline {
           source: 'official_feed',
           confidenceLevel: matchResult.confidence >= 0.9 ? 'high' : 'medium',
           verificationStatus: item.isExpired ? 'expired' : 'verified',
-          lastChecked: todayStr
+          lastChecked: observationDate
         };
 
         offers.push(offer);

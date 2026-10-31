@@ -105,8 +105,112 @@ export abstract class BaseRetailerCollector implements PriceCollector {
           region: item.region || item.regiune || 'Național'
         }));
       } catch {
-        // Dacă eșuează JSON, continuă cu CSV
+        // Dacă eșuează JSON, continuă cu alte formate
       }
+    }
+
+    // 2. Scanare / Parsare pagini web publice sau cataloage HTML (microdata, JSON-LD, carduri de produse)
+    if (payload.includes('<html') || payload.includes('<!DOCTYPE') || payload.includes('<article') || payload.includes('class="product')) {
+      const htmlItems: RawCollectorItem[] = [];
+
+      // A. Căutare blocuri JSON-LD (<script type="application/ld+json">)
+      const jsonLdRegex = /<script\s+[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+      let matchJsonLd: RegExpExecArray | null;
+      while ((matchJsonLd = jsonLdRegex.exec(payload)) !== null) {
+        try {
+          const ldData = JSON.parse(matchJsonLd[1].trim());
+          const entries = Array.isArray(ldData) ? ldData : [ldData];
+          for (const entry of entries) {
+            if (entry['@type'] === 'Product' || entry.offers) {
+              const offer = Array.isArray(entry.offers) ? entry.offers[0] : entry.offers;
+              htmlItems.push({
+                id: `ld-${htmlItems.length + 1}`,
+                rawName: entry.name || entry.title || '',
+                brand: typeof entry.brand === 'object' ? entry.brand.name : entry.brand,
+                barcode: entry.gtin13 || entry.gtin || entry.sku,
+                normalPrice: offer ? (offer.price || offer.highPrice) : 0,
+                promoPrice: offer && offer.lowPrice && offer.lowPrice < offer.price ? offer.lowPrice : undefined,
+                currency: offer?.priceCurrency || 'RON',
+                category: entry.category,
+                region: 'Național'
+              });
+            }
+          }
+        } catch {
+          // Ignorare JSON-LD nevalid
+        }
+      }
+
+      if (htmlItems.length > 0) {
+        return htmlItems;
+      }
+
+      // B. Scanare carduri HTML de produse (ex: <div class="product...">...</div> sau <article ...>)
+      const cardRegex = /<(?:div|article|li)\s+[^>]*class=["'][^"']*(?:product|catalog-item|item-card|offer-card)[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|article|li)>/gi;
+      let cardMatch: RegExpExecArray | null;
+      let idx = 1;
+
+      while ((cardMatch = cardRegex.exec(payload)) !== null) {
+        const cardHtml = cardMatch[1];
+
+        const nameMatch = cardHtml.match(/<(?:h2|h3|h4|span|a)\s+[^>]*class=["'][^"']*(?:title|name|heading)[^"']*["'][^>]*>([^<]+)<\//i)
+          || cardHtml.match(/title=["']([^"']+)["']/i);
+        const rawName = nameMatch ? nameMatch[1].trim() : '';
+
+        const priceMatch = cardHtml.match(/<(?:span|div|p)\s+[^>]*class=["'][^"']*(?:price|current-price|value)[^"']*["'][^>]*>\s*([0-9]+[.,][0-9]{2})\s*(?:lei|ron|€)?<\//i)
+          || cardHtml.match(/([0-9]+[.,][0-9]{2})\s*(?:lei|ron)/i);
+        const normalPrice = priceMatch ? priceMatch[1].replace(',', '.') : '';
+
+        const promoMatch = cardHtml.match(/<(?:span|div)\s+[^>]*class=["'][^"']*(?:badge|discount|promo)[^"']*["'][^>]*>([^<]+)<\//i);
+        const promoDetails = promoMatch ? promoMatch[1].trim() : undefined;
+
+        if (rawName && normalPrice) {
+          htmlItems.push({
+            id: `web-${idx++}`,
+            rawName,
+            normalPrice,
+            promoDetails,
+            currency: 'RON',
+            region: 'Național'
+          });
+        }
+      }
+
+      if (htmlItems.length > 0) {
+        return htmlItems;
+      }
+    }
+
+    // 3. Scanare XML simplificată (<item> sau <product>)
+    if (payload.includes('<?xml') || payload.includes('<rss') || payload.includes('<catalog')) {
+      const xmlItems: RawCollectorItem[] = [];
+      const itemRegex = /<(?:item|product|oferta)>([\s\S]*?)<\/(?:item|product|oferta)>/gi;
+      let m: RegExpExecArray | null;
+      let i = 1;
+      while ((m = itemRegex.exec(payload)) !== null) {
+        const blk = m[1];
+        const getTag = (tag: string) => {
+          const match = blk.match(new RegExp(`<${tag}[^>]*>([^<]+)<\/${tag}>`, 'i'));
+          return match ? match[1].trim() : undefined;
+        };
+        const rawName = getTag('title') || getTag('name') || getTag('denumire') || '';
+        const price = getTag('price') || getTag('pret') || '';
+        if (rawName && price) {
+          xmlItems.push({
+            id: `xml-${i++}`,
+            rawName,
+            normalPrice: price,
+            brand: getTag('brand') || getTag('marca'),
+            barcode: getTag('barcode') || getTag('gtin'),
+            promoPrice: getTag('promo_price') || getTag('pret_promo'),
+            promoDetails: getTag('promo') || getTag('reducere'),
+            packageQuantity: getTag('gramaj') || getTag('quantity'),
+            packageUnit: getTag('unit') || getTag('unitate'),
+            currency: 'RON'
+          });
+        }
+      }
+      if (xmlItems.length > 0) return xmlItems;
     }
 
     // Parsare CSV robustă
@@ -479,6 +583,25 @@ export class MegaImageCollector extends BaseRetailerCollector {
   }
 }
 
+// 8. Colector Metro Cash & Carry România
+export class MetroCollector extends BaseRetailerCollector {
+  constructor() {
+    super('metro', 'src-metro-collector', 'Metro Cash & Carry România', 'public_catalog_feed');
+  }
+
+  async checkEligibility(): Promise<{ eligible: boolean; status: CollectorStatus; reason?: string }> {
+    const hasKey = Boolean(process.env.METRO_API_KEY || process.env.METRO_CATALOG_URL);
+    if (!hasKey) {
+      return {
+        eligible: false,
+        status: 'pending_authorization',
+        reason: 'În așteptarea configurării accesului la catalogul public digital / acreditare prețuri engros și retail Metro România.'
+      };
+    }
+    return { eligible: true, status: 'active' };
+  }
+}
+
 /**
  * Factory pentru instanțierea colectorului corespunzător
  */
@@ -491,6 +614,7 @@ export function getCollectorForRetailer(retailerId: string): PriceCollector {
     case 'auchan': return new AuchanCollector();
     case 'profi': return new ProfiCollector();
     case 'mega-image': return new MegaImageCollector();
+    case 'metro': return new MetroCollector();
     default:
       throw new Error(`Retailer necunoscut în registru: ${retailerId}`);
   }

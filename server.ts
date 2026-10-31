@@ -4,12 +4,17 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 
-import { DatabaseService, checkDbHealth, isPostgresConfigured } from './src/db/index.ts';
+import { DatabaseService, checkDbHealth, isPostgresConfigured, getPool } from './src/db/index.ts';
 import { FileImportAdapter } from './src/sources/FileImportAdapter.ts';
 import { StorageService } from './src/services/StorageService.ts';
 import { PriceComparisonService } from './src/services/PriceComparisonService.ts';
 import { RetailerRegistry } from './src/indexing/RetailerRegistry.ts';
 import { IndexingScheduler } from './src/indexing/IndexingScheduler.ts';
+import { IndexingMonitor } from './src/indexing/IndexingMonitor.ts';
+import { CollectionWorker } from './src/services/CollectionWorker.ts';
+import { IndexerScheduler } from './src/services/IndexerScheduler.ts';
+import { PriceQualityMonitor } from './src/indexing/PriceQualityMonitor.ts';
+
 
 dotenv.config();
 
@@ -134,6 +139,20 @@ Dacă anumite date sunt șterse sau neclare, estimează cu atenție din context.
         const textOutput = response.text?.trim();
         if (textOutput) {
           const parsed = JSON.parse(textOutput);
+          // Înregistrează automat produsele de pe bon ca și candidați de căutare
+          if (Array.isArray(parsed.items)) {
+            const discItems = parsed.items.map((it: any, idx: number) => ({
+              id: `rec-prod-${Date.now()}-${idx}`,
+              rawName: it.rawName,
+              extractedPrice: it.unitPrice,
+              extractedQuantity: it.quantity,
+              category: it.category,
+              targetSearchStatus: 'pending' as const,
+              searchAttempts: 0,
+              createdAt: new Date().toISOString()
+            }));
+            StorageService.addReceiptProducts(discItems);
+          }
           return res.json({
             success: true,
             source: 'gemini_ocr',
@@ -196,11 +215,25 @@ Dacă anumite date sunt șterse sau neclare, estimează cu atenție din context.
       total: 35.85,
     };
 
+    // Înregistrează automat produsele de pe bonul fallback ca și candidați
+    const discItems = mockReceipt.items.map((it, idx) => ({
+      id: `rec-prod-demo-${Date.now()}-${idx}`,
+      rawName: it.rawName,
+      extractedPrice: it.unitPrice,
+      extractedQuantity: it.quantity,
+      category: it.category,
+      targetSearchStatus: 'pending' as const,
+      searchAttempts: 0,
+      createdAt: new Date().toISOString()
+    }));
+    StorageService.addReceiptProducts(discItems);
+
     return res.json({
       success: true,
       source: 'demo_ocr_fallback',
       receipt: mockReceipt,
     });
+
   } catch (error) {
     console.error('Eroare procesare bon:', error);
     res.status(500).json({ error: 'Eroare internă la procesarea bonului fiscal.' });
@@ -208,17 +241,24 @@ Dacă anumite date sunt șterse sau neclare, estimează cu atenție din context.
 });
 
 // Admin protection middleware
-const ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'cosul-meu-admin-dev-secret-2026';
+const DEFAULT_DEV_ADMIN_KEY = 'cosul-meu-admin-dev-secret-2026';
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || (isProd ? '' : DEFAULT_DEV_ADMIN_KEY);
 const MAX_ADMIN_PAYLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
 
 const requireAdminAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (isProd && (!process.env.ADMIN_API_KEY || process.env.ADMIN_API_KEY === DEFAULT_DEV_ADMIN_KEY)) {
+    return res.status(500).json({
+      error: 'Eroare critică de configurare securitate: ADMIN_API_KEY dedicat și securizat este obligatoriu în producție. Cheia implicită de dev este blocată.'
+    });
+  }
+
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Acces neautorizat. Token administrativ lipsă.' });
   }
 
   const token = authHeader.slice(7).trim();
-  if (token !== ADMIN_API_KEY) {
+  if (!token || token !== ADMIN_API_KEY) {
     return res.status(403).json({ error: 'Acces interzis. Token administrativ invalid.' });
   }
 
@@ -624,6 +664,455 @@ app.post('/api/indexing/retailers/:id/resume', requireAdminAuth, (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la reluarea retailerului.' });
+  }
+});
+
+// 6. Monitorizare Telemetrie și Sănătate Sistem de Indexare
+app.get('/api/indexing/monitor', (req, res) => {
+  try {
+    const stats = IndexingMonitor.getStats();
+    res.json({
+      success: true,
+      stats,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la preluarea telemetriei de monitorizare.' });
+  }
+});
+
+// 7. Obținere Candidați Descoperiți de pe Bonuri Fiscale
+app.get('/api/indexing/receipt-candidates', (req, res) => {
+  try {
+    const candidates = StorageService.getReceiptProducts();
+    res.json({
+      success: true,
+      count: candidates.length,
+      pendingCount: candidates.filter(c => c.targetSearchStatus === 'pending').length,
+      candidates,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la preluarea candidaților de pe bonuri.' });
+  }
+});
+
+// 8. Declanșare Căutare Țintită pentru Produsele de pe Bonuri (Protejat Admin)
+app.post('/api/indexing/receipt-candidates/discover', requireAdminAuth, async (req, res) => {
+  try {
+    const { dryRun = false, maxItems = 10 } = req.body;
+    const result = await CollectionWorker.discoverPendingReceiptProducts({ dryRun, maxItems });
+    res.json({
+      success: true,
+      result,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Eroare la procesarea căutării țintite pe bonuri.' });
+  }
+});
+
+// 9. Obținere Promoții Active Colectate
+app.get('/api/indexing/promotions', (req, res) => {
+  try {
+    const promotions = StorageService.getPromotions();
+    res.json({
+      success: true,
+      count: promotions.length,
+      promotions,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la preluarea promoțiilor indexate.' });
+  }
+});
+
+// 10. Configurare Oră și Interval Programare Scheduler (Protejat Admin)
+app.post('/api/indexing/schedule/config', requireAdminAuth, (req, res) => {
+  try {
+    const { targetHour, targetMinute, timezone, checkIntervalMs } = req.body;
+
+    if (targetHour !== undefined && (targetHour < 0 || targetHour > 23)) {
+      return res.status(400).json({ error: 'targetHour trebuie să fie între 0 și 23.' });
+    }
+    if (targetMinute !== undefined && (targetMinute < 0 || targetMinute > 59)) {
+      return res.status(400).json({ error: 'targetMinute trebuie să fie între 0 și 59.' });
+    }
+
+    IndexerScheduler.configure({
+      targetHour,
+      targetMinute,
+      timezone,
+      checkIntervalMs
+    });
+
+    const status = IndexerScheduler.getStatus();
+    res.json({
+      success: true,
+      message: 'Configurația scheduler-ului a fost actualizată cu succes.',
+      status,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la actualizarea configurației scheduler-ului.' });
+  }
+});
+
+// ============================================================================
+// PRICE QUALITY MONITOR & FRESHNESS SCORE ENDPOINTS
+// ============================================================================
+
+// GET /api/quality/overview - Privire generală calitatea indexului și grafice
+app.get('/api/quality/overview', (req, res) => {
+  try {
+    // Scanăm oportunitățile pentru a asigura sincronizarea anomaliilor
+    PriceQualityMonitor.scanAndRecordAnomalies();
+    const overview = PriceQualityMonitor.getIndexQualityOverview();
+    res.json({
+      success: true,
+      overview
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la generarea sintezei calității indexului.', details: err.message });
+  }
+});
+
+// GET /api/quality/retailers - Metrici detaliate per retailer
+app.get('/api/quality/retailers', (req, res) => {
+  try {
+    const metrics = PriceQualityMonitor.getRetailerQualityMetrics();
+    res.json({
+      success: true,
+      retailers: metrics
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea metricilor de calitate ale retailerilor.' });
+  }
+});
+
+// GET /api/quality/anomalies - Lista anomaliilor detectate
+app.get('/api/quality/anomalies', async (req, res) => {
+  try {
+    const { status, retailerId, severity } = req.query;
+    const pool = getPool();
+
+    if (pool) {
+      try {
+        const conditions: string[] = [];
+        const values: any[] = [];
+        if (status && typeof status === 'string') {
+          values.push(status);
+          conditions.push(`status = $${values.length}`);
+        }
+        if (retailerId && typeof retailerId === 'string') {
+          values.push(retailerId);
+          conditions.push(`retailer_id = $${values.length}`);
+        }
+        if (severity && typeof severity === 'string') {
+          values.push(severity);
+          conditions.push(`severity = $${values.length}`);
+        }
+        const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+        const dbRes = await pool.query(
+          `SELECT id, product_id as "productId", product_name as "productName", 
+                  retailer_id as "retailerId", offer_id as "offerId", 
+                  anomaly_type as "anomalyType", severity, 
+                  current_price as "currentPrice", previous_price as "previousPrice", 
+                  baseline_price as "baselinePrice", deviation_percentage as "deviationPercentage", 
+                  details, status, detected_at as "detectedAt", reviewed_at as "reviewedAt", 
+                  reviewed_by as "reviewedBy"
+           FROM quality_anomalies ${whereClause} 
+           ORDER BY detected_at DESC`
+        );
+        if (dbRes.rows.length > 0) {
+          return res.json({
+            success: true,
+            anomalies: dbRes.rows,
+            count: dbRes.rows.length
+          });
+        }
+      } catch (dbErr: any) {
+        console.warn('Avertisment citire DB quality_anomalies, comutare pe fallback:', dbErr.message);
+      }
+    }
+
+    let anomalies = StorageService.getQualityAnomalies();
+
+    if (status && typeof status === 'string') {
+      anomalies = anomalies.filter(a => a.status === status);
+    }
+    if (retailerId && typeof retailerId === 'string') {
+      anomalies = anomalies.filter(a => a.retailerId === retailerId);
+    }
+    if (severity && typeof severity === 'string') {
+      anomalies = anomalies.filter(a => a.severity === severity);
+    }
+
+    res.json({
+      success: true,
+      anomalies,
+      count: anomalies.length
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la încărcarea anomaliilor de preț.' });
+  }
+});
+
+// POST /api/quality/anomalies/:id/resolve - Rezolvare alertă anomalie (aprobare / respingere)
+app.post('/api/quality/anomalies/:id/resolve', requireAdminAuth, async (req, res) => {
+  try {
+    if (isProd && !isPostgresConfigured()) {
+      return res.status(500).json({
+        error: 'Eroare de persistență: În producție baza de date PostgreSQL este obligatorie. Fallback-ul în memorie este interzis.'
+      });
+    }
+
+    const { id } = req.params;
+    const { resolution } = req.body; // 'resolved_approved' | 'resolved_rejected'
+
+    if (!id || typeof id !== 'string') {
+      return res.status(400).json({ error: 'ID-ul anomaliei este obligatoriu.' });
+    }
+
+    if (resolution !== 'resolved_approved' && resolution !== 'resolved_rejected') {
+      return res.status(400).json({ error: 'Rezoluție invalidă. Permis: resolved_approved sau resolved_rejected.' });
+    }
+
+    StorageService.updateQualityAnomalyStatus(id, resolution, 'admin');
+
+    // Dacă a fost aprobată, debifăm stegulețul de anomalie din ofertă
+    const anomaly = StorageService.getQualityAnomalies().find(a => a.id === id);
+    if (anomaly && resolution === 'resolved_approved') {
+      const offers = StorageService.getProductOffers();
+      const off = offers.find(o => o.productId === anomaly.productId && o.storeId === anomaly.retailerId);
+      if (off) {
+        off.isFlaggedAnomaly = false;
+        off.anomalyReason = undefined;
+        StorageService.saveProductOffers(offers);
+      }
+    }
+
+    const pool = getPool();
+    if (pool) {
+      await pool.query(
+        `UPDATE quality_anomalies 
+         SET status = $1, reviewed_at = NOW(), reviewed_by = 'admin' 
+         WHERE id = $2`,
+        [resolution, id]
+      );
+      if (anomaly && resolution === 'resolved_approved') {
+        await pool.query(
+          `UPDATE product_offers 
+           SET is_flagged_anomaly = false, anomaly_reason = NULL 
+           WHERE product_id = $1 AND store_id = $2`,
+          [anomaly.productId, anomaly.retailerId]
+        );
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Anomalia a fost soluționată ca "${resolution}".`,
+      id
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la rezolvarea anomaliei.' });
+  }
+});
+
+// GET /api/quality/queue - Coada de recolectare și reverificare
+app.get('/api/quality/queue', async (req, res) => {
+  try {
+    const pool = getPool();
+    if (pool) {
+      try {
+        const dbRes = await pool.query(
+          `SELECT id, product_id as "productId", product_name as "productName",
+                  retailer_id as "retailerId", priority, reason, status,
+                  scheduled_at as "scheduledAt", attempts
+           FROM quality_recollection_queue
+           WHERE status IN ('queued', 'in_progress')
+           ORDER BY priority ASC, scheduled_at ASC`
+        );
+        if (dbRes.rows.length > 0) {
+          return res.json({
+            success: true,
+            queue: dbRes.rows,
+            count: dbRes.rows.length
+          });
+        }
+      } catch (dbErr: any) {
+        console.warn('Avertisment citire DB quality_recollection_queue:', dbErr.message);
+      }
+    }
+
+    const queue = StorageService.getRecollectionQueue();
+    res.json({
+      success: true,
+      queue,
+      count: queue.length
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la citirea cozii de recolectare.' });
+  }
+});
+
+// POST /api/quality/queue/generate - Generare sarcini prioritare de recolectare
+app.post('/api/quality/queue/generate', requireAdminAuth, (req, res) => {
+  try {
+    if (isProd && !isPostgresConfigured()) {
+      return res.status(500).json({
+        error: 'Eroare de persistență: În producție baza de date PostgreSQL este obligatorie.'
+      });
+    }
+
+    const tasks = PriceQualityMonitor.generateRecollectionTasks();
+    res.json({
+      success: true,
+      message: `Au fost generate și ierarhizate ${tasks.length} sarcini în coada de recolectare.`,
+      tasksCount: tasks.length,
+      tasks: tasks.slice(0, 50)
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la generarea cozii de recolectare.' });
+  }
+});
+
+// POST /api/quality/queue/run - Execuție lot de recolectare
+app.post('/api/quality/queue/run', requireAdminAuth, async (req, res) => {
+  try {
+    if (isProd && !isPostgresConfigured()) {
+      return res.status(500).json({
+        error: 'Eroare de persistență: În producție baza de date PostgreSQL este obligatorie.'
+      });
+    }
+
+    const { maxTasks = 5 } = req.body;
+    const limit = Math.min(Math.max(1, Number(maxTasks) || 5), 50);
+    const result = await PriceQualityMonitor.runRecollectionBatch(limit);
+    res.json({
+      success: true,
+      message: `Au fost procesate ${result.processedCount} sarcini de recolectare (${result.successCount} reușite).`,
+      result
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la execuția lotului de recolectare.' });
+  }
+});
+
+// GET /api/quality/reports - Lista rapoartelor zilnice de calitate
+app.get('/api/quality/reports', async (req, res) => {
+  try {
+    const pool = getPool();
+    if (pool) {
+      try {
+        const dbRes = await pool.query(
+          `SELECT id, report_date as "reportDate", total_tracked_products as "totalTrackedProducts",
+                  total_new_prices as "totalNewPrices", total_updated_prices as "totalUpdatedPrices",
+                  total_new_promotions as "totalNewPromotions", total_expired_prices as "totalExpiredPrices",
+                  total_unmatched_products as "totalUnmatchedProducts", total_anomalies_count as "totalAnomaliesCount",
+                  total_collection_errors as "totalCollectionErrors", overall_avg_quality_score as "overallAverageQualityScore",
+                  overall_avg_freshness_score as "overallAverageFreshnessScore",
+                  freshness_distribution as "freshnessDistribution", retailers_breakdown as "retailersBreakdown",
+                  summary, generated_at as "generatedAt"
+           FROM daily_quality_reports
+           ORDER BY report_date DESC`
+        );
+        if (dbRes.rows.length > 0) {
+          return res.json({
+            success: true,
+            reports: dbRes.rows
+          });
+        }
+      } catch (dbErr: any) {
+        console.warn('Avertisment citire DB daily_quality_reports:', dbErr.message);
+      }
+    }
+
+    const reports = StorageService.getDailyQualityReports();
+    res.json({
+      success: true,
+      reports
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la citirea rapoartelor zilnice.' });
+  }
+});
+
+// POST /api/quality/reports/generate - Generare raport zilnic de calitate
+app.post('/api/quality/reports/generate', requireAdminAuth, (req, res) => {
+  try {
+    if (isProd && !isPostgresConfigured()) {
+      return res.status(500).json({
+        error: 'Eroare de persistență: În producție baza de date PostgreSQL este obligatorie.'
+      });
+    }
+
+    const { date } = req.body;
+    if (date && typeof date === 'string' && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'Format dată invalid. Formatul așteptat este YYYY-MM-DD.' });
+    }
+
+    const report = PriceQualityMonitor.generateDailyReport(date);
+    res.json({
+      success: true,
+      message: `Raportul zilnic de calitate pentru ${report.reportDate} a fost generat și salvat.`,
+      report
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la generarea raportului zilnic.' });
+  }
+});
+
+// GET /api/quality/config - Configurație praguri prospețime și ponderi calitate
+app.get('/api/quality/config', (req, res) => {
+  try {
+    const config = PriceQualityMonitor.getConfig();
+    res.json({
+      success: true,
+      config
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la citirea configurației de calitate.' });
+  }
+});
+
+// POST /api/quality/config - Actualizare parametri de evaluare calitate
+app.post('/api/quality/config', requireAdminAuth, (req, res) => {
+  try {
+    if (isProd && !isPostgresConfigured()) {
+      return res.status(500).json({
+        error: 'Eroare de persistență: În producție baza de date PostgreSQL este obligatorie.'
+      });
+    }
+
+    const { thresholds, weights } = req.body;
+
+    if (thresholds) {
+      const { veryRecentHours, recentHours, staleHours } = thresholds;
+      if (
+        typeof veryRecentHours !== 'number' || veryRecentHours <= 0 ||
+        typeof recentHours !== 'number' || recentHours <= veryRecentHours ||
+        typeof staleHours !== 'number' || staleHours <= recentHours
+      ) {
+        return res.status(400).json({
+          error: 'Praguri de prospețime invalide. Regula obligatorie: 0 < veryRecentHours < recentHours < staleHours.'
+        });
+      }
+    }
+
+    if (weights) {
+      for (const [k, v] of Object.entries(weights)) {
+        if (typeof v !== 'number' || v < 0) {
+          return res.status(400).json({ error: `Pondere invalidă pentru factorul "${k}": trebuie să fie un număr >= 0.` });
+        }
+      }
+    }
+
+    PriceQualityMonitor.setConfig({ thresholds, weights });
+    const updated = PriceQualityMonitor.getConfig();
+    res.json({
+      success: true,
+      message: 'Parametrii Price Quality Monitor au fost actualizați.',
+      config: updated
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la salvarea parametrilor de calitate.' });
   }
 });
 

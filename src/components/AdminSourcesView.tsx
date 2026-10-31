@@ -28,10 +28,19 @@ import {
   Calendar,
   Zap,
   BarChart3,
-  Sliders
+  Sliders,
+  Tag,
+  Sparkles,
+  ShoppingBag
 } from 'lucide-react';
 import { DataSource, SourceSyncRun, ProductMatchCandidate, ProductOffer, Store } from '../types';
-import { RetailerRegistryEntry, BatchProcessingResult } from '../indexing/types';
+import {
+  RetailerRegistryEntry,
+  BatchProcessingResult,
+  PromotionRecord,
+  ReceiptDiscoveryItem,
+  IndexingMonitorStats
+} from '../indexing/types';
 import { INITIAL_RETAILER_ENTRIES } from '../indexing/RetailerRegistry';
 import { StorageService } from '../services/StorageService';
 import { FileImportAdapter, LidlPriceFileAdapter } from '../sources/FileImportAdapter';
@@ -40,13 +49,17 @@ import { ReceiptSourceAdapter } from '../sources/ReceiptSourceAdapter';
 import { AffiliateFeedAdapter } from '../sources/AffiliateFeedAdapter';
 import { PriceComparisonService } from '../services/PriceComparisonService';
 import { STORES } from '../data/mockData';
+import { AdminIndexQualityTab } from './AdminIndexQualityTab.tsx';
 
 interface AdminSourcesViewProps {
   onRefreshAll?: () => void;
 }
 
 export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll }) => {
-  const [activeTab, setActiveTab] = useState<'indexing' | 'sources' | 'import' | 'matching' | 'logs' | 'expired'>('indexing');
+  const [activeTab, setActiveTab] = useState<
+    'indexing' | 'sources' | 'import' | 'matching' | 'discovery' | 'promotions' | 'quality' | 'logs' | 'expired'
+  >('indexing');
+
 
   // Admin authentication state
   const [adminToken, setAdminToken] = useState<string>(() => {
@@ -90,11 +103,22 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     message: string;
   } | null>(null);
 
-  // Indexing engine state for the 7 retailers
+  // Indexing engine state for the 8 retailers
   const [retailers, setRetailers] = useState<RetailerRegistryEntry[]>(INITIAL_RETAILER_ENTRIES);
   const [schedulerStatus, setSchedulerStatus] = useState<any>(null);
   const [executingRetailerId, setExecutingRetailerId] = useState<string | null>(null);
   const [indexingExecutionResult, setIndexingExecutionResult] = useState<BatchProcessingResult | null>(null);
+
+  // Discovery & Promotions State
+  const [receiptCandidates, setReceiptCandidates] = useState<ReceiptDiscoveryItem[]>(() => StorageService.getReceiptProducts());
+  const [promotions, setPromotions] = useState<PromotionRecord[]>(() => StorageService.getPromotions());
+  const [monitorStats, setMonitorStats] = useState<IndexingMonitorStats | null>(null);
+  const [scheduleHour, setScheduleHour] = useState<number>(4);
+  const [scheduleMinute, setScheduleMinute] = useState<number>(0);
+  const [isSavingSchedule, setIsSavingSchedule] = useState<boolean>(false);
+  const [scheduleSaveMsg, setScheduleSaveMsg] = useState<string | null>(null);
+  const [isDiscovering, setIsDiscovering] = useState<boolean>(false);
+  const [discoveryResult, setDiscoveryResult] = useState<any>(null);
 
   const fetchRetailersAndScheduler = () => {
     fetch('/api/indexing/retailers')
@@ -111,10 +135,94 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       .then(data => {
         if (data.success && data.status) {
           setSchedulerStatus(data.status);
+          if (data.status.targetHour !== undefined) setScheduleHour(data.status.targetHour);
+          if (data.status.targetMinute !== undefined) setScheduleMinute(data.status.targetMinute);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/indexing/monitor')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.stats) {
+          setMonitorStats(data.stats);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/indexing/receipt-candidates')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.candidates) {
+          setReceiptCandidates(data.candidates);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/indexing/promotions')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.promotions) {
+          setPromotions(data.promotions);
         }
       })
       .catch(() => {});
   };
+
+  const handleSaveSchedule = async () => {
+    setIsSavingSchedule(true);
+    setScheduleSaveMsg(null);
+    try {
+      const res = await fetch('/api/indexing/schedule/config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`
+        },
+        body: JSON.stringify({
+          targetHour: Number(scheduleHour),
+          targetMinute: Number(scheduleMinute),
+          timezone: 'Europe/Bucharest'
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setScheduleSaveMsg(`Programare salvată cu succes: zilnic la ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} (Europe/Bucharest).`);
+        fetchRetailersAndScheduler();
+      } else {
+        setScheduleSaveMsg(`Eroare: ${data.error || 'Nu s-a putut salva'}`);
+      }
+    } catch (err: any) {
+      setScheduleSaveMsg(`Eroare rețea: ${err.message}`);
+    } finally {
+      setIsSavingSchedule(false);
+    }
+  };
+
+  const handleRunReceiptDiscovery = async (dryRun: boolean = false) => {
+    setIsDiscovering(true);
+    setDiscoveryResult(null);
+    try {
+      const res = await fetch('/api/indexing/receipt-candidates/discover', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${adminToken}`
+        },
+        body: JSON.stringify({ dryRun, maxItems: 10 })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setDiscoveryResult(data.result);
+        fetchRetailersAndScheduler();
+      }
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
+
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -477,12 +585,14 @@ Cafea macinata Kronung 500g,24.90,0.5,kg,Jacobs,8711000504123,,,`;
           </button>
         </form>
 
-        <div className="mt-6 pt-5 border-t border-slate-100 text-[11px] text-slate-400 text-center">
-          <span>Token demonstrativ implicit: </span>
-          <code className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-mono text-[10px]">
-            cosul-meu-admin-dev-secret-2026
-          </code>
-        </div>
+        {import.meta.env.DEV && (
+          <div className="mt-6 pt-5 border-t border-slate-100 text-[11px] text-slate-400 text-center">
+            <span>Token demonstrativ (activ doar în dev): </span>
+            <code className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-mono text-[10px]">
+              cosul-meu-admin-dev-secret-2026
+            </code>
+          </div>
+        )}
       </div>
     );
   }
@@ -604,9 +714,9 @@ Cafea macinata Kronung 500g,24.90,0.5,kg,Jacobs,8711000504123,,,`;
           }`}
         >
           <Zap className="w-3.5 h-3.5 text-amber-500" />
-          Motor Indexare (7 Retaileri)
+          Motor Indexare ({retailers.length} Retaileri)
           <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-1.5 py-0.2 rounded-full">
-            7
+            {retailers.length}
           </span>
         </button>
 
@@ -650,6 +760,50 @@ Cafea macinata Kronung 500g,24.90,0.5,kg,Jacobs,8711000504123,,,`;
         </button>
 
         <button
+          onClick={() => setActiveTab('discovery')}
+          className={`px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+            activeTab === 'discovery'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+          Descoperire Bonuri
+          {receiptCandidates.filter(c => c.targetSearchStatus === 'pending').length > 0 && (
+            <span className="bg-sky-500 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+              {receiptCandidates.filter(c => c.targetSearchStatus === 'pending').length}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('promotions')}
+          className={`px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+            activeTab === 'promotions'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Tag className="w-3.5 h-3.5 text-emerald-500" />
+          Promoții Retaileri ({promotions.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab('quality')}
+          className={`px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+            activeTab === 'quality'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />
+          Calitatea Indexului
+          <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+            Monitor
+          </span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('logs')}
           className={`px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-colors whitespace-nowrap ${
             activeTab === 'logs'
@@ -672,6 +826,7 @@ Cafea macinata Kronung 500g,24.90,0.5,kg,Jacobs,8711000504123,,,`;
         </button>
       </div>
 
+
       {/* TAB 0: Motor Indexare (7 Retaileri România) */}
       {activeTab === 'indexing' && (
         <div className="space-y-6">
@@ -682,7 +837,7 @@ Cafea macinata Kronung 500g,24.90,0.5,kg,Jacobs,8711000504123,,,`;
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
                   <h2 className="text-base sm:text-lg font-bold tracking-tight">
-                    Motor Hibrid de Indexare a Prețurilor • 7 Retaileri România
+                    Motor Hibrid de Indexare a Prețurilor • {retailers.length} Retaileri România (Lidl, Kaufland, Carrefour, Penny, Auchan, Profi, Mega Image, Metro)
                   </h2>
                   <span className="px-2 py-0.5 rounded-md bg-emerald-950 border border-emerald-500/30 text-emerald-300 text-[10px] font-mono font-bold">
                     WORKER ZILNIC
@@ -723,8 +878,116 @@ Cafea macinata Kronung 500g,24.90,0.5,kg,Jacobs,8711000504123,,,`;
             </div>
           </div>
 
+          {/* Indexing Monitor Telemetry & Schedule Controls */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Monitor Telemetry Card */}
+            <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200/90 p-5 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
+                    <BarChart3 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm text-slate-900">Monitor Telemetrie & Indexare Live</h3>
+                    <p className="text-[11px] text-slate-500">Starea agregată a motorului automat de colectare</p>
+                  </div>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                  monitorStats?.systemHealth === 'healthy' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                }`}>
+                  {monitorStats?.systemHealth || 'healthy'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <span className="text-[10px] text-slate-500 block">Retaileri Configurați</span>
+                  <span className="text-base font-extrabold text-slate-900 mt-0.5 block">
+                    {monitorStats?.activeRetailersCount ?? 1} / {retailers.length}
+                  </span>
+                  <span className="text-[10px] text-emerald-600 font-semibold">Activ / Configurat</span>
+                </div>
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <span className="text-[10px] text-slate-500 block">Total Oferte Active</span>
+                  <span className="text-base font-extrabold text-slate-900 mt-0.5 block">
+                    {monitorStats?.totalOffersCount ?? offers.length}
+                  </span>
+                  <span className="text-[10px] text-slate-500">În catalog unificat</span>
+                </div>
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <span className="text-[10px] text-slate-500 block">Promoții Colectate</span>
+                  <span className="text-base font-extrabold text-emerald-600 mt-0.5 block">
+                    {monitorStats?.totalPromotionsCount ?? promotions.length}
+                  </span>
+                  <span className="text-[10px] text-slate-500">Reduceri & carduri</span>
+                </div>
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <span className="text-[10px] text-slate-500 block">Bonuri în Așteptare</span>
+                  <span className="text-base font-extrabold text-sky-600 mt-0.5 block">
+                    {receiptCandidates.filter(c => c.targetSearchStatus === 'pending').length}
+                  </span>
+                  <span className="text-[10px] text-sky-700 font-medium">Candidați căutare</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Schedule Configuration Card */}
+            <div className="bg-white rounded-3xl border border-slate-200/90 p-5 shadow-xs space-y-3 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Calendar className="w-4 h-4 text-emerald-600" />
+                  <h3 className="font-extrabold text-sm text-slate-900">Programare Zilnică Colectare</h3>
+                </div>
+                <p className="text-[11px] text-slate-500 mb-3">
+                  Configurare oră de rulare zilnică în fusul orar Europe/Bucharest.
+                </p>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">Oră Rulare (0-23)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={scheduleHour}
+                      onChange={e => setScheduleHour(Number(e.target.value))}
+                      className="w-full px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">Minut (0-59)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={scheduleMinute}
+                      onChange={e => setScheduleMinute(Number(e.target.value))}
+                      className="w-full px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-bold"
+                    />
+                  </div>
+                </div>
+
+                {scheduleSaveMsg && (
+                  <p className="text-[11px] text-emerald-700 mt-2 font-semibold">{scheduleSaveMsg}</p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  onClick={handleSaveSchedule}
+                  disabled={isSavingSchedule}
+                  className="w-full py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  {isSavingSchedule ? 'Se salvează...' : 'Actualizează Ora'}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Execution Result Feedback (Modal/Banner) */}
           {indexingExecutionResult && (
+
             <div className={`p-5 rounded-3xl border shadow-xs animate-in fade-in space-y-3 ${
               indexingExecutionResult.status === 'complete'
                 ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950'
@@ -1400,8 +1663,184 @@ Cafea macinata Kronung 500g,24.90,0.5,kg,Jacobs,8711000504123,,,`;
         </div>
       )}
 
+      {/* TAB: Receipt Products Discovery */}
+      {activeTab === 'discovery' && (
+        <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-7 shadow-xs space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-amber-500" />
+                <h2 className="text-lg font-bold text-slate-900">
+                  Descoperire Țintită de Produse din Bonuri Fiscale
+                </h2>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5 max-w-2xl">
+                Produsele identificate pe bonurile scanate devin automat candidați pentru motorul de căutare web pe paginile magazinelor. Astfel, catalogul colectează doar articolele relevante consumatorilor, fără descărcarea inutilă a întregului catalog.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleRunReceiptDiscovery(true)}
+                disabled={isDiscovering || receiptCandidates.length === 0}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs cursor-pointer disabled:opacity-50"
+              >
+                Dry-Run
+              </button>
+              <button
+                onClick={() => handleRunReceiptDiscovery(false)}
+                disabled={isDiscovering || receiptCandidates.length === 0}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Search className="w-3.5 h-3.5" />
+                {isDiscovering ? 'Se caută...' : 'Lansează Căutarea pe Retaileri'}
+              </button>
+            </div>
+          </div>
+
+          {discoveryResult && (
+            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs">
+              <div className="font-bold flex items-center gap-1.5 mb-1">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                Căutare țintită finalizată cu succes!
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-emerald-800 mt-2">
+                <div>Procesate: <strong>{discoveryResult.processedCount}</strong></div>
+                <div>Asociate: <strong>{discoveryResult.matchedCount}</strong></div>
+                <div>Oferte create: <strong>{discoveryResult.offersCreatedCount}</strong></div>
+                <div>Promoții descoperite: <strong>{discoveryResult.promotionsCreatedCount}</strong></div>
+              </div>
+            </div>
+          )}
+
+          {receiptCandidates.length === 0 ? (
+            <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-100 text-slate-400 text-xs">
+              Nu există candidați descoperiți din bonuri. Scanează un bon fiscal în secțiunea utilizatorului pentru a popula automat lista de candidați.
+            </div>
+          ) : (
+            <div className="border border-slate-200 rounded-2xl overflow-hidden text-xs">
+              <div className="bg-slate-50 px-4 py-2.5 font-bold text-slate-700 border-b border-slate-200 grid grid-cols-12 gap-2">
+                <span className="col-span-5 sm:col-span-4">Denumire de pe Bon</span>
+                <span className="col-span-3 sm:col-span-2">Categorie</span>
+                <span className="col-span-2 text-right">Preț Bon</span>
+                <span className="col-span-2 text-center">Status Căutare</span>
+                <span className="hidden sm:inline sm:col-span-2 text-right">Dată Înregistrare</span>
+              </div>
+              <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+                {receiptCandidates.map(c => (
+                  <div key={c.id} className="px-4 py-2.5 grid grid-cols-12 gap-2 items-center hover:bg-slate-50/50">
+                    <span className="col-span-5 sm:col-span-4 font-semibold text-slate-900 truncate" title={c.rawName}>
+                      {c.rawName}
+                    </span>
+                    <span className="col-span-3 sm:col-span-2 text-slate-500 truncate">
+                      {c.category || 'Nespecificat'}
+                    </span>
+                    <span className="col-span-2 text-right font-mono font-bold text-slate-800">
+                      {c.extractedPrice ? PriceComparisonService.formatRon(c.extractedPrice) : 'N/A'}
+                    </span>
+                    <span className="col-span-2 text-center">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        c.targetSearchStatus === 'matched'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : c.targetSearchStatus === 'searched'
+                          ? 'bg-blue-100 text-blue-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {c.targetSearchStatus === 'matched' ? 'Asociat' : c.targetSearchStatus === 'searched' ? 'Căutat' : 'În așteptare'}
+                      </span>
+                    </span>
+                    <span className="hidden sm:inline sm:col-span-2 text-right text-[11px] text-slate-400">
+                      {new Date(c.createdAt).toLocaleDateString('ro-RO')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB: Promotions */}
+      {activeTab === 'promotions' && (
+        <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-7 shadow-xs space-y-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Tag className="w-5 h-5 text-emerald-600" />
+              <h2 className="text-lg font-bold text-slate-900">
+                Promoții & Reduceri Colectate de la Retaileri
+              </h2>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Indexul centralizat al reducerilor active, prețurilor promoționale și ofertelor exclusive cu card de fidelitate.
+            </p>
+          </div>
+
+          {promotions.length === 0 ? (
+            <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-100 text-slate-400 text-xs">
+              Nu există promoții înregistrate curent în index. Rulează colectorii retailerilor sau importă un catalog pentru a indexa reducerile active.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {promotions.map(p => {
+                const discountPct = p.normalPrice && p.normalPrice > p.promoPrice
+                  ? Math.round(((p.normalPrice - p.promoPrice) / p.normalPrice) * 100)
+                  : undefined;
+
+                return (
+                  <div key={p.id} className="p-4 rounded-2xl border border-slate-200 hover:border-emerald-300 transition-colors bg-white shadow-2xs space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 font-bold text-[10px] uppercase">
+                        {p.retailerId}
+                      </span>
+                      {discountPct && (
+                        <span className="px-2 py-0.5 rounded-full bg-rose-500 text-white font-extrabold text-[10px]">
+                          -{discountPct}%
+                        </span>
+                      )}
+                    </div>
+
+                    <h4 className="font-bold text-xs text-slate-900 line-clamp-2" title={p.title}>
+                      {p.title}
+                    </h4>
+
+                    <div className="flex items-baseline gap-2 pt-1">
+                      <span className="text-base font-extrabold text-emerald-600">
+                        {PriceComparisonService.formatRon(p.promoPrice)}
+                      </span>
+                      {p.normalPrice && p.normalPrice > p.promoPrice && (
+                        <span className="text-xs text-slate-400 line-through">
+                          {PriceComparisonService.formatRon(p.normalPrice)}
+                        </span>
+                      )}
+                    </div>
+
+                    {p.loyaltyCardName && (
+                      <div className="text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md font-semibold inline-block">
+                        Card: {p.loyaltyCardName}
+                      </div>
+                    )}
+
+                    {p.endsAt && (
+                      <div className="text-[10px] text-slate-400">
+                        Valabil până la: {p.endsAt}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB: Calitatea Indexului (Price Quality Monitor & Price Freshness Score) */}
+      {activeTab === 'quality' && (
+        <AdminIndexQualityTab adminToken={adminToken} onRefreshAll={refreshState} />
+      )}
+
       {/* TAB 5: Expired Offers */}
       {activeTab === 'expired' && (
+
         <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-7 shadow-xs space-y-4">
           <div>
             <h2 className="text-lg font-bold text-slate-900">Oferte Expirate</h2>
