@@ -31,7 +31,8 @@ import {
   Sliders,
   Tag,
   Sparkles,
-  ShoppingBag
+  ShoppingBag,
+  BookOpen
 } from 'lucide-react';
 import { DataSource, SourceSyncRun, ProductMatchCandidate, ProductOffer, Store } from '../types';
 import {
@@ -50,6 +51,7 @@ import { AffiliateFeedAdapter } from '../sources/AffiliateFeedAdapter';
 import { PriceComparisonService } from '../services/PriceComparisonService';
 import { STORES } from '../data/mockData';
 import { AdminIndexQualityTab } from './AdminIndexQualityTab.tsx';
+import { AdminCatalogImporterTab } from './AdminCatalogImporterTab.tsx';
 
 interface AdminSourcesViewProps {
   onRefreshAll?: () => void;
@@ -57,8 +59,8 @@ interface AdminSourcesViewProps {
 
 export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll }) => {
   const [activeTab, setActiveTab] = useState<
-    'indexing' | 'sources' | 'import' | 'matching' | 'discovery' | 'promotions' | 'quality' | 'logs' | 'expired'
-  >('indexing');
+    'indexing' | 'catalog_importer' | 'sources' | 'import' | 'matching' | 'discovery' | 'promotions' | 'quality' | 'logs' | 'expired'
+  >('catalog_importer');
 
 
   // Admin authentication state
@@ -721,6 +723,21 @@ Cafea macinata Kronung 500g,24.90,0.5,kg,Jacobs,8711000504123,,,`;
         </button>
 
         <button
+          onClick={() => setActiveTab('catalog_importer')}
+          className={`px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+            activeTab === 'catalog_importer'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <BookOpen className="w-3.5 h-3.5 text-emerald-600" />
+          Catalog Importer
+          <span className="bg-emerald-600 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+            Live
+          </span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('sources')}
           className={`px-4 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-colors whitespace-nowrap ${
             activeTab === 'sources'
@@ -826,6 +843,11 @@ Cafea macinata Kronung 500g,24.90,0.5,kg,Jacobs,8711000504123,,,`;
         </button>
       </div>
 
+
+      {/* TAB CATALOG IMPORTER */}
+      {activeTab === 'catalog_importer' && (
+        <AdminCatalogImporterTab adminToken={adminToken} />
+      )}
 
       {/* TAB 0: Motor Indexare (7 Retaileri România) */}
       {activeTab === 'indexing' && (

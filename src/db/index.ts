@@ -9,6 +9,14 @@ import {
   ProductMatchCandidate
 } from '../types.ts';
 import {
+  CatalogSource,
+  CatalogDocument,
+  CatalogImportRun,
+  CatalogExtractedOffer,
+  CatalogImportError
+} from '../indexing/catalog/catalogTypes.ts';
+import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/CatalogSourceDiscovery.ts';
+import {
   PRODUCTS,
   STORES,
   PRODUCT_OFFERS,
@@ -57,11 +65,12 @@ export function getDbConfig(): DbConfig {
   // Option 2: Supabase or Direct connection string
   if (process.env.SUPABASE_DB_URL || process.env.DATABASE_URL) {
     const rawUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '';
+    const isLocal = rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1') || process.env.PGSSLMODE === 'disable';
     return {
       configured: true,
       type: rawUrl.includes('supabase') ? 'supabase' : 'standard',
-      host: 'remote-url',
-      ssl: { rejectUnauthorized: false }
+      host: isLocal ? 'localhost' : 'remote-url',
+      ssl: isLocal ? false : { rejectUnauthorized: false }
     };
   }
 
@@ -102,7 +111,7 @@ export function getPool(): pg.Pool | null {
       const connectionString = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
       global._postgresPool = new Pool({
         connectionString,
-        ssl: { rejectUnauthorized: false },
+        ssl: config.ssl,
         max: 10,
         connectionTimeoutMillis: 5000,
         idleTimeoutMillis: 30000
@@ -442,6 +451,16 @@ export class DatabaseService {
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                ON CONFLICT (id) DO NOTHING`,
               [src.id, src.name, src.type, src.status, src.storeId || null, src.format || 'csv', src.requiresAuth, src.authDocumentation || null, src.endpointUrl || null, src.description]
+            );
+          }
+
+          // Seed catalog sources
+          for (const csrc of INITIAL_CATALOG_SOURCES) {
+            await client.query(
+              `INSERT INTO catalog_sources (id, retailer_id, name, catalog_url, format, status, update_frequency_days, auth_required, legal_status_notice)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               ON CONFLICT (id) DO NOTHING`,
+              [csrc.id, csrc.retailerId, csrc.name, csrc.catalogUrl, csrc.format, csrc.status, csrc.updateFrequencyDays, csrc.authRequired, csrc.legalStatusNotice]
             );
           }
         }
@@ -845,6 +864,249 @@ export class DatabaseService {
       }));
     } catch {
       return INITIAL_SYNC_RUNS;
+    }
+  }
+
+  // ==========================================
+  // CATALOG IMPORTER DATABASE METHODS
+  // ==========================================
+
+  static async getCatalogDocuments(): Promise<CatalogDocument[]> {
+    const pool = getPool();
+    if (!pool) return [];
+    try {
+      const res = await pool.query('SELECT * FROM catalog_documents ORDER BY created_at DESC LIMIT 100');
+      return res.rows.map(r => ({
+        id: r.id,
+        sourceId: r.source_id,
+        retailerId: r.retailer_id,
+        documentUrl: r.document_url,
+        title: r.title,
+        format: r.format,
+        validFrom: r.valid_from ? new Date(r.valid_from).toISOString().split('T')[0] : undefined,
+        validUntil: r.valid_until ? new Date(r.valid_until).toISOString().split('T')[0] : undefined,
+        fileSizeBytes: r.file_size_bytes ? parseInt(r.file_size_bytes, 10) : undefined,
+        sha256Checksum: r.sha256_checksum,
+        downloadStatus: r.download_status,
+        parseStatus: r.parse_status,
+        rawExtractedCount: r.raw_extracted_count || 0,
+        matchedCount: r.matched_count || 0,
+        validatedCount: r.validated_count || 0,
+        publishedCount: r.published_count || 0,
+        ocrConfidence: r.ocr_confidence ? parseFloat(r.ocr_confidence) : undefined,
+        errorMessage: r.error_message,
+        createdAt: new Date(r.created_at).toISOString(),
+        updatedAt: new Date(r.updated_at).toISOString()
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  static async saveCatalogDocument(doc: CatalogDocument): Promise<boolean> {
+    const pool = getPool();
+    if (!pool) return false;
+    try {
+      await pool.query(
+        `INSERT INTO catalog_documents (
+          id, source_id, retailer_id, document_url, title, format,
+          valid_from, valid_until, file_size_bytes, sha256_checksum,
+          download_status, parse_status, raw_extracted_count, matched_count,
+          validated_count, published_count, ocr_confidence, error_message,
+          created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+        ON CONFLICT (id) DO UPDATE SET
+          download_status = EXCLUDED.download_status,
+          parse_status = EXCLUDED.parse_status,
+          file_size_bytes = EXCLUDED.file_size_bytes,
+          sha256_checksum = EXCLUDED.sha256_checksum,
+          raw_extracted_count = EXCLUDED.raw_extracted_count,
+          matched_count = EXCLUDED.matched_count,
+          validated_count = EXCLUDED.validated_count,
+          published_count = EXCLUDED.published_count,
+          ocr_confidence = EXCLUDED.ocr_confidence,
+          error_message = EXCLUDED.error_message,
+          updated_at = NOW()`,
+        [
+          doc.id, doc.sourceId, doc.retailerId, doc.documentUrl, doc.title, doc.format,
+          doc.validFrom || null, doc.validUntil || null, doc.fileSizeBytes || null, doc.sha256Checksum || null,
+          doc.downloadStatus, doc.parseStatus, doc.rawExtractedCount, doc.matchedCount,
+          doc.validatedCount, doc.publishedCount, doc.ocrConfidence || null, doc.errorMessage || null,
+          doc.createdAt, doc.updatedAt
+        ]
+      );
+      return true;
+    } catch (err) {
+      console.warn('Nu s-a putut salva documentul catalog în DB:', err);
+      return false;
+    }
+  }
+
+  static async saveCatalogImportRun(run: CatalogImportRun): Promise<boolean> {
+    const pool = getPool();
+    if (!pool) return false;
+    try {
+      await pool.query(
+        `INSERT INTO catalog_import_runs (
+          id, document_id, source_id, retailer_id, started_at, completed_at,
+          status, total_raw_extracted, auto_matched_count, needs_review_count,
+          published_count, rejected_count, duration_ms, errors
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        ON CONFLICT (id) DO UPDATE SET
+          completed_at = EXCLUDED.completed_at,
+          status = EXCLUDED.status,
+          total_raw_extracted = EXCLUDED.total_raw_extracted,
+          auto_matched_count = EXCLUDED.auto_matched_count,
+          needs_review_count = EXCLUDED.needs_review_count,
+          published_count = EXCLUDED.published_count,
+          rejected_count = EXCLUDED.rejected_count,
+          duration_ms = EXCLUDED.duration_ms,
+          errors = EXCLUDED.errors`,
+        [
+          run.id,
+          run.documentId || null,
+          run.sourceId,
+          run.retailerId,
+          run.startedAt,
+          run.completedAt || null,
+          run.status,
+          run.totalRawExtracted,
+          run.autoMatchedCount,
+          run.needsReviewCount,
+          run.publishedCount,
+          run.rejectedCount,
+          run.durationMs || null,
+          JSON.stringify(run.errors || [])
+        ]
+      );
+      return true;
+    } catch (err) {
+      console.warn('Nu s-a putut salva catalog_import_runs în DB:', err);
+      return false;
+    }
+  }
+
+  static async saveCatalogExtractedOffers(offers: CatalogExtractedOffer[]): Promise<{ inserted: number; persisted: boolean }> {
+    const pool = getPool();
+    if (!pool) return { inserted: 0, persisted: false };
+
+    let inserted = 0;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const o of offers) {
+        await client.query(
+          `INSERT INTO catalog_extracted_offers (
+            id, run_id, document_id, retailer_id, raw_title, raw_brand, raw_barcode,
+            raw_category, normal_price, promo_price, loyalty_price, effective_price,
+            currency, package_quantity, package_unit, unit_price, unit_price_measure,
+            is_promo, promo_details, loyalty_card_required, loyalty_card_name,
+            valid_from, valid_until, matched_product_id, match_confidence, match_method,
+            staging_status, validation_errors, reviewed_by, reviewed_at, rejection_reason,
+            created_at, updated_at
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
+          ON CONFLICT (id) DO UPDATE SET
+            normal_price = EXCLUDED.normal_price,
+            promo_price = EXCLUDED.promo_price,
+            loyalty_price = EXCLUDED.loyalty_price,
+            effective_price = EXCLUDED.effective_price,
+            staging_status = EXCLUDED.staging_status,
+            matched_product_id = EXCLUDED.matched_product_id,
+            match_confidence = EXCLUDED.match_confidence,
+            match_method = EXCLUDED.match_method,
+            validation_errors = EXCLUDED.validation_errors,
+            updated_at = NOW()`,
+          [
+            o.id,
+            o.runId || null,
+            o.documentId || null,
+            o.retailerId,
+            o.rawTitle,
+            o.rawBrand || null,
+            o.rawBarcode || null,
+            o.rawCategory || null,
+            o.normalPrice,
+            o.promoPrice || null,
+            o.loyaltyPrice || null,
+            o.effectivePrice,
+            o.currency || 'RON',
+            o.packageQuantity || null,
+            o.packageUnit || null,
+            o.unitPrice || null,
+            o.unitPriceMeasure || null,
+            o.isPromo || false,
+            o.promoDetails || null,
+            o.loyaltyCardRequired || false,
+            o.loyaltyCardName || null,
+            o.validFrom || null,
+            o.validUntil || null,
+            o.matchedProductId || null,
+            o.matchConfidence || 0,
+            o.matchMethod || 'unmatched',
+            o.stagingStatus,
+            o.validationErrors ? JSON.stringify(o.validationErrors) : null,
+            o.reviewedBy || null,
+            o.reviewedAt || null,
+            o.rejectionReason || null,
+            o.createdAt,
+            o.updatedAt
+          ]
+        );
+        inserted++;
+      }
+      await client.query('COMMIT');
+      return { inserted, persisted: true };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.warn('Eroare la salvarea catalog_extracted_offers în PostgreSQL:', err);
+      return { inserted: 0, persisted: false };
+    } finally {
+      client.release();
+    }
+  }
+
+  static async getCatalogExtractedOffers(): Promise<CatalogExtractedOffer[]> {
+    const pool = getPool();
+    if (!pool) return [];
+    try {
+      const res = await pool.query('SELECT * FROM catalog_extracted_offers ORDER BY created_at DESC LIMIT 500');
+      return res.rows.map(r => ({
+        id: r.id,
+        runId: r.run_id || undefined,
+        documentId: r.document_id || undefined,
+        retailerId: r.retailer_id,
+        rawTitle: r.raw_title,
+        rawBrand: r.raw_brand || undefined,
+        rawBarcode: r.raw_barcode || undefined,
+        rawCategory: r.raw_category || undefined,
+        normalPrice: parseFloat(r.normal_price),
+        promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+        loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
+        effectivePrice: parseFloat(r.effective_price),
+        currency: r.currency || 'RON',
+        packageQuantity: r.package_quantity ? parseFloat(r.package_quantity) : undefined,
+        packageUnit: r.package_unit || undefined,
+        unitPrice: r.unit_price ? parseFloat(r.unit_price) : undefined,
+        unitPriceMeasure: r.unit_price_measure || undefined,
+        isPromo: r.is_promo,
+        promoDetails: r.promo_details || undefined,
+        loyaltyCardRequired: r.loyalty_card_required,
+        loyaltyCardName: r.loyalty_card_name || undefined,
+        validFrom: r.valid_from ? new Date(r.valid_from).toISOString().split('T')[0] : undefined,
+        validUntil: r.valid_until ? new Date(r.valid_until).toISOString().split('T')[0] : undefined,
+        matchedProductId: r.matched_product_id || undefined,
+        matchConfidence: parseFloat(r.match_confidence || '0'),
+        matchMethod: r.match_method || 'unmatched',
+        stagingStatus: r.staging_status,
+        validationErrors: Array.isArray(r.validation_errors) ? r.validation_errors : undefined,
+        reviewedBy: r.reviewed_by || undefined,
+        reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : undefined,
+        rejectionReason: r.rejection_reason || undefined,
+        createdAt: new Date(r.created_at).toISOString(),
+        updatedAt: new Date(r.updated_at).toISOString()
+      }));
+    } catch {
+      return [];
     }
   }
 }

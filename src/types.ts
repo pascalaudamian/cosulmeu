@@ -47,6 +47,8 @@ export interface Product {
   isBio?: boolean;
   isRomanianProduct?: boolean;
   baseReferencePrice: number;
+  subcategory?: string;
+  description?: string;
 }
 
 export interface ProductOffer {
@@ -289,4 +291,29 @@ export interface SavingsSummary {
   scannedReceiptsCount: number;
   trackedProductsCount: number;
   lastMonthSavings: number;
+}
+
+export interface UserErrorReport {
+  id: string;
+  productId: string;
+  productName: string;
+  storeId?: string;
+  errorType: 'price_mismatch' | 'wrong_product' | 'expired_promo' | 'wrong_category' | 'other';
+  reportedPrice?: number;
+  details: string;
+  reporterEmail?: string;
+  status: 'pending' | 'resolved' | 'dismissed';
+  createdAt: string;
+}
+
+export interface MatchAuditEntry {
+  id: string;
+  candidateId?: string;
+  rawName: string;
+  previousProductId?: string;
+  correctedProductId: string;
+  action: 'approved' | 'separated' | 'reassigned';
+  reason: string;
+  performedBy: string;
+  timestamp: string;
 }

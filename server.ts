@@ -14,6 +14,12 @@ import { IndexingMonitor } from './src/indexing/IndexingMonitor.ts';
 import { CollectionWorker } from './src/services/CollectionWorker.ts';
 import { IndexerScheduler } from './src/services/IndexerScheduler.ts';
 import { PriceQualityMonitor } from './src/indexing/PriceQualityMonitor.ts';
+import { CATEGORIES_TAXONOMY, mapRetailerCategoryToStandard } from './src/data/categories.ts';
+import { CatalogDownloader } from './src/indexing/catalog/CatalogDownloader.ts';
+import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.ts';
+import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
+import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
+import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
 
 
 dotenv.config();
@@ -399,6 +405,308 @@ app.post('/api/catalog/compare', (req, res) => {
     res.json({ success: true, comparisons });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la calculul comparativ al coșului.' });
+  }
+});
+
+// GET /api/categories - Taxonomie completă categorii și subcategorii
+app.get('/api/categories', (req, res) => {
+  try {
+    const allProducts = StorageService.getAllProducts();
+    const offers = StorageService.getProductOffers();
+    const validOfferProductIds = new Set(offers.filter(o => o.verificationStatus !== 'expired').map(o => o.productId));
+
+    const enriched = CATEGORIES_TAXONOMY.map(cat => {
+      const catProducts = allProducts.filter(p => p.category === cat.name);
+      return {
+        ...cat,
+        totalProductsCount: catProducts.length,
+        availableWithOffersCount: catProducts.filter(p => validOfferProductIds.has(p.id)).length,
+        subcategories: cat.subcategories.map(sub => ({
+          ...sub,
+          productsCount: catProducts.filter(p => p.subcategory === sub.name || p.name.toLowerCase().includes(sub.slug.replace(/-/g, ' '))).length
+        }))
+      };
+    });
+
+    res.json({ success: true, categories: enriched });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea categoriilor.' });
+  }
+});
+
+// GET /api/products - Catalog public de produse cu filtrare, căutare, sortare și paginare
+app.get('/api/products', (req, res) => {
+  try {
+    const {
+      category,
+      subcategory,
+      brand,
+      search,
+      onlyPromo,
+      onlyAvailable,
+      sortBy = 'relevance',
+      page = '1',
+      limit = '12'
+    } = req.query;
+
+    const allProducts = StorageService.getAllProducts();
+    const allOffers = StorageService.getProductOffers();
+
+    // Mapare oferte valide per produs
+    const todayStr = new Date().toISOString().split('T')[0];
+    const productOffersMap = new Map<string, typeof allOffers>();
+    for (const off of allOffers) {
+      if (off.verificationStatus !== 'expired' && (!off.validUntil || off.validUntil >= todayStr)) {
+        const list = productOffersMap.get(off.productId) || [];
+        list.push(off);
+        productOffersMap.set(off.productId, list);
+      }
+    }
+
+    // Calcul metadate agregate per produs
+    const enrichedProducts = allProducts.map(p => {
+      const offers = productOffersMap.get(p.id) || [];
+      const sortedOffers = [...offers].sort((a, b) => a.price - b.price);
+      const minOffer = sortedOffers[0];
+      const maxPrice = sortedOffers.length > 0 ? Math.max(...sortedOffers.map(o => o.price)) : 0;
+      const hasPromo = sortedOffers.some(o => o.isPromo);
+      const requiresLoyalty = minOffer?.loyaltyCardRequired || false;
+      const latestVerifiedAt = sortedOffers.reduce((latest, o) => {
+        const d = o.observationDate || o.lastChecked.slice(0, 10);
+        return !latest || d > latest ? d : latest;
+      }, '');
+
+      return {
+        ...p,
+        minPrice: minOffer ? minOffer.price : null,
+        maxPrice: maxPrice || null,
+        lowestStoreId: minOffer ? minOffer.storeId : null,
+        offersCount: sortedOffers.length,
+        isPromo: hasPromo,
+        loyaltyCardRequired: requiresLoyalty,
+        loyaltyCardName: minOffer?.loyaltyCardName,
+        lastVerifiedAt: latestVerifiedAt || null,
+        freshnessStatus: minOffer?.freshnessStatus || (latestVerifiedAt ? 'recent' : 'expired'),
+        qualityScore: minOffer?.qualityScore || (sortedOffers.length > 0 ? 80 : 50)
+      };
+    });
+
+    // Filtrare
+    let filtered = enrichedProducts;
+
+    // Filtru căutare (nume, brand, barcode)
+    if (search && typeof search === 'string' && search.trim()) {
+      const q = search.trim().toLowerCase();
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(q) ||
+        p.brand.toLowerCase().includes(q) ||
+        (p.barcode && p.barcode.toLowerCase().includes(q))
+      );
+    }
+
+    // Filtru categorie
+    if (category && typeof category === 'string' && category !== 'toate') {
+      filtered = filtered.filter(p => p.category === category);
+    }
+
+    // Filtru subcategorie
+    if (subcategory && typeof subcategory === 'string') {
+      filtered = filtered.filter(p => p.subcategory === subcategory);
+    }
+
+    // Filtru brand
+    if (brand && typeof brand === 'string' && brand !== 'toate') {
+      filtered = filtered.filter(p => p.brand.toLowerCase() === brand.toLowerCase());
+    }
+
+    // Filtru doar promoții active
+    if (onlyPromo === 'true') {
+      filtered = filtered.filter(p => p.isPromo);
+    }
+
+    // Filtru doar produse cu oferte valide curente
+    if (onlyAvailable === 'true') {
+      filtered = filtered.filter(p => p.offersCount > 0);
+    }
+
+    // Sortare
+    switch (sortBy) {
+      case 'price_asc':
+        filtered.sort((a, b) => {
+          if (a.minPrice === null) return 1;
+          if (b.minPrice === null) return -1;
+          return a.minPrice - b.minPrice;
+        });
+        break;
+      case 'price_desc':
+        filtered.sort((a, b) => {
+          if (a.minPrice === null) return 1;
+          if (b.minPrice === null) return -1;
+          return b.minPrice - a.minPrice;
+        });
+        break;
+      case 'freshness':
+        filtered.sort((a, b) => {
+          const dateA = a.lastVerifiedAt || '1970-01-01';
+          const dateB = b.lastVerifiedAt || '1970-01-01';
+          return dateB.localeCompare(dateA);
+        });
+        break;
+      case 'retailers_count':
+        filtered.sort((a, b) => b.offersCount - a.offersCount);
+        break;
+      case 'relevance':
+      default:
+        // Prioritizează produsele cu cele mai multe oferte verificate
+        filtered.sort((a, b) => {
+          if (b.offersCount !== a.offersCount) {
+            return b.offersCount - a.offersCount;
+          }
+          return (a.minPrice || 999) - (b.minPrice || 999);
+        });
+        break;
+    }
+
+    // Facets pentru filtrare rapidă
+    const categoriesFacetMap = new Map<string, number>();
+    const brandsFacetMap = new Map<string, number>();
+    for (const p of filtered) {
+      categoriesFacetMap.set(p.category, (categoriesFacetMap.get(p.category) || 0) + 1);
+      brandsFacetMap.set(p.brand, (brandsFacetMap.get(p.brand) || 0) + 1);
+    }
+
+    const categoriesFacet = Array.from(categoriesFacetMap.entries()).map(([name, count]) => ({ name, count }));
+    const brandsFacet = Array.from(brandsFacetMap.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+
+    // Paginare
+    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit as string, 10) || 12));
+    const totalCount = filtered.length;
+    const totalPages = Math.ceil(totalCount / limitNum) || 1;
+    const paginatedProducts = filtered.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+
+    res.json({
+      success: true,
+      products: paginatedProducts,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        totalCount,
+        totalPages
+      },
+      facets: {
+        categories: categoriesFacet,
+        brands: brandsFacet.slice(0, 30)
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la încărcarea catalogului de produse.' });
+  }
+});
+
+// GET /api/products/:id - Detaliu produs & comparație multi-retailer completă
+app.get('/api/products/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const comparison = PriceComparisonService.getProductComparisonDetails(id);
+    if (!comparison) {
+      return res.status(404).json({ error: 'Produsul nu a fost găsit în catalog.' });
+    }
+
+    const observations = StorageService.getPriceObservations().filter(obs => obs.productId === id);
+
+    res.json({
+      success: true,
+      product: comparison.product,
+      comparison,
+      observationsCount: observations.length,
+      hasSufficientHistory: observations.length >= 2,
+      observations: observations.slice(0, 50)
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la preluarea detaliilor produsului.' });
+  }
+});
+
+// POST /api/products/report-error - Semnalare eroare de către utilizator
+app.post('/api/products/report-error', (req, res) => {
+  try {
+    const {
+      productId,
+      productName,
+      storeId,
+      errorType,
+      reportedPrice,
+      details,
+      reporterEmail
+    } = req.body;
+
+    if (!productId || !productName || !errorType || !details) {
+      return res.status(400).json({ error: 'Date incomplete pentru raportul de eroare.' });
+    }
+
+    const report = {
+      id: `err-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      productId,
+      productName,
+      storeId,
+      errorType,
+      reportedPrice: reportedPrice ? parseFloat(reportedPrice) : undefined,
+      details,
+      reporterEmail,
+      status: 'pending' as const,
+      createdAt: new Date().toISOString()
+    };
+
+    StorageService.addUserErrorReport(report);
+
+    // Conectare la coada de priorități a Price Quality Monitor
+    if (storeId && (errorType === 'price_mismatch' || errorType === 'expired_promo')) {
+      StorageService.addRecollectionTasks([{
+        id: `task-err-${report.id}`,
+        productId,
+        productName,
+        retailerId: storeId,
+        priority: 2, // Prioritate ridicată (anomalie raportată)
+        reason: `Raport eroare utilizator: ${errorType} - ${details}`,
+        status: 'queued',
+        scheduledAt: new Date().toISOString(),
+        attempts: 0,
+        createdAt: new Date().toISOString()
+      }]);
+    }
+
+    res.json({
+      success: true,
+      message: 'Raportul de eroare a fost înregistrat cu succes. Mulțumim pentru sprijinul în menținerea acurateței prețurilor!',
+      reportId: report.id
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la înregistrarea raportului.' });
+  }
+});
+
+// POST /api/admin/match-correction - Corectare sau separare grupuri de matching din panoul admin
+app.post('/api/admin/match-correction', requireAdminAuth, (req, res) => {
+  try {
+    const { candidateId, correctedProductId, reason } = req.body;
+    if (!candidateId || !correctedProductId || !reason) {
+      return res.status(400).json({ error: 'Câmpurile candidateId, correctedProductId și reason sunt obligatorii.' });
+    }
+
+    const ok = StorageService.correctProductMatch(candidateId, correctedProductId, reason, 'admin');
+    if (!ok) {
+      return res.status(404).json({ error: 'Candidatul de potrivire nu a fost găsit.' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Asocierea a fost corectată și jurnalizată în audit.'
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la corectarea asocierii.' });
   }
 });
 
@@ -1113,6 +1421,295 @@ app.post('/api/quality/config', requireAdminAuth, (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la salvarea parametrilor de calitate.' });
+  }
+});
+
+// ============================================================================
+// CATALOG IMPORTER ENDPOINTS (Descoperire, Descărcare, Parsare & Publicare)
+// ============================================================================
+
+// 1. Statistici agregate Catalog Importer
+app.get('/api/admin/catalog-importer/stats', requireAdminAuth, (req, res) => {
+  try {
+    const stats = StorageService.getCatalogStats();
+    res.json({ success: true, stats });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea statisticilor de catalog.' });
+  }
+});
+
+// 2. Surse de catalog
+app.get('/api/admin/catalog-importer/sources', requireAdminAuth, (req, res) => {
+  try {
+    const sources = StorageService.getCatalogSources();
+    res.json({ success: true, sources, count: sources.length });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea surselor de catalog.' });
+  }
+});
+
+// 3. Adăugare / editare sursă de catalog cu validare SSRF
+app.post('/api/admin/catalog-importer/sources', requireAdminAuth, (req, res) => {
+  try {
+    const { id, retailerId, retailerName, name, catalogUrl, format = 'html', status = 'active', legalStatusNotice } = req.body;
+    if (!retailerId || !catalogUrl || !name) {
+      return res.status(400).json({ error: 'Câmpurile retailerId, catalogUrl și name sunt obligatorii.' });
+    }
+
+    const safety = CatalogDownloader.validateUrlSafety(catalogUrl);
+    if (!safety.safe) {
+      return res.status(400).json({ error: `Adresă URL nesigură: ${safety.reason}` });
+    }
+
+    const sourceId = id || `cat-src-${retailerId}-${Date.now()}`;
+    const newSource: CatalogSource = {
+      id: sourceId,
+      retailerId,
+      retailerName: retailerName || retailerId.toUpperCase(),
+      name,
+      catalogUrl,
+      format,
+      status,
+      updateFrequencyDays: 7,
+      authRequired: status === 'pending_authorization',
+      legalStatusNotice: legalStatusNotice || 'Sursă configurată de administrator cu verificare SSRF.'
+    };
+
+    const sources = StorageService.getCatalogSources();
+    const existingIdx = sources.findIndex(s => s.id === sourceId);
+    if (existingIdx !== -1) {
+      sources[existingIdx] = newSource;
+    } else {
+      sources.push(newSource);
+    }
+    StorageService.saveCatalogSources(sources);
+
+    res.json({ success: true, source: newSource, message: 'Sursa de catalog a fost salvată cu succes.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la salvarea sursei de catalog.' });
+  }
+});
+
+// 4. Modificare stare sursă (activare / pauză)
+app.patch('/api/admin/catalog-importer/sources/:id/status', requireAdminAuth, (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['active', 'pending_authorization', 'disabled', 'error'].includes(status)) {
+      return res.status(400).json({ error: 'Status invalid.' });
+    }
+    const updated = StorageService.updateCatalogSource(req.params.id, { status });
+    if (!updated) {
+      return res.status(404).json({ error: 'Sursa nu a fost găsită.' });
+    }
+    res.json({ success: true, source: updated });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la actualizarea stării sursei.' });
+  }
+});
+
+// 5. Documente descoperite
+app.get('/api/admin/catalog-importer/documents', requireAdminAuth, (req, res) => {
+  try {
+    const docs = StorageService.getCatalogDocuments();
+    res.json({ success: true, documents: docs, count: docs.length });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea documentelor de catalog.' });
+  }
+});
+
+// 6. Declanșare descoperire documente noi
+app.post('/api/admin/catalog-importer/discover', requireAdminAuth, async (req, res) => {
+  try {
+    const { retailerId } = req.body;
+    const sources = StorageService.getCatalogSources().filter(s =>
+      (!retailerId || s.retailerId === retailerId) && s.status !== 'disabled'
+    );
+
+    let discoveredTotal: CatalogDocument[] = [];
+    for (const src of sources) {
+      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(src);
+      for (const d of docs) {
+        StorageService.addCatalogDocument(d);
+        discoveredTotal.push(d);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Au fost descoperite ${discoveredTotal.length} documente de catalog.`,
+      documentsCount: discoveredTotal.length,
+      documents: discoveredTotal
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la descoperirea documentelor de catalog.' });
+  }
+});
+
+// 7. Rulare Import Pilot (Lidl România Live)
+app.post('/api/admin/catalog-importer/run-pilot', requireAdminAuth, async (req, res) => {
+  try {
+    const pilotResult = await CatalogStagingManager.runPilotImportLidl();
+    res.json({
+      success: pilotResult.success,
+      message: pilotResult.success
+        ? `Import pilot Lidl finalizat cu succes! ${pilotResult.totalExtracted} oferte extrase, ${pilotResult.autoMatched} potrivite, ${pilotResult.published} publicate.`
+        : `Import pilot eșuat: ${pilotResult.error}`,
+      result: pilotResult
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Eroare la rularea importului pilot: ${err.message}` });
+  }
+});
+
+// 8. Procesare document specific
+app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { autoPublish = false } = req.body;
+    const docs = StorageService.getCatalogDocuments();
+    const doc = docs.find(d => d.id === id);
+
+    if (!doc) {
+      return res.status(404).json({ error: 'Documentul de catalog nu a fost găsit.' });
+    }
+
+    const result = await CatalogStagingManager.executeImportForDocument(doc, {
+      autoPublishValidated: autoPublish
+    });
+
+    res.json({
+      success: result.run.status !== 'failed',
+      run: result.run,
+      extractedCount: result.offers.length,
+      message: `Procesare document finalizată (${result.run.totalRawExtracted} oferte extrase).`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Eroare la procesarea documentului: ${err.message}` });
+  }
+});
+
+// 9. Coadă de Staging & Validare
+app.get('/api/admin/catalog-importer/staging', requireAdminAuth, (req, res) => {
+  try {
+    const { status, retailerId, search } = req.query;
+    let offers = StorageService.getCatalogExtractedOffers();
+
+    if (status && typeof status === 'string' && status !== 'toate') {
+      offers = offers.filter(o => o.stagingStatus === status);
+    }
+    if (retailerId && typeof retailerId === 'string' && retailerId !== 'toate') {
+      offers = offers.filter(o => o.retailerId === retailerId);
+    }
+    if (search && typeof search === 'string') {
+      const q = search.toLowerCase();
+      offers = offers.filter(o =>
+        o.rawTitle.toLowerCase().includes(q) ||
+        (o.rawBrand && o.rawBrand.toLowerCase().includes(q)) ||
+        (o.matchedProductName && o.matchedProductName.toLowerCase().includes(q))
+      );
+    }
+
+    res.json({
+      success: true,
+      count: offers.length,
+      offers: offers.slice(0, 100)
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea cozii de staging.' });
+  }
+});
+
+// 10. Aprobare sau respingere manuală ofertă din Staging
+app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, matchedProductId, rejectionReason } = req.body;
+
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'Acțiune invalidă. Este necesar "approve" sau "reject".' });
+    }
+
+    if (action === 'approve') {
+      const updateData: any = {
+        stagingStatus: 'VALIDATED',
+        reviewedBy: 'admin',
+        reviewedAt: new Date().toISOString()
+      };
+      if (matchedProductId) {
+        updateData.matchedProductId = matchedProductId;
+        const allProducts = StorageService.getAllProducts();
+        const prod = allProducts.find(p => p.id === matchedProductId);
+        if (prod) updateData.matchedProductName = prod.name;
+        updateData.matchMethod = 'manual';
+        updateData.matchConfidence = 1.0;
+      }
+
+      const updated = StorageService.updateCatalogExtractedOffer(id, updateData);
+      if (!updated) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
+
+      res.json({ success: true, offer: updated, message: 'Oferta a fost validată și este pregătită pentru publicare.' });
+    } else {
+      const updated = StorageService.updateCatalogExtractedOffer(id, {
+        stagingStatus: 'REJECTED',
+        rejectionReason: rejectionReason || 'Respinsă manual de administrator.',
+        reviewedBy: 'admin',
+        reviewedAt: new Date().toISOString()
+      });
+      if (!updated) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
+
+      res.json({ success: true, offer: updated, message: 'Oferta a fost respinsă.' });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la revizuirea ofertei.' });
+  }
+});
+
+// 11. Publicare oferte validate în catalogul public
+app.post('/api/admin/catalog-importer/publish-validated', requireAdminAuth, async (req, res) => {
+  try {
+    const { offerIds } = req.body;
+    const pubResult = await CatalogStagingManager.publishValidatedOffers(offerIds);
+    res.json({
+      success: true,
+      publishedCount: pubResult.publishedCount,
+      errors: pubResult.errors,
+      message: `Au fost publicate ${pubResult.publishedCount} oferte validate în catalogul public.`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la publicarea ofertelor validate.' });
+  }
+});
+
+// 12. Jurnal rulări import
+app.get('/api/admin/catalog-importer/runs', requireAdminAuth, (req, res) => {
+  try {
+    const runs = StorageService.getCatalogImportRuns();
+    res.json({ success: true, runs, count: runs.length });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea jurnalului de import.' });
+  }
+});
+
+// 13. Jurnal erori catalog
+app.get('/api/admin/catalog-importer/errors', requireAdminAuth, (req, res) => {
+  try {
+    const errors = StorageService.getCatalogImportErrors();
+    res.json({ success: true, errors, count: errors.length });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea erorilor de catalog.' });
+  }
+});
+
+// 14. Colectare imediată indexare prețuri
+app.post('/api/indexing/collect-now', async (req, res) => {
+  try {
+    const { retailerId = 'lidl' } = req.body;
+    const result = await IndexingScheduler.runRetailerJob(retailerId, {
+      triggeredBy: 'api_collect_now'
+    });
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Eroare la declanșarea colectării.' });
   }
 });
 

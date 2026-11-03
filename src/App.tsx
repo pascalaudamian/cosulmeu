@@ -11,6 +11,8 @@ import { PriceHistoryView } from './components/PriceHistoryView';
 import { StoresView } from './components/StoresView';
 import { ProfileView } from './components/ProfileView';
 import { AdminSourcesView } from './components/AdminSourcesView';
+import { ProductsView } from './components/ProductsView';
+import { ProductDetailView } from './components/ProductDetailView';
 
 import { StorageService } from './services/StorageService';
 import { ShoppingList, Receipt, UserProfile, PriceAlert } from './types';
@@ -18,6 +20,9 @@ import { ShieldCheck, Heart } from 'lucide-react';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [productFilterCategory, setProductFilterCategory] = useState<string>('toate');
+
   const [shoppingLists, setShoppingLists] = useState<ShoppingList[]>(() =>
     StorageService.getShoppingLists()
   );
@@ -48,21 +53,101 @@ export default function App() {
       updatedAt: new Date().toISOString()
     };
 
-  // Sync tab with URL if provided
+  // Sync tab and product with URL if provided
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get('tab');
-    if (tabParam && ['dashboard', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile'].includes(tabParam)) {
+    const productParam = params.get('product');
+    const categoryParam = params.get('category');
+
+    if (categoryParam) {
+      setProductFilterCategory(categoryParam);
+    }
+
+    if (productParam) {
+      setSelectedProductId(productParam);
+      setCurrentTab('product-detail');
+    } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile'].includes(tabParam)) {
       setCurrentTab(tabParam);
     }
   }, []);
 
   const handleSelectTab = (tab: string) => {
     setCurrentTab(tab);
+    if (tab !== 'product-detail') {
+      setSelectedProductId(null);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
     const url = new URL(window.location.href);
     url.searchParams.set('tab', tab);
+    if (tab !== 'products' && tab !== 'product-detail') {
+      url.searchParams.delete('product');
+      url.searchParams.delete('category');
+    }
     window.history.pushState({}, '', url.toString());
+  };
+
+  const handleSelectProduct = (productId: string) => {
+    setSelectedProductId(productId);
+    setCurrentTab('product-detail');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', 'products');
+    url.searchParams.set('product', productId);
+    window.history.pushState({}, '', url.toString());
+  };
+
+  const handleBackFromDetail = () => {
+    setSelectedProductId(null);
+    setCurrentTab('products');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const url = new URL(window.location.href);
+    url.searchParams.delete('product');
+    url.searchParams.set('tab', 'products');
+    window.history.pushState({}, '', url.toString());
+  };
+
+  const handleNavigateToCategory = (cat: string) => {
+    setProductFilterCategory(cat);
+    setSelectedProductId(null);
+    setCurrentTab('products');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const url = new URL(window.location.href);
+    url.searchParams.delete('product');
+    url.searchParams.set('tab', 'products');
+    url.searchParams.set('category', cat);
+    window.history.pushState({}, '', url.toString());
+  };
+
+  const handleAddProductToList = (productId: string, productName: string) => {
+    const prod = StorageService.getAllProducts().find(p => p.id === productId);
+    if (!prod) return;
+
+    setShoppingLists(prevLists => {
+      const updated = prevLists.map(list => {
+        if (list.id === activeListId) {
+          return {
+            ...list,
+            items: [
+              ...list.items,
+              {
+                id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                productId: prod.id,
+                name: prod.name,
+                brand: prod.brand,
+                category: prod.category,
+                quantity: 1,
+                unit: prod.defaultUnit,
+                checked: false
+              }
+            ]
+          };
+        }
+        return list;
+      });
+      StorageService.saveShoppingLists(updated);
+      return updated;
+    });
   };
 
   const handleActiveListSelect = (listId: string) => {
@@ -113,6 +198,25 @@ export default function App() {
             onOpenReceipt={rec => {
               setCurrentTab('receipts');
             }}
+          />
+        )}
+
+        {currentTab === 'products' && (
+          <ProductsView
+            onSelectProduct={handleSelectProduct}
+            activeList={activeList}
+            onAddToList={handleAddProductToList}
+            initialCategory={productFilterCategory}
+          />
+        )}
+
+        {currentTab === 'product-detail' && selectedProductId && (
+          <ProductDetailView
+            productId={selectedProductId}
+            onBack={handleBackFromDetail}
+            onNavigateToCategory={handleNavigateToCategory}
+            activeList={activeList}
+            onAddToList={handleAddProductToList}
           />
         )}
 

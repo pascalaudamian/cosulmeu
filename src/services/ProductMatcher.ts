@@ -5,7 +5,10 @@ export class ProductMatcher {
   /**
    * Remove diacritics and normalize text for comparison
    */
-  static normalizeText(text: string): string {
+  static normalizeText(text: string | any): string {
+    if (!text || typeof text !== 'string') {
+      return typeof text === 'number' ? String(text) : '';
+    }
     return text
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
@@ -73,6 +76,40 @@ export class ProductMatcher {
         }
       }
 
+      // Conflict Guard 0: Conflicting verified barcodes
+      if (params.barcode && product.barcode && params.barcode.trim() !== product.barcode.trim()) {
+        continue; // Different barcodes indicate distinct products
+      }
+
+      // Conflict Guard 1: Variant & Fat percentage conflict (ex: 1.5% vs 3.5%)
+      const extractPercentage = (str: string) => {
+        const m = str.match(/(\d+([.,]\d+)?)\s*%/);
+        return m ? m[1].replace(',', '.') : null;
+      };
+      const inputPct = extractPercentage(params.rawName);
+      const prodPct = extractPercentage(product.name);
+      if (inputPct && prodPct && inputPct !== prodPct) {
+        continue; // Different fat/concentration percentage: distinct variants
+      }
+
+      // Conflict Guard 2: Bread / Flour specific variant conflicts
+      const inputNorm = this.normalizeText(params.rawName);
+      const productNorm = this.normalizeText(product.name);
+      const isInputWhite = inputNorm.includes('alba') || inputNorm.includes('alb');
+      const isProductWhite = productNorm.includes('alba') || productNorm.includes('alb');
+      const isInputDark = inputNorm.includes('neagra') || inputNorm.includes('secara') || inputNorm.includes('integrala');
+      const isProductDark = productNorm.includes('neagra') || productNorm.includes('secara') || productNorm.includes('integrala');
+      if ((isInputWhite && isProductDark) || (isInputDark && isProductWhite)) {
+        continue; // White bread vs dark/rye bread must never be merged
+      }
+
+      // Conflict Guard 3: Sugar-free / Zero / Diet conflict
+      const isInputZero = inputNorm.includes('zero') || inputNorm.includes('diet') || inputNorm.includes('light');
+      const isProductZero = productNorm.includes('zero') || productNorm.includes('diet') || productNorm.includes('light');
+      if (isInputZero !== isProductZero) {
+        continue;
+      }
+
       const productTokens = this.tokenize(product.name);
       const productBrandNorm = this.normalizeText(product.brand);
 
@@ -101,6 +138,7 @@ export class ProductMatcher {
 
       // Weight similarity bonus with unit normalization (convert g->kg, ml->l)
       let weightScore = 0.8;
+      let ratio = 1.0;
       if (params.packageWeightOrVolume && product.packageWeightOrVolume) {
         let normW1 = params.packageWeightOrVolume;
         if (params.packageUnit === 'g' || params.packageUnit === 'ml') normW1 = normW1 / 1000;
@@ -108,8 +146,18 @@ export class ProductMatcher {
         let normW2 = product.packageWeightOrVolume;
         if (product.packageUnit === 'g' || product.packageUnit === 'ml') normW2 = normW2 / 1000;
 
-        const ratio = Math.min(normW1, normW2) / Math.max(normW1, normW2);
-        weightScore = ratio >= 0.85 ? 1.0 : ratio;
+        ratio = Math.min(normW1, normW2) / Math.max(normW1, normW2);
+        // If package weights differ by more than 25%, penalize heavily so they don't auto-group
+        if (ratio < 0.75) {
+          weightScore = 0.1;
+        } else {
+          weightScore = ratio >= 0.90 ? 1.0 : ratio;
+        }
+      }
+
+      // If weight ratio is too small (< 0.75), prevent high confidence auto-matching
+      if (ratio < 0.75) {
+        continue;
       }
 
       // Weighted total confidence
@@ -121,7 +169,7 @@ export class ProductMatcher {
       }
     }
 
-    // Without a verified barcode, use a conservative threshold so medium-confidence
+    // Without a verified barcode, use a conservative threshold (0.70) so medium-confidence
     // fuzzy matches remain reviewable instead of silently changing the catalog.
     if (bestMatch && highestScore >= 0.70) {
       return {

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShoppingBasket, Bell, MapPin, ChevronDown, Check, Sparkles, TrendingDown } from 'lucide-react';
+import { ShoppingBasket, Bell, MapPin, ChevronDown, Check, Sparkles, TrendingDown, ShoppingBag } from 'lucide-react';
 import { ROMANIAN_CITIES } from '../data/mockData';
 import { UserProfile, PriceAlert } from '../types';
 
@@ -62,6 +62,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}
           >
             Acasă
+          </button>
+          <button
+            onClick={() => onSelectTab('products')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+              currentTab === 'products' || currentTab === 'product-detail'
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <ShoppingBag className="w-3.5 h-3.5" />
+            Produse
           </button>
           <button
             onClick={() => onSelectTab('shopping-list')}

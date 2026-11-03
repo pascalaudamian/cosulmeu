@@ -12,6 +12,8 @@ import {
 } from './types';
 import { RetailerRegistry } from './RetailerRegistry';
 import { UnitType } from '../types';
+import { CatalogDownloader } from './catalog/CatalogDownloader';
+import { CatalogParserEngine } from './catalog/CatalogParserEngine';
 
 export abstract class BaseRetailerCollector implements PriceCollector {
   readonly retailerId: string;
@@ -472,7 +474,65 @@ export class LidlCollector extends BaseRetailerCollector {
     return {
       eligible: true,
       status: 'configured',
-      reason: 'Configurat pentru import manual și validare dry-run pe format oficial CSV/XML.'
+      reason: 'Configurat pentru import oficial și colectare automată din catalogul digital săptămânal Lidl România.'
+    };
+  }
+
+  async collectBatch(options?: { dryRun?: boolean; payload?: string }): Promise<CollectionBatch> {
+    // Dacă a fost furnizat un payload manual (CSV/JSON/XML), îl procesăm standard
+    if (options?.payload) {
+      return super.collectBatch(options);
+    }
+
+    // Colectare automată din catalogul public live Lidl România
+    const catalogUrl = 'https://www.lidl.ro/c/ofertele-saptamanale-lidl-plus/a10106219';
+    const downloadRes = await CatalogDownloader.downloadCatalog(catalogUrl, {
+      timeoutMs: 15000,
+      maxRetries: 2
+    });
+
+    if (!downloadRes.ok || !downloadRes.text) {
+      throw new Error(`Colectarea din catalogul public Lidl a eșuat: ${downloadRes.error}`);
+    }
+
+    const parseRes = CatalogParserEngine.parseHtmlCatalog(downloadRes.text, 'lidl');
+    const rawItems: RawCollectorItem[] = parseRes.offers.map((off, idx) => ({
+      id: `raw-lidl-${Date.now()}-${idx + 1}`,
+      rawName: off.rawTitle,
+      barcode: off.rawBarcode,
+      brand: off.rawBrand,
+      category: off.rawCategory,
+      normalPrice: off.normalPrice,
+      promoPrice: off.promoPrice,
+      loyaltyPrice: off.loyaltyPrice,
+      currency: off.currency,
+      packageQuantity: off.packageQuantity,
+      packageUnit: off.packageUnit,
+      promoDetails: off.promoDetails,
+      loyaltyCardName: off.loyaltyCardName,
+      validFrom: off.validFrom,
+      validUntil: off.validUntil,
+      region: 'Național'
+    }));
+
+    const batchId = `batch-lidl-catalog-${Date.now()}`;
+    const hash = downloadRes.sha256 || `sha256-${Date.now()}`;
+
+    return {
+      batchId,
+      retailerId: this.retailerId,
+      sourceId: this.sourceId,
+      sourceName: this.name,
+      collectedAt: new Date().toISOString(),
+      rawRecordsCount: rawItems.length,
+      rawPayloadHash: hash,
+      rawRecords: rawItems,
+      provenance: {
+        sourceType: 'official_feed',
+        sourceUrlOrOrigin: catalogUrl,
+        environment: process.env.NODE_ENV === 'production' ? 'production' : 'test',
+        licenseOrTerms: 'Indexare civică a catalogului public digital săptămânal Lidl România'
+      }
     };
   }
 }

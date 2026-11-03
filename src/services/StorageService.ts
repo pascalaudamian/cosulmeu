@@ -8,7 +8,9 @@ import {
   PriceObservation,
   DataSource,
   SourceSyncRun,
-  ProductMatchCandidate
+  ProductMatchCandidate,
+  UserErrorReport,
+  MatchAuditEntry
 } from '../types';
 import {
   PromotionRecord,
@@ -21,6 +23,15 @@ import {
   PriceFreshnessThresholds,
   PriceQualityWeights
 } from '../indexing/types';
+import {
+  CatalogSource,
+  CatalogDocument,
+  CatalogImportRun,
+  CatalogExtractedOffer,
+  CatalogImportError,
+  CatalogImporterStats
+} from '../indexing/catalog/catalogTypes';
+import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/CatalogSourceDiscovery';
 import {
   INITIAL_SHOPPING_LISTS,
   SAMPLE_RECEIPTS,
@@ -54,7 +65,14 @@ const KEYS = {
   QUALITY_ANOMALIES: 'cosul_meu_quality_anomalies_v1',
   RECOLLECTION_QUEUE: 'cosul_meu_recollection_queue_v1',
   DAILY_QUALITY_REPORTS: 'cosul_meu_daily_quality_reports_v1',
-  QUALITY_CONFIG: 'cosul_meu_quality_config_v1'
+  QUALITY_CONFIG: 'cosul_meu_quality_config_v1',
+  USER_ERROR_REPORTS: 'cosul_meu_user_error_reports_v1',
+  MATCH_AUDIT_LOGS: 'cosul_meu_match_audit_logs_v1',
+  CATALOG_SOURCES: 'cosul_meu_catalog_sources_v1',
+  CATALOG_DOCUMENTS: 'cosul_meu_catalog_documents_v1',
+  CATALOG_IMPORT_RUNS: 'cosul_meu_catalog_import_runs_v1',
+  CATALOG_EXTRACTED_OFFERS: 'cosul_meu_catalog_extracted_offers_v1',
+  CATALOG_IMPORT_ERRORS: 'cosul_meu_catalog_import_errors_v1'
 };
 
 
@@ -375,6 +393,10 @@ export class StorageService {
     const merged = Array.from(offerMap.values());
     this.saveProductOffers(merged);
     return { added, updated };
+  }
+
+  static upsertProductOffers(offers: ProductOffer[]): { added: number; updated: number } {
+    return this.addOrUpdateOffers(offers);
   }
 
   // Price Observations (History preservation)
@@ -774,6 +796,219 @@ export class StorageService {
     } catch (e) {
       console.error('Eroare la salvarea configurației de calitate:', e);
     }
+  }
+
+  // User Error Reports
+  static getUserErrorReports(): UserErrorReport[] {
+    try {
+      const data = safeGetItem(KEYS.USER_ERROR_REPORTS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static addUserErrorReport(report: UserErrorReport): void {
+    const reports = this.getUserErrorReports();
+    safeSetItem(KEYS.USER_ERROR_REPORTS, JSON.stringify([report, ...reports]));
+  }
+
+  // Match Audit History
+  static getMatchAuditHistory(): MatchAuditEntry[] {
+    try {
+      const data = safeGetItem(KEYS.MATCH_AUDIT_LOGS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static addMatchAuditEntry(entry: MatchAuditEntry): void {
+    const logs = this.getMatchAuditHistory();
+    safeSetItem(KEYS.MATCH_AUDIT_LOGS, JSON.stringify([entry, ...logs]));
+  }
+
+  static correctProductMatch(
+    candidateId: string,
+    correctedProductId: string,
+    reason: string,
+    performedBy = 'admin'
+  ): boolean {
+    const candidates = this.getMatchCandidates();
+    const candidate = candidates.find(c => c.id === candidateId);
+    if (!candidate) return false;
+
+    const previousId = candidate.matchedProductId;
+    candidate.matchedProductId = correctedProductId;
+    candidate.status = 'auto_approved';
+    this.saveMatchCandidates(candidates);
+
+    this.addMatchAuditEntry({
+      id: `audit-${Date.now()}`,
+      candidateId,
+      rawName: candidate.sourceRawName,
+      previousProductId: previousId,
+      correctedProductId,
+      action: previousId === correctedProductId ? 'approved' : 'reassigned',
+      reason,
+      performedBy,
+      timestamp: new Date().toISOString()
+    });
+
+    return true;
+  }
+
+  // ==========================================
+  // CATALOG IMPORTER STORAGE METHODS
+  // ==========================================
+
+  static getCatalogSources(): CatalogSource[] {
+    try {
+      const data = safeGetItem(KEYS.CATALOG_SOURCES);
+      return data ? JSON.parse(data) : INITIAL_CATALOG_SOURCES;
+    } catch {
+      return INITIAL_CATALOG_SOURCES;
+    }
+  }
+
+  static saveCatalogSources(sources: CatalogSource[]): void {
+    safeSetItem(KEYS.CATALOG_SOURCES, JSON.stringify(sources));
+  }
+
+  static updateCatalogSource(id: string, updates: Partial<CatalogSource>): CatalogSource | null {
+    const sources = this.getCatalogSources();
+    const idx = sources.findIndex(s => s.id === id);
+    if (idx === -1) return null;
+    sources[idx] = { ...sources[idx], ...updates };
+    this.saveCatalogSources(sources);
+    return sources[idx];
+  }
+
+  static getCatalogDocuments(): CatalogDocument[] {
+    try {
+      const data = safeGetItem(KEYS.CATALOG_DOCUMENTS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveCatalogDocuments(docs: CatalogDocument[]): void {
+    safeSetItem(KEYS.CATALOG_DOCUMENTS, JSON.stringify(docs));
+  }
+
+  static addCatalogDocument(doc: CatalogDocument): void {
+    const docs = this.getCatalogDocuments();
+    const idx = docs.findIndex(d => d.id === doc.id || (d.sha256Checksum && d.sha256Checksum === doc.sha256Checksum));
+    if (idx !== -1) {
+      docs[idx] = { ...docs[idx], ...doc, updatedAt: new Date().toISOString() };
+    } else {
+      docs.unshift(doc);
+    }
+    this.saveCatalogDocuments(docs);
+  }
+
+  static updateCatalogDocument(id: string, updates: Partial<CatalogDocument>): CatalogDocument | null {
+    const docs = this.getCatalogDocuments();
+    const idx = docs.findIndex(d => d.id === id);
+    if (idx === -1) return null;
+    docs[idx] = { ...docs[idx], ...updates, updatedAt: new Date().toISOString() };
+    this.saveCatalogDocuments(docs);
+    return docs[idx];
+  }
+
+  static getCatalogImportRuns(): CatalogImportRun[] {
+    try {
+      const data = safeGetItem(KEYS.CATALOG_IMPORT_RUNS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveCatalogImportRuns(runs: CatalogImportRun[]): void {
+    safeSetItem(KEYS.CATALOG_IMPORT_RUNS, JSON.stringify(runs));
+  }
+
+  static addCatalogImportRun(run: CatalogImportRun): void {
+    const runs = this.getCatalogImportRuns();
+    safeSetItem(KEYS.CATALOG_IMPORT_RUNS, JSON.stringify([run, ...runs]));
+  }
+
+  static updateCatalogImportRun(id: string, updates: Partial<CatalogImportRun>): void {
+    const runs = this.getCatalogImportRuns();
+    const idx = runs.findIndex(r => r.id === id);
+    if (idx !== -1) {
+      runs[idx] = { ...runs[idx], ...updates };
+      this.saveCatalogImportRuns(runs);
+    }
+  }
+
+  static getCatalogExtractedOffers(): CatalogExtractedOffer[] {
+    try {
+      const data = safeGetItem(KEYS.CATALOG_EXTRACTED_OFFERS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveCatalogExtractedOffers(offers: CatalogExtractedOffer[]): void {
+    safeSetItem(KEYS.CATALOG_EXTRACTED_OFFERS, JSON.stringify(offers));
+  }
+
+  static addCatalogExtractedOffers(newOffers: CatalogExtractedOffer[]): void {
+    const existing = this.getCatalogExtractedOffers();
+    const map = new Map(existing.map(o => [o.id, o]));
+    for (const off of newOffers) {
+      map.set(off.id, off);
+    }
+    this.saveCatalogExtractedOffers(Array.from(map.values()));
+  }
+
+  static updateCatalogExtractedOffer(id: string, updates: Partial<CatalogExtractedOffer>): CatalogExtractedOffer | null {
+    const offers = this.getCatalogExtractedOffers();
+    const idx = offers.findIndex(o => o.id === id);
+    if (idx === -1) return null;
+    offers[idx] = { ...offers[idx], ...updates, updatedAt: new Date().toISOString() };
+    this.saveCatalogExtractedOffers(offers);
+    return offers[idx];
+  }
+
+  static getCatalogImportErrors(): CatalogImportError[] {
+    try {
+      const data = safeGetItem(KEYS.CATALOG_IMPORT_ERRORS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveCatalogImportErrors(errors: CatalogImportError[]): void {
+    safeSetItem(KEYS.CATALOG_IMPORT_ERRORS, JSON.stringify(errors));
+  }
+
+  static addCatalogImportError(error: CatalogImportError): void {
+    const errors = this.getCatalogImportErrors();
+    this.saveCatalogImportErrors([error, ...errors.slice(0, 199)]);
+  }
+
+  static getCatalogStats(): CatalogImporterStats {
+    const sources = this.getCatalogSources();
+    const docs = this.getCatalogDocuments();
+    const offers = this.getCatalogExtractedOffers();
+    const runs = this.getCatalogImportRuns();
+
+    return {
+      totalSources: sources.length,
+      activeSources: sources.filter(s => s.status === 'active').length,
+      totalDocuments: docs.length,
+      totalExtractedOffers: offers.length,
+      stagedPendingReview: offers.filter(o => o.stagingStatus === 'NEEDS_REVIEW').length,
+      stagedValidated: offers.filter(o => o.stagingStatus === 'VALIDATED').length,
+      totalPublished: offers.filter(o => o.stagingStatus === 'PUBLISHED').length,
+      lastRunAt: runs[0]?.startedAt
+    };
   }
 
   // Reset & Export

@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/calc.test.ts && tsx tests/sources.test.ts && tsx tests/e2e-import.test.ts && tsx tests/security.test.ts && tsx tests/database.test.ts && tsx tests/indexing.test.ts && tsx tests/indexer-scheduler.test.ts && tsx tests/scraping-discovery.test.ts && tsx tests/price-quality-monitor.test.ts"
+    "test": "tsx tests/calc.test.ts && tsx tests/sources.test.ts && tsx tests/e2e-import.test.ts && tsx tests/security.test.ts && tsx tests/database.test.ts && tsx tests/indexing.test.ts && tsx tests/indexer-scheduler.test.ts && tsx tests/scraping-discovery.test.ts && tsx tests/price-quality-monitor.test.ts && tsx tests/products-catalog.test.ts && tsx tests/acceptance-audit.test.ts && tsx tests/catalog-importer.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -21,6 +21,7 @@
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.23.1",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
@@ -29,6 +30,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/pdf-parse": "^1.1.5",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

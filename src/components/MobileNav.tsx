@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, ListOrdered, Sparkles, ReceiptText, User } from 'lucide-react';
+import { Home, ListOrdered, Sparkles, ReceiptText, User, ShoppingBag } from 'lucide-react';
 
 interface MobileNavProps {
   currentTab: string;
@@ -10,18 +10,31 @@ interface MobileNavProps {
 export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab, itemsCount }) => {
   return (
     <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-lg px-2 py-1 safe-area-pb no-print">
-      <div className="grid grid-cols-5 gap-1 items-center">
+      <div className="grid grid-cols-6 gap-0.5 items-center">
         {/* Acasă */}
         <button
           onClick={() => onSelectTab('dashboard')}
-          className={`flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-colors ${
+          className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-colors ${
             currentTab === 'dashboard'
               ? 'text-emerald-600 font-bold'
               : 'text-slate-500 hover:text-slate-900 font-medium'
           }`}
         >
-          <Home className={`w-5 h-5 ${currentTab === 'dashboard' ? 'stroke-[2.4]' : 'stroke-[1.8]'}`} />
-          <span className="text-[10px] mt-0.5 tracking-tight">Acasă</span>
+          <Home className={`w-4.5 h-4.5 ${currentTab === 'dashboard' ? 'stroke-[2.4]' : 'stroke-[1.8]'}`} />
+          <span className="text-[9px] mt-0.5 tracking-tight">Acasă</span>
+        </button>
+
+        {/* Produse */}
+        <button
+          onClick={() => onSelectTab('products')}
+          className={`flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-colors ${
+            currentTab === 'products' || currentTab === 'product-detail'
+              ? 'text-emerald-600 font-bold'
+              : 'text-slate-500 hover:text-slate-900 font-medium'
+          }`}
+        >
+          <ShoppingBag className={`w-4.5 h-4.5 ${currentTab === 'products' || currentTab === 'product-detail' ? 'stroke-[2.4]' : 'stroke-[1.8]'}`} />
+          <span className="text-[9px] mt-0.5 tracking-tight">Produse</span>
         </button>
 
         {/* Lista mea */}

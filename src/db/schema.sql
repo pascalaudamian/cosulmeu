@@ -376,5 +376,113 @@ CREATE TABLE IF NOT EXISTS daily_quality_reports (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 21. Tabel: Surse Cataloage Retaileri (catalog_sources)
+CREATE TABLE IF NOT EXISTS catalog_sources (
+    id VARCHAR(64) PRIMARY KEY,
+    retailer_id VARCHAR(64) NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    catalog_url TEXT NOT NULL,
+    format VARCHAR(16) NOT NULL DEFAULT 'html',
+    status VARCHAR(32) NOT NULL DEFAULT 'active',
+    update_frequency_days INTEGER NOT NULL DEFAULT 7,
+    auth_required BOOLEAN NOT NULL DEFAULT FALSE,
+    legal_status_notice TEXT,
+    last_checked_at TIMESTAMPTZ,
+    last_discovered_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 22. Tabel: Documente Cataloage Descărcate (catalog_documents)
+CREATE TABLE IF NOT EXISTS catalog_documents (
+    id VARCHAR(128) PRIMARY KEY,
+    source_id VARCHAR(64) NOT NULL REFERENCES catalog_sources(id) ON DELETE CASCADE,
+    retailer_id VARCHAR(64) NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    document_url TEXT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    format VARCHAR(16) NOT NULL,
+    valid_from DATE,
+    valid_until DATE,
+    file_size_bytes BIGINT,
+    sha256_checksum VARCHAR(64),
+    download_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    parse_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    raw_extracted_count INTEGER NOT NULL DEFAULT 0,
+    matched_count INTEGER NOT NULL DEFAULT 0,
+    validated_count INTEGER NOT NULL DEFAULT 0,
+    published_count INTEGER NOT NULL DEFAULT 0,
+    ocr_confidence NUMERIC(5,2),
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 23. Tabel: Rulări de Import Cataloage (catalog_import_runs)
+CREATE TABLE IF NOT EXISTS catalog_import_runs (
+    id VARCHAR(128) PRIMARY KEY,
+    document_id VARCHAR(128) REFERENCES catalog_documents(id) ON DELETE SET NULL,
+    source_id VARCHAR(64) NOT NULL REFERENCES catalog_sources(id) ON DELETE CASCADE,
+    retailer_id VARCHAR(64) NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    status VARCHAR(32) NOT NULL DEFAULT 'running',
+    total_raw_extracted INTEGER NOT NULL DEFAULT 0,
+    auto_matched_count INTEGER NOT NULL DEFAULT 0,
+    needs_review_count INTEGER NOT NULL DEFAULT 0,
+    published_count INTEGER NOT NULL DEFAULT 0,
+    rejected_count INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER,
+    errors JSONB NOT NULL DEFAULT '[]'::jsonb
+);
+
+-- 24. Tabel: Oferte Extrase în Staging (catalog_extracted_offers)
+CREATE TABLE IF NOT EXISTS catalog_extracted_offers (
+    id VARCHAR(128) PRIMARY KEY,
+    run_id VARCHAR(128) REFERENCES catalog_import_runs(id) ON DELETE CASCADE,
+    document_id VARCHAR(128) REFERENCES catalog_documents(id) ON DELETE CASCADE,
+    retailer_id VARCHAR(64) NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    raw_title TEXT NOT NULL,
+    raw_brand VARCHAR(128),
+    raw_barcode VARCHAR(64),
+    raw_category VARCHAR(128),
+    normal_price NUMERIC(10,2) NOT NULL,
+    promo_price NUMERIC(10,2),
+    loyalty_price NUMERIC(10,2),
+    effective_price NUMERIC(10,2) NOT NULL,
+    currency VARCHAR(16) NOT NULL DEFAULT 'RON',
+    package_quantity NUMERIC(10,3),
+    package_unit VARCHAR(16),
+    unit_price NUMERIC(10,2),
+    unit_price_measure VARCHAR(32),
+    is_promo BOOLEAN NOT NULL DEFAULT FALSE,
+    promo_details TEXT,
+    loyalty_card_required BOOLEAN NOT NULL DEFAULT FALSE,
+    loyalty_card_name VARCHAR(64),
+    valid_from DATE,
+    valid_until DATE,
+    matched_product_id VARCHAR(64) REFERENCES products(id) ON DELETE SET NULL,
+    match_confidence NUMERIC(4,3) NOT NULL DEFAULT 0,
+    match_method VARCHAR(32) NOT NULL DEFAULT 'unmatched',
+    staging_status VARCHAR(32) NOT NULL DEFAULT 'DISCOVERED',
+    validation_errors JSONB,
+    reviewed_by VARCHAR(64),
+    reviewed_at TIMESTAMPTZ,
+    rejection_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 25. Tabel: Erori Import Cataloage (catalog_import_errors)
+CREATE TABLE IF NOT EXISTS catalog_import_errors (
+    id VARCHAR(128) PRIMARY KEY,
+    run_id VARCHAR(128),
+    document_id VARCHAR(128),
+    retailer_id VARCHAR(64) NOT NULL,
+    stage VARCHAR(32) NOT NULL,
+    message TEXT NOT NULL,
+    error_detail TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
 
 
