@@ -19,6 +19,7 @@ import { CatalogDownloader } from './src/indexing/catalog/CatalogDownloader.ts';
 import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.ts';
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
+import { ProductMatcher } from './src/services/ProductMatcher.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
 
 
@@ -1644,15 +1645,27 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (re
     }
 
     if (action === 'approve') {
+      const stagedOffer = StorageService.getCatalogExtractedOffers().find(offer => offer.id === id);
+      const automaticMatch = !matchedProductId && stagedOffer
+        ? ProductMatcher.matchProduct({
+            rawName: stagedOffer.rawTitle,
+            barcode: stagedOffer.rawBarcode,
+            brand: stagedOffer.rawBrand,
+            packageWeightOrVolume: stagedOffer.packageQuantity,
+            packageUnit: stagedOffer.packageUnit as any,
+            category: stagedOffer.rawCategory
+          }).matchedProduct
+        : undefined;
+      const resolvedProductId = matchedProductId || automaticMatch?.id;
       const updateData: any = {
         stagingStatus: 'VALIDATED',
         reviewedBy: 'admin',
         reviewedAt: new Date().toISOString()
       };
-      if (matchedProductId) {
-        updateData.matchedProductId = matchedProductId;
+      if (resolvedProductId) {
+        updateData.matchedProductId = resolvedProductId;
         const allProducts = StorageService.getAllProducts();
-        const prod = allProducts.find(p => p.id === matchedProductId);
+        const prod = allProducts.find(p => p.id === resolvedProductId);
         if (prod) updateData.matchedProductName = prod.name;
         updateData.matchMethod = 'manual';
         updateData.matchConfidence = 1.0;
