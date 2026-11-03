@@ -15,6 +15,7 @@ import { StorageService } from '../../services/StorageService';
 import { DatabaseService, isPostgresConfigured, getPool } from '../../db/index';
 import { ProductOffer, PriceObservation, UnitType } from '../../types';
 import { PriceQualityMonitor } from '../PriceQualityMonitor';
+import { CatalogSourceDiscovery } from './CatalogSourceDiscovery';
 
 export class CatalogStagingManager {
   /**
@@ -416,6 +417,80 @@ export class CatalogStagingManager {
     }
 
     return { publishedCount: newOffers.length, errors };
+  }
+
+  /**
+   * Rulează fluxul complet pentru orice sursă de catalog activă.
+   * Lidl rămâne disponibil prin metoda pilot existentă pentru compatibilitate.
+   */
+  static async runImportForRetailer(retailerId: string): Promise<{
+    success: boolean;
+    totalExtracted: number;
+    autoMatched: number;
+    needsReview: number;
+    published: number;
+    sampleOffers: CatalogExtractedOffer[];
+    error?: string;
+  }> {
+    const source = StorageService.getCatalogSources().find(
+      candidate => candidate.retailerId === retailerId && candidate.status === 'active'
+    );
+
+    if (!source) {
+      return {
+        success: false,
+        totalExtracted: 0,
+        autoMatched: 0,
+        needsReview: 0,
+        published: 0,
+        sampleOffers: [],
+        error: `Nu există o sursă activă pentru ${retailerId}. Activează sursa și verifică autorizarea înainte de indexare.`
+      };
+    }
+
+    const documents = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
+    if (documents.length === 0) {
+      return {
+        success: false,
+        totalExtracted: 0,
+        autoMatched: 0,
+        needsReview: 0,
+        published: 0,
+        sampleOffers: [],
+        error: `Nu au fost descoperite cataloage pentru ${source.retailerName}.`
+      };
+    }
+
+    let totalExtracted = 0;
+    let autoMatched = 0;
+    let needsReview = 0;
+    let published = 0;
+    const sampleOffers: CatalogExtractedOffer[] = [];
+    let lastError: string | undefined;
+
+    for (const document of documents) {
+      StorageService.addCatalogDocument(document);
+      const result = await this.executeImportForDocument(document, { autoPublishValidated: true });
+      if (!result.run || result.run.status === 'failed') {
+        lastError = result.error || `Procesarea documentului ${document.title} a eșuat.`;
+        continue;
+      }
+      totalExtracted += result.run.totalRawExtracted;
+      autoMatched += result.run.autoMatchedCount;
+      needsReview += result.run.needsReviewCount;
+      published += result.run.publishedCount;
+      sampleOffers.push(...result.offers.slice(0, 10 - sampleOffers.length));
+    }
+
+    return {
+      success: totalExtracted > 0,
+      totalExtracted,
+      autoMatched,
+      needsReview,
+      published,
+      sampleOffers,
+      error: totalExtracted > 0 ? undefined : lastError || 'Importul nu a extras oferte.'
+    };
   }
 
   /**

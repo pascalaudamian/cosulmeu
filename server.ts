@@ -1561,8 +1561,22 @@ app.post('/api/admin/catalog-importer/run-pilot', requireAdminAuth, async (req, 
   }
 });
 
-// 8. Procesare document specific
-app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, async (req, res) => {
+  // 8. Rulare import complet pentru orice retailer cu sursă activă
+  app.post('/api/admin/catalog-importer/run-retailer', requireAdminAuth, async (req, res) => {
+    try {
+      const { retailerId } = req.body;
+      if (!retailerId || typeof retailerId !== 'string') {
+        return res.status(400).json({ success: false, error: 'retailerId este obligatoriu.' });
+      }
+      const result = await CatalogStagingManager.runImportForRetailer(retailerId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message || 'Importul retailerului a eșuat.' });
+    }
+  });
+
+  // 9. Procesare document specific
+  app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { autoPublish = false } = req.body;
