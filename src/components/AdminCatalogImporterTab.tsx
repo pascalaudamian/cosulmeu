@@ -56,6 +56,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
 
   // Execution states
   const [isRunningPilot, setIsRunningPilot] = useState<boolean>(false);
+  const [selectedRetailerId, setSelectedRetailerId] = useState<string>('lidl');
   const [isDiscovering, setIsDiscovering] = useState<boolean>(false);
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
   const [processingDocId, setProcessingDocId] = useState<string | null>(null);
@@ -131,20 +132,24 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
     loadAllData();
   }, [stagingFilter, retailerFilter, adminToken]);
 
-  // Handle Pilot Import (Lidl România)
-  const handleRunPilot = async () => {
+  // Handle catalog import for any active retailer
+  const handleRunRetailerImport = async () => {
     setIsRunningPilot(true);
     setActionMessage(null);
     try {
-      const res = await fetchWithAuth('/api/admin/catalog-importer/run-pilot', { method: 'POST' });
+      const res = await fetchWithAuth('/api/admin/catalog-importer/run-retailer', {
+        method: 'POST',
+        body: JSON.stringify({ retailerId: selectedRetailerId })
+      });
       const data = await res.json();
+      const retailerName = sources.find(source => source.retailerId === selectedRetailerId)?.retailerName || selectedRetailerId;
       if (data.success) {
         setActionMessage({
           type: 'success',
-          text: `Catalogul Lidl a fost descărcat și procesat: ${data.result.totalExtracted} oferte extrase, ${data.result.published} publicate direct în catalog.`
+          text: `${retailerName}: ${data.totalExtracted} oferte extrase, ${data.published} publicate direct în catalog.`
         });
       } else {
-        setActionMessage({ type: 'error', text: data.error || data.message || 'Importul pilot a eșuat.' });
+        setActionMessage({ type: 'error', text: data.error || 'Importul retailerului a eșuat.' });
       }
       await loadAllData();
     } catch (err: any) {
@@ -284,14 +289,29 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleRunPilot}
-              disabled={isRunningPilot}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-medium text-sm transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50 cursor-pointer"
-            >
-              {isRunningPilot ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              <span>Rulează Pilot Lidl Live</span>
-            </button>
+            <div className="inline-flex items-center gap-2 rounded-xl bg-emerald-950/60 p-1 border border-emerald-500/30">
+              <label htmlFor="import-retailer" className="sr-only">Retailer pentru indexare</label>
+              <select
+                id="import-retailer"
+                value={selectedRetailerId}
+                onChange={event => setSelectedRetailerId(event.target.value)}
+                className="bg-transparent text-emerald-100 text-sm font-medium px-2 py-1.5 outline-none"
+              >
+                {sources.filter(source => source.status === 'active').map(source => (
+                  <option key={source.retailerId} value={source.retailerId} className="text-slate-900">
+                    {source.retailerName}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleRunRetailerImport}
+                disabled={isRunningPilot || sources.filter(source => source.status === 'active').length === 0}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white font-medium text-sm transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50 cursor-pointer"
+              >
+                {isRunningPilot ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                <span>Indexează oferte</span>
+              </button>
+            </div>
 
             <button
               onClick={handleDiscover}

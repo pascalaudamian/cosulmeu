@@ -19,6 +19,7 @@ import { CatalogDownloader } from './src/indexing/catalog/CatalogDownloader.ts';
 import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.ts';
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
+import { ProductMatcher } from './src/services/ProductMatcher.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
 
 
@@ -1561,8 +1562,22 @@ app.post('/api/admin/catalog-importer/run-pilot', requireAdminAuth, async (req, 
   }
 });
 
-// 8. Procesare document specific
-app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, async (req, res) => {
+  // 8. Rulare import complet pentru orice retailer cu sursă activă
+  app.post('/api/admin/catalog-importer/run-retailer', requireAdminAuth, async (req, res) => {
+    try {
+      const { retailerId } = req.body;
+      if (!retailerId || typeof retailerId !== 'string') {
+        return res.status(400).json({ success: false, error: 'retailerId este obligatoriu.' });
+      }
+      const result = await CatalogStagingManager.runImportForRetailer(retailerId);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message || 'Importul retailerului a eșuat.' });
+    }
+  });
+
+  // 9. Procesare document specific
+  app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { autoPublish = false } = req.body;
@@ -1630,15 +1645,27 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (re
     }
 
     if (action === 'approve') {
+      const stagedOffer = StorageService.getCatalogExtractedOffers().find(offer => offer.id === id);
+      const automaticMatch = !matchedProductId && stagedOffer
+        ? ProductMatcher.matchProduct({
+            rawName: stagedOffer.rawTitle,
+            barcode: stagedOffer.rawBarcode,
+            brand: stagedOffer.rawBrand,
+            packageWeightOrVolume: stagedOffer.packageQuantity,
+            packageUnit: stagedOffer.packageUnit as any,
+            category: stagedOffer.rawCategory
+          }).matchedProduct
+        : undefined;
+      const resolvedProductId = matchedProductId || automaticMatch?.id;
       const updateData: any = {
         stagingStatus: 'VALIDATED',
         reviewedBy: 'admin',
         reviewedAt: new Date().toISOString()
       };
-      if (matchedProductId) {
-        updateData.matchedProductId = matchedProductId;
+      if (resolvedProductId) {
+        updateData.matchedProductId = resolvedProductId;
         const allProducts = StorageService.getAllProducts();
-        const prod = allProducts.find(p => p.id === matchedProductId);
+        const prod = allProducts.find(p => p.id === resolvedProductId);
         if (prod) updateData.matchedProductName = prod.name;
         updateData.matchMethod = 'manual';
         updateData.matchConfidence = 1.0;
