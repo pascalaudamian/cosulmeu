@@ -865,7 +865,13 @@ export class StorageService {
   static getCatalogSources(): CatalogSource[] {
     try {
       const data = safeGetItem(KEYS.CATALOG_SOURCES);
-      return data ? JSON.parse(data) : INITIAL_CATALOG_SOURCES;
+      if (!data) return INITIAL_CATALOG_SOURCES;
+
+      const storedSources = JSON.parse(data) as CatalogSource[];
+      const storedById = new Map(storedSources.map(source => [source.id, source]));
+
+      // Keep user changes, but backfill newly registered retailers and their catalog URLs.
+      return INITIAL_CATALOG_SOURCES.map(source => storedById.get(source.id) || source);
     } catch {
       return INITIAL_CATALOG_SOURCES;
     }
