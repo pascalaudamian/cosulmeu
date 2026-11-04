@@ -41,12 +41,13 @@ async function runTests() {
   const safeUrls = [
     'https://www.lidl.ro/c/ofertele-saptamanale-lidl-plus/a10106219',
     'https://lidl.ro/cataloage',
-    'https://www.kaufland.ro/oferte/catalog-saptamanal.html',
+    'https://www.kaufland.ro/cataloage-cu-reduceri.html',
+    'https://assets.leaflets.schwarz/leaflets/pdfs/kaufland.pdf',
     'https://carrefour.ro/cataloage',
-    'https://www.penny.ro/cataloage',
+    'https://www.penny.ro/vezi-pliantele-saptamanii',
     'https://www.auchan.ro/cataloage-promotii',
     'https://www.profi.ro/reviste-profi/',
-    'https://www.mega-image.ro/promotii',
+    'https://www.mega-image.ro/promotii-online/reviste-promo-online',
     'https://www.metro.ro/oferte/cataloage'
   ];
 
@@ -266,6 +267,23 @@ Paine Toast Integrala 500g,Dobrogea,5942012345678,5.20,2026-12-31`;
   console.log(`   Exemplu extras: "${sample.rawTitle}" -> ${sample.effectivePrice} ${sample.currency} (${sample.stagingStatus})`);
   assert.ok(sample.rawTitle.length >= 2, 'Titlul extras este invalid.');
   assert.ok(sample.effectivePrice > 0, 'Prețul extras este invalid.');
+
+  // =========================================================================
+  // TEST 7: Rulare Cap-Coadă pe Catalogul Săptămânal PDF Kaufland România
+  // =========================================================================
+  console.log('7. Execuție Pilot Live pe Catalogul Public Kaufland România (PDF)...');
+
+  const kauflandPilotResult = await CatalogStagingManager.runPilotImportForRetailer('kaufland');
+  console.log(`   Rezultat descărcare live Kaufland: status=${kauflandPilotResult.success ? 'OK' : 'FAIL'}, extrase=${kauflandPilotResult.totalExtracted}, potrivite=${kauflandPilotResult.autoMatched}, publicate=${kauflandPilotResult.published}`);
+
+  assert.strictEqual(kauflandPilotResult.success, true, `Pilotul live Kaufland a eșuat: ${kauflandPilotResult.error}`);
+  assert.ok(kauflandPilotResult.totalExtracted > 0, 'Nu a fost extrasă nicio ofertă din catalogul real Kaufland.');
+  assert.ok(kauflandPilotResult.sampleOffers.length > 0, 'Lipsește eșantionul de oferte extrase Kaufland.');
+
+  const sampleK = kauflandPilotResult.sampleOffers[0];
+  console.log(`   Exemplu extras Kaufland: "${sampleK.rawTitle}" -> ${sampleK.effectivePrice} ${sampleK.currency} (${sampleK.stagingStatus})`);
+  assert.ok(sampleK.rawTitle.length >= 2, 'Titlul extras Kaufland este invalid.');
+  assert.ok(sampleK.effectivePrice > 0, 'Prețul extras Kaufland este invalid.');
 
   console.log('\n🎉 TOATE TESTELE PENTRU CATALOG IMPORTER AU FOST VALIDATE CU SUCCES!');
 }

@@ -14,14 +14,21 @@ export interface RawParsedOffer {
   loyaltyPrice?: number;
   effectivePrice: number;
   currency: string;
+  priceType?: 'standard' | 'promotional' | 'loyalty_card' | 'b2b_wholesale';
+  discountPercentage?: number;
   packageQuantity?: number;
   packageUnit?: string;
+  unitPrice?: number;
+  unitPriceMeasure?: string;
   isPromo: boolean;
   promoDetails?: string;
   loyaltyCardName?: string;
+  loyaltyCardRequired?: boolean;
   validFrom?: string;
   validUntil?: string;
   imageUrl?: string;
+  storeOrRegion?: string;
+  targetAudience?: 'general' | 'horeca' | 'traders';
   confidenceScore: number;
 }
 
@@ -47,6 +54,13 @@ export class CatalogParserEngine {
     try {
       if (format === 'html') {
         const htmlText = typeof content === 'string' ? content : content.toString('utf-8');
+        if (retailerId === 'carrefour') {
+          return this.parseCarrefourCatalog(htmlText);
+        } else if (retailerId === 'penny') {
+          return this.parsePennyCatalog(htmlText);
+        } else if (retailerId === 'mega-image') {
+          return this.parseMegaImageCatalog(htmlText);
+        }
         return this.parseHtmlCatalog(htmlText, retailerId);
       } else if (format === 'pdf') {
         const buffer = typeof content === 'string' ? Buffer.from(content) : content;
@@ -338,9 +352,9 @@ export class CatalogParserEngine {
 
       const lines = text.split('\n').map((l: string) => l.trim()).filter((l: string) => l.length > 0);
       const offers: RawParsedOffer[] = [];
+      const seenTitles = new Set<string>();
 
-      // Euristică de extragere a ofertelor din linii de text PDF:
-      // Ex: "Lapte proaspăt 1.5% 1L .......... 4,99 lei (-20%)"
+      // Euristică 1: Linii cu preț explicit și monedă ("4,99 lei", "12.50 RON")
       const priceRegex = /(\d+(?:[.,]\d{1,2}))\s*(?:lei|ron)/i;
 
       for (let i = 0; i < lines.length; i++) {
@@ -369,17 +383,121 @@ export class CatalogParserEngine {
             }
 
             const isPromo = /reducere|promo|discount|-?\d+%/i.test(line) || (i > 0 && /reducere|promo/i.test(lines[i - 1]));
+            const normKey = titleCandidate.toLowerCase();
+            if (!seenTitles.has(normKey)) {
+              seenTitles.add(normKey);
+              offers.push({
+                rawTitle: titleCandidate,
+                normalPrice: price,
+                effectivePrice: price,
+                currency: 'RON',
+                packageQuantity: pkgQty,
+                packageUnit: pkgUnit,
+                isPromo,
+                confidenceScore: Math.round(ocrConfidence * 0.8) / 100
+              });
+            }
+          }
+        }
+      }
 
-            offers.push({
-              rawTitle: titleCandidate,
-              normalPrice: price,
-              effectivePrice: price,
-              currency: 'RON',
-              packageQuantity: pkgQty,
-              packageUnit: pkgUnit,
-              isPromo,
-              confidenceScore: Math.round(ocrConfidence * 0.8) / 100
-            });
+      // Euristică 2: Cataloage de supermarket tip revistă/pliant (prețuri decimale standalone adiacente denumirilor de produse)
+      const disclaimers = [
+        'limita stocului', 'consumului personal', 'toate imaginile', 'termeni si conditii',
+        'studiu yougov', 'drepturi rezervate', 'oferta se aplica', 'reducerea este valabila',
+        'declaratie', 'black friday', 'kaufland card', 'card fidelitate', 'pagina'
+      ];
+
+      const foodKeywords = [
+        'cafea', 'lapte', 'paine', 'pâine', 'carne', 'iaurt', 'ulei', 'bere', 'apa', 'apă',
+        'orez', 'zahar', 'zahăr', 'faina', 'făină', 'cotlet', 'muschi', 'mușchi', 'salam',
+        'cascaval', 'cașcaval', 'branza', 'brânză', 'unt', 'mere', 'banane', 'rosii', 'roșii',
+        'cartofi', 'ceapa', 'ceapă', 'ciocolata', 'ciocolată', 'biscuiti', 'biscuiți', 'oua', 'ouă',
+        'pui', 'somon', 'detergent', 'balsam', 'sampon', 'șampon', 'crenvursti', 'crenvurști',
+        'sunca', 'șuncă', 'file', 'pulpe', 'porc', 'vita', 'vită', 'legume', 'fructe'
+      ];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const lower = line.toLowerCase();
+
+        if (disclaimers.some(d => lower.includes(d))) continue;
+        if (line.length > 80 || line.length < 3) continue;
+
+        const hasKeyword = foodKeywords.some(kw => lower.includes(kw));
+        if (!hasKeyword) continue;
+
+        // Căutare preț numeric standalone în proximitate (+/- 5 linii)
+        let foundPrice: number | null = null;
+        let promoPct: string | null = null;
+
+        for (let offset = -5; offset <= 5; offset++) {
+          const neighbor = lines[i + offset];
+          if (!neighbor) continue;
+          if (/^\d{1,3}[.,]\d{2}$/.test(neighbor)) {
+            const val = parseFloat(neighbor.replace(',', '.'));
+            if (val >= 0.5 && val <= 500) {
+              foundPrice = val;
+              break;
+            }
+          }
+          const pctMatch = neighbor.match(/-(\d{1,2})%/);
+          if (pctMatch) {
+            promoPct = pctMatch[1];
+          }
+        }
+
+        if (foundPrice) {
+          let pkgQty: number | undefined = undefined;
+          let pkgUnit: string | undefined = undefined;
+
+          for (let offset = -2; offset <= 2; offset++) {
+            const neighbor = lines[i + offset];
+            if (!neighbor) continue;
+            const m = neighbor.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
+            if (m) {
+              pkgQty = parseFloat(m[1].replace(',', '.'));
+              pkgUnit = m[2].toLowerCase();
+              break;
+            }
+          }
+
+          let brand: string | undefined = undefined;
+          if (i > 0) {
+            const prev = lines[i - 1];
+            if (
+              prev.length >= 2 &&
+              prev.length <= 25 &&
+              !disclaimers.some(d => prev.toLowerCase().includes(d)) &&
+              !/^\d+/.test(prev) &&
+              !prev.includes('--')
+            ) {
+              brand = prev;
+            }
+          }
+
+          let cleanTitle = (brand ? `${brand} ${line}` : line)
+            .replace(/^-\d{1,2}%\s*/, '')
+            .replace(/--\s*\d+\s*of\s*\d+\s*--/gi, '')
+            .replace(/S\d+-[A-Z0-9_-]+/g, '')
+            .trim();
+
+          if (cleanTitle.length >= 3 && !disclaimers.some(d => cleanTitle.toLowerCase().includes(d))) {
+            const normKey = cleanTitle.toLowerCase();
+            if (!seenTitles.has(normKey)) {
+              seenTitles.add(normKey);
+              offers.push({
+                rawTitle: cleanTitle,
+                rawBrand: brand,
+                normalPrice: foundPrice,
+                effectivePrice: foundPrice,
+                currency: 'RON',
+                packageQuantity: pkgQty,
+                packageUnit: pkgUnit,
+                isPromo: Boolean(promoPct),
+                confidenceScore: 0.85
+              });
+            }
           }
         }
       }

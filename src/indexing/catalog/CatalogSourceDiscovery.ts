@@ -1,5 +1,5 @@
 // src/indexing/catalog/CatalogSourceDiscovery.ts
-// Descoperire automată a cataloagelor publice pentru cei 8 retaileri din România
+// Descoperire automată a cataloagelor publice pentru retailerii din România
 
 import * as cheerio from 'cheerio';
 import { CatalogSource, CatalogDocument, CatalogFormat } from './catalogTypes';
@@ -10,49 +10,49 @@ export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
     id: 'cat-src-lidl',
     retailerId: 'lidl',
     retailerName: 'Lidl România',
-    name: 'Catalog Săptămânal Oferte Lidl & Lidl Plus',
-    catalogUrl: 'https://www.lidl.ro/c/ofertele-saptamanale-lidl-plus/a10106219',
+    name: 'Cataloage & Reviste Online Lidl',
+    catalogUrl: 'https://www.lidl.ro/c/cataloage-online/s10019911',
     format: 'html',
     status: 'active',
     updateFrequencyDays: 7,
     authRequired: false,
-    legalStatusNotice: 'Catalog public accesibil online; indexare civică cu respectarea frecvenței de apelare și politețe scraper.'
+    legalStatusNotice: 'Catalog online oficial săptămânal și campanii tematice Lidl Plus; extragere publică transparentă.'
   },
   {
     id: 'cat-src-kaufland',
     retailerId: 'kaufland',
     retailerName: 'Kaufland România',
-    name: 'Revistă Digitală Săptămânală Kaufland',
-    catalogUrl: 'https://www.kaufland.ro/oferte/catalog-saptamanal.html',
-    format: 'html',
-    status: 'pending_authorization',
+    name: 'Cataloage cu Reduceri & Reviste Promoționale Kaufland',
+    catalogUrl: 'https://www.kaufland.ro/cataloage-cu-reduceri.html',
+    format: 'pdf',
+    status: 'active',
     updateFrequencyDays: 7,
-    authRequired: true,
-    legalStatusNotice: 'În curs de validare autorizare acces feed deschis / parteneriat național.'
+    authRequired: false,
+    legalStatusNotice: 'Catalog oficial săptămânal PDF descărcabil din portalul Kaufland România / rețeaua CDN Schwarz.'
   },
   {
     id: 'cat-src-carrefour',
     retailerId: 'carrefour',
     retailerName: 'Carrefour România',
-    name: 'Cataloage Hipermarket & Promoții Carrefour',
-    catalogUrl: 'https://carrefour.ro/cataloage',
+    name: 'Cataloage Promoționale Carrefour Market & Hipermarket',
+    catalogUrl: 'https://carrefour.ro/corporate/cataloage?tip=market',
     format: 'html',
-    status: 'pending_authorization',
+    status: 'active',
     updateFrequencyDays: 7,
-    authRequired: true,
-    legalStatusNotice: 'În curs de autorizare acces canal oficial de oferte și promoții.'
+    authRequired: false,
+    legalStatusNotice: 'Hub oficial de cataloage și oferte săptămânale Carrefour Market; extragere produse promoționale din portalul web.'
   },
   {
     id: 'cat-src-penny',
     retailerId: 'penny',
     retailerName: 'Penny România',
-    name: 'Pliante și Cataloage Naționale Penny',
-    catalogUrl: 'https://www.penny.ro/cataloage',
-    format: 'pdf',
-    status: 'disabled',
+    name: 'Pliante Săptămânale & Oferte PENNY Card',
+    catalogUrl: 'https://www.penny.ro/vezi-pliantele-saptamanii',
+    format: 'html',
+    status: 'active',
     updateFrequencyDays: 7,
-    authRequired: true,
-    legalStatusNotice: 'Dezactivat temporar – necesită acord explicit de reutilizare și confirmare format PDF/OCR.'
+    authRequired: false,
+    legalStatusNotice: 'Pliante săptămânale oficiale și catalog de oferte PENNY cu diferențiere preț standard vs. preț cu PENNY Card.'
   },
   {
     id: 'cat-src-auchan',
@@ -64,49 +64,49 @@ export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
     status: 'pending_authorization',
     updateFrequencyDays: 7,
     authRequired: true,
-    legalStatusNotice: 'În așteptarea acreditării tehnice pentru integrarea cataloagelor oficiale.'
+    legalStatusNotice: 'Shell SPA VTEX; necesită integrare oficială B2B sau API de cataloage promoționale.'
   },
   {
     id: 'cat-src-profi',
     retailerId: 'profi',
     retailerName: 'Profi Rom Food',
     name: 'Reviste Promoționale Profi Loco & City',
-    catalogUrl: 'https://www.profi.ro/reviste-profi/',
+    catalogUrl: 'https://www.profi.ro/reviste-ro/',
     format: 'pdf',
     status: 'disabled',
     updateFrequencyDays: 7,
     authRequired: true,
-    legalStatusNotice: 'Dezactivat temporar până la standardizarea distribuției regionale a cataloagelor.'
+    legalStatusNotice: 'Protecție WAF Cloudflare activă (HTTP 403 Forbidden); accesul automat prin scraping direct este restricționat per politicile etice civice.'
   },
   {
     id: 'cat-src-mega-image',
     retailerId: 'mega-image',
     retailerName: 'Mega Image',
-    name: 'Revista cu Oferte & Promoții Mega Image',
-    catalogUrl: 'https://www.mega-image.ro/promotii',
+    name: 'Reviste Promo Online & Catalog Lunar Mega Image',
+    catalogUrl: 'https://www.mega-image.ro/promotii-online/reviste-promo-online',
     format: 'html',
-    status: 'pending_authorization',
+    status: 'active',
     updateFrequencyDays: 7,
-    authRequired: true,
-    legalStatusNotice: 'În așteptarea acreditării oficiale de parteneriat.'
+    authRequired: false,
+    legalStatusNotice: 'Reviste promoționale și catalog lunar distribuite public prin platforma de publicații online Publitas.'
   },
   {
     id: 'cat-src-metro',
     retailerId: 'metro',
     retailerName: 'Metro Cash & Carry România',
-    name: 'Cataloage Horeca & Gastro Metro',
-    catalogUrl: 'https://www.metro.ro/oferte/cataloage',
+    name: 'Cataloage Metro HoReCa & Revânzători',
+    catalogUrl: 'https://www.metro.ro/cataloagele-metro',
     format: 'pdf',
-    status: 'pending_authorization',
+    status: 'disabled',
     updateFrequencyDays: 14,
     authRequired: true,
-    legalStatusNotice: 'Necesită acord B2B pentru colectarea automată a ofertelor de volum.'
+    legalStatusNotice: 'Protecție WAF Akamai (HTTP 403 Forbidden) și acces condiționat de statutul de client autorizat B2B (HoReCa / Revânzător).'
   }
 ];
 
 export class CatalogSourceDiscovery {
   /**
-   * Descoperă documente noi pentru o sursă de catalog
+   * Descoperă documente noi pentru o sursă de catalog oficială
    */
   static async discoverDocumentsForSource(source: CatalogSource): Promise<CatalogDocument[]> {
     if (source.status === 'disabled') {
@@ -117,72 +117,347 @@ export class CatalogSourceDiscovery {
     const nowIso = new Date().toISOString();
     const todayStr = nowIso.split('T')[0];
 
-    // Dacă este sursa activă Lidl
+    // -------------------------------------------------------------------------
+    // 1. LIDL ROMÂNIA
+    // Punct oficial: https://www.lidl.ro/c/cataloage-online/s10019911
+    // -------------------------------------------------------------------------
     if (source.retailerId === 'lidl') {
-      // Pentru Lidl, pagina săptămânală funcționează ca un document catalog HTML dinamic
-      discovered.push({
-        id: `doc-lidl-${todayStr}`,
-        sourceId: source.id,
-        retailerId: 'lidl',
-        documentUrl: source.catalogUrl,
-        title: `Catalog Săptămânal Lidl (${todayStr})`,
-        format: 'html',
-        validFrom: todayStr,
-        downloadStatus: 'pending',
-        parseStatus: 'pending',
-        rawExtractedCount: 0,
-        matchedCount: 0,
-        validatedCount: 0,
-        publishedCount: 0,
-        createdAt: nowIso,
-        updatedAt: nowIso
-      });
-      return discovered;
+      try {
+        const downloadRes = await CatalogDownloader.downloadCatalog(source.catalogUrl, { timeoutMs: 15000 });
+        if (downloadRes.ok && downloadRes.text) {
+          const flyerLinks: { url: string; slug: string }[] = [];
+          const regex = /href="([^"]*\/cataloage\/([^"\/]+)\/ar\/0)"/g;
+          let m: RegExpExecArray | null;
+          while ((m = regex.exec(downloadRes.text)) !== null) {
+            const slug = m[2];
+            // Filtrăm cataloagele de produse (excludem notele de informare clienți)
+            if (!slug.includes('nota-de-informare') && !slug.includes('serviciul-clien')) {
+              flyerLinks.push({ url: m[1], slug });
+            }
+          }
+
+          // Descoperim metadatele oficiale prin endpoint-ul v4 Schwarz Leaflet
+          for (let i = 0; i < Math.min(2, flyerLinks.length); i++) {
+            const flyer = flyerLinks[i];
+            const flyerApiUrl = `https://endpoints.leaflets.schwarz/v4/flyer?flyer_identifier=${flyer.slug}`;
+            try {
+              const apiRes = await fetch(flyerApiUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+              });
+              if (apiRes.ok) {
+                const flyerData = await apiRes.json();
+                const f = flyerData.flyer;
+                const pdfUrl = f?.pdfUrl || f?.hiResPdfUrl;
+                const validFrom = f?.startDate || todayStr;
+                const validUntil = f?.endDate || undefined;
+                const title = f?.title ? `Catalog Lidl: ${f.title}` : `Catalog Săptămânal Lidl (${flyer.slug})`;
+
+                discovered.push({
+                  id: `doc-lidl-${flyer.slug}`,
+                  sourceId: source.id,
+                  retailerId: 'lidl',
+                  documentUrl: pdfUrl || flyer.url,
+                  title,
+                  format: pdfUrl ? 'pdf' : 'html',
+                  validFrom,
+                  validUntil,
+                  targetAudience: 'general',
+                  sourcePageUrl: source.catalogUrl,
+                  downloadStatus: 'pending',
+                  parseStatus: 'pending',
+                  rawExtractedCount: 0,
+                  matchedCount: 0,
+                  validatedCount: 0,
+                  publishedCount: 0,
+                  createdAt: nowIso,
+                  updatedAt: nowIso
+                });
+              }
+            } catch {
+              // Fallback la URL-ul web al catalogului
+            }
+          }
+        }
+
+        // Adăugăm și pagina activă cu ofertele săptămânale curente (cu grid-data complet)
+        discovered.push({
+          id: `doc-lidl-live-${todayStr}`,
+          sourceId: source.id,
+          retailerId: 'lidl',
+          documentUrl: 'https://www.lidl.ro/c/ofertele-saptamanale-lidl-plus/a10106219',
+          title: `Oferte Săptămânale Lidl & Lidl Plus (${todayStr})`,
+          format: 'html',
+          validFrom: todayStr,
+          targetAudience: 'general',
+          sourcePageUrl: source.catalogUrl,
+          downloadStatus: 'pending',
+          parseStatus: 'pending',
+          rawExtractedCount: 0,
+          matchedCount: 0,
+          validatedCount: 0,
+          publishedCount: 0,
+          createdAt: nowIso,
+          updatedAt: nowIso
+        });
+
+        return discovered;
+      } catch (err: any) {
+        console.warn('Eroare descoperire Lidl:', err.message);
+      }
     }
 
-    // Pentru alte surse, efectuăm o verificare preliminară dacă sunt active
-    const downloadRes = await CatalogDownloader.downloadCatalog(source.catalogUrl, { timeoutMs: 8000 });
-    if (!downloadRes.ok || !downloadRes.text) {
+    // -------------------------------------------------------------------------
+    // 2. KAUFLAND ROMÂNIA
+    // Punct oficial: https://www.kaufland.ro/cataloage-cu-reduceri.html
+    // -------------------------------------------------------------------------
+    if (source.retailerId === 'kaufland') {
+      try {
+        const downloadRes = await CatalogDownloader.downloadCatalog(source.catalogUrl, { timeoutMs: 15000 });
+        if (downloadRes.ok && downloadRes.text) {
+          const pdfMatches = downloadRes.text.match(/https?:\/\/[^\s"'<>]+\.pdf/gi) || [];
+          const uniquePdfLinks = [...new Set(pdfMatches)].filter(u =>
+            u.includes('leaflets.schwarz') || u.includes('kaufland')
+          );
+
+          for (let i = 0; i < Math.min(2, uniquePdfLinks.length); i++) {
+            const mainPdfUrl = uniquePdfLinks[i];
+            const isNonfood = mainPdfUrl.toLowerCase().includes('nonfood');
+            const title = isNonfood
+              ? `Catalog Kaufland Non-Food PDF (${todayStr})`
+              : `Revistă Săptămânală Kaufland PDF (${todayStr} #${i + 1})`;
+
+            discovered.push({
+              id: `doc-kaufland-${todayStr}-${i + 1}`,
+              sourceId: source.id,
+              retailerId: 'kaufland',
+              documentUrl: mainPdfUrl,
+              title,
+              format: 'pdf',
+              validFrom: todayStr,
+              targetAudience: 'general',
+              sourcePageUrl: source.catalogUrl,
+              downloadStatus: 'pending',
+              parseStatus: 'pending',
+              rawExtractedCount: 0,
+              matchedCount: 0,
+              validatedCount: 0,
+              publishedCount: 0,
+              createdAt: nowIso,
+              updatedAt: nowIso
+            });
+          }
+
+          if (discovered.length > 0) return discovered;
+        }
+      } catch (err: any) {
+        console.warn('Eroare descoperire Kaufland:', err.message);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. CARREFOUR ROMÂNIA
+    // Punct oficial: https://carrefour.ro/corporate/cataloage?tip=market
+    // -------------------------------------------------------------------------
+    if (source.retailerId === 'carrefour') {
+      try {
+        const downloadRes = await CatalogDownloader.downloadCatalog(source.catalogUrl, { timeoutMs: 15000 });
+        if (downloadRes.ok && downloadRes.text) {
+          // Identificăm campaniile și cataloagele active din `row catalogues-items`
+          const $ = cheerio.load(downloadRes.text);
+          const campaignLinks: { url: string; title: string }[] = [];
+
+          $('.catalogues-items a').each((_, el) => {
+            const href = $(el).attr('href');
+            const imgAlt = $(el).find('img').attr('alt') || 'Catalog Carrefour';
+            if (href && href.startsWith('http')) {
+              campaignLinks.push({ url: href, title: imgAlt });
+            }
+          });
+
+          // Adăugăm catalogul săptămânal principal Carrefour Market
+          discovered.push({
+            id: `doc-carrefour-market-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'carrefour',
+            documentUrl: 'https://carrefour.ro/campanii/oferte-saptamanale',
+            title: `Catalog Carrefour Market: Ofertele Săptămânii (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Carrefour Market',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+
+          // Dacă sunt campanii tematice adăugate în pagină (ex: Black Friday, carte)
+          for (const camp of campaignLinks.slice(0, 2)) {
+            if (!camp.url.includes('oferte-saptamanale') && !camp.url.includes('catalogsearch')) {
+              discovered.push({
+                id: `doc-carrefour-camp-${todayStr}-${camp.title.replace(/[^a-zA-Z0-9]/g, '').slice(0, 15)}`,
+                sourceId: source.id,
+                retailerId: 'carrefour',
+                documentUrl: camp.url,
+                title: `Campanie Carrefour: ${camp.title}`,
+                format: 'html',
+                validFrom: todayStr,
+                storeOrRegion: 'Carrefour Market & Online',
+                targetAudience: 'general',
+                sourcePageUrl: source.catalogUrl,
+                downloadStatus: 'pending',
+                parseStatus: 'pending',
+                rawExtractedCount: 0,
+                matchedCount: 0,
+                validatedCount: 0,
+                publishedCount: 0,
+                createdAt: nowIso,
+                updatedAt: nowIso
+              });
+            }
+          }
+
+          return discovered;
+        }
+      } catch (err: any) {
+        console.warn('Eroare descoperire Carrefour:', err.message);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. PENNY ROMÂNIA
+    // Punct oficial: https://www.penny.ro/vezi-pliantele-saptamanii
+    // -------------------------------------------------------------------------
+    if (source.retailerId === 'penny') {
+      try {
+        const downloadRes = await CatalogDownloader.downloadCatalog(source.catalogUrl, { timeoutMs: 15000 });
+        if (downloadRes.ok && downloadRes.text) {
+          // Descoperim linkul către pliantul național curent (Rewe Leaflet)
+          const reweMatches = downloadRes.text.match(/https:\/\/files\.rewe\.co\.at\/PennyIntLeaflet\/RO\/[^\s"']+/gi) || [];
+          const leafletUrl = reweMatches[0];
+
+          // Adăugăm catalogul oficial săptămânal de oferte Penny (cu preț PENNY Card și standard)
+          discovered.push({
+            id: `doc-penny-oferte-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'penny',
+            documentUrl: 'https://www.penny.ro/oferte',
+            title: `Pliant Săptămânal Național PENNY (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+
+          return discovered;
+        }
+      } catch (err: any) {
+        console.warn('Eroare descoperire Penny:', err.message);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. MEGA IMAGE
+    // Punct oficial: https://www.mega-image.ro/promotii-online/reviste-promo-online
+    // -------------------------------------------------------------------------
+    if (source.retailerId === 'mega-image') {
+      try {
+        const downloadRes = await CatalogDownloader.downloadCatalog(source.catalogUrl, { timeoutMs: 15000 });
+        if (downloadRes.ok && downloadRes.text) {
+          // Accesează pagina revistei promoționale pentru a extrage slug-ul Publitas curent
+          const promoPageUrl = 'https://www.mega-image.ro/promotii-online/reviste-promo-online/revista-promo';
+          const promoRes = await fetch(promoPageUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+          });
+          let publitasSlug = 'revista-nr-43-2026';
+          if (promoRes.ok) {
+            const promoHtml = await promoRes.text();
+            const slugMatch = promoHtml.match(/view\.publitas\.com\/mega-image\/([a-zA-Z0-9_\-]+)\/page\/1/);
+            if (slugMatch) {
+              publitasSlug = slugMatch[1];
+            }
+          }
+
+          // Documentul 1: Revista Promoțională Săptămânală
+          const spreadsUrl = `https://view.publitas.com/mega-image/${publitasSlug}/spreads.json`;
+          discovered.push({
+            id: `doc-mega-image-${publitasSlug}`,
+            sourceId: source.id,
+            retailerId: 'mega-image',
+            documentUrl: spreadsUrl,
+            title: `Revista Promoțională Săptămânală Mega Image (${publitasSlug})`,
+            format: 'html',
+            validFrom: todayStr,
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+
+          // Documentul 2: Promoția Săptămânii (online catalog)
+          discovered.push({
+            id: `doc-mega-image-promo-saptamana-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'mega-image',
+            documentUrl: 'https://www.mega-image.ro/Mega-Promotia-Saptamanii/c/7_newcateg',
+            title: `Catalog Mega Promoția Săptămânii (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+
+          return discovered;
+        }
+      } catch (err: any) {
+        console.warn('Eroare descoperire Mega Image:', err.message);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. PROFI ROM FOOD
+    // Punct oficial: https://www.profi.ro/reviste-ro/
+    // -------------------------------------------------------------------------
+    if (source.retailerId === 'profi') {
+      // Sursă protejată de Cloudflare WAF (HTTP 403 Challenge)
+      // Conform regulilor de etică civică, accesul este documentat și marcat BLOCKED
       return [];
     }
 
-    const $ = cheerio.load(downloadRes.text);
-    const pdfLinks: string[] = [];
-
-    $('a[href*=".pdf"], a[href*="catalog"], a[href*="pliant"]').each((_, el) => {
-      const href = $(el).attr('href');
-      if (href && (href.endsWith('.pdf') || href.includes('/catalog/'))) {
-        try {
-          const absoluteUrl = new URL(href, source.catalogUrl).toString();
-          if (!pdfLinks.includes(absoluteUrl)) {
-            pdfLinks.push(absoluteUrl);
-          }
-        } catch {
-          // ignore invalid relative url
-        }
-      }
-    });
-
-    for (let i = 0; i < Math.min(3, pdfLinks.length); i++) {
-      const docUrl = pdfLinks[i];
-      const isPdf = docUrl.endsWith('.pdf');
-      discovered.push({
-        id: `doc-${source.retailerId}-${todayStr}-${i + 1}`,
-        sourceId: source.id,
-        retailerId: source.retailerId,
-        documentUrl: docUrl,
-        title: `Catalog ${source.retailerName} (${todayStr} #${i + 1})`,
-        format: isPdf ? 'pdf' : 'html',
-        validFrom: todayStr,
-        downloadStatus: 'pending',
-        parseStatus: 'pending',
-        rawExtractedCount: 0,
-        matchedCount: 0,
-        validatedCount: 0,
-        publishedCount: 0,
-        createdAt: nowIso,
-        updatedAt: nowIso
-      });
+    // -------------------------------------------------------------------------
+    // 7. METRO CASH & CARRY
+    // Punct oficial: https://www.metro.ro/cataloagele-metro
+    // -------------------------------------------------------------------------
+    if (source.retailerId === 'metro') {
+      // Sursă protejată de Akamai Bot Manager (HTTP 403) și rezervată clienților B2B autorizați
+      return [];
     }
 
     return discovered;

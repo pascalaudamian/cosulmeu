@@ -13,9 +13,9 @@ import { CatalogParserEngine, RawParsedOffer } from './CatalogParserEngine';
 import { ProductMatcher } from '../../services/ProductMatcher';
 import { StorageService } from '../../services/StorageService';
 import { DatabaseService, isPostgresConfigured, getPool } from '../../db/index';
-import { ProductOffer, PriceObservation, UnitType } from '../../types';
+import { Product, ProductOffer, PriceObservation, UnitType } from '../../types';
 import { PriceQualityMonitor } from '../PriceQualityMonitor';
-import { CatalogSourceDiscovery } from './CatalogSourceDiscovery';
+import { mapRetailerCategoryToStandard } from '../../data/categories';
 
 export class CatalogStagingManager {
   /**
@@ -279,8 +279,8 @@ export class CatalogStagingManager {
   static async publishValidatedOffers(offerIds?: string[]): Promise<{ publishedCount: number; errors: string[] }> {
     const allStaged = StorageService.getCatalogExtractedOffers();
     const toPublish = offerIds
-      ? allStaged.filter(o => offerIds.includes(o.id) && o.stagingStatus === 'VALIDATED' && o.matchedProductId)
-      : allStaged.filter(o => o.stagingStatus === 'VALIDATED' && o.matchedProductId);
+      ? allStaged.filter(o => offerIds.includes(o.id) && o.stagingStatus === 'VALIDATED')
+      : allStaged.filter(o => o.stagingStatus === 'VALIDATED');
 
     if (toPublish.length === 0) {
       return { publishedCount: 0, errors: [] };
@@ -295,7 +295,41 @@ export class CatalogStagingManager {
     const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
 
     for (const item of toPublish) {
-      if (!item.matchedProductId) continue;
+      // Dacă oferta aprobată nu a fost asociată manual cu un produs existent,
+      // creăm automat produsul unificat în catalog pentru a fi indexat și vizibil în pagina Produse
+      if (!item.matchedProductId) {
+        const { category, subcategory } = mapRetailerCategoryToStandard(item.rawTitle);
+        const normUnit: 'kg' | 'l' | 'buc' = ['kg', 'g'].includes(item.packageUnit || '')
+          ? 'kg'
+          : ['l', 'ml'].includes(item.packageUnit || '')
+          ? 'l'
+          : 'buc';
+
+        const newProductId = `prod-cat-${item.retailerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        const newProduct: Product = {
+          id: newProductId,
+          name: item.rawTitle,
+          brand: item.rawBrand || 'Marcă Magazin',
+          category: category as any,
+          subcategory,
+          defaultUnit: (item.packageUnit as any) || 'buc',
+          packageWeightOrVolume: item.packageQuantity || 1,
+          packageUnit: (item.packageUnit as any) || 'buc',
+          normalizedUnit: normUnit,
+          barcode: item.rawBarcode || undefined,
+          baseReferencePrice: item.normalPrice || item.effectivePrice,
+          isRomanianProduct: true
+        };
+
+        StorageService.addCustomProduct(newProduct);
+        item.matchedProductId = newProductId;
+        item.matchedProductName = newProduct.name;
+        StorageService.updateCatalogExtractedOffer(item.id, {
+          matchedProductId: newProductId,
+          matchedProductName: newProduct.name,
+          updatedAt: new Date().toISOString()
+        });
+      }
 
       const offerKey = `${item.matchedProductId}__${item.retailerId}`;
       const existing = existingOfferMap.get(offerKey);
@@ -420,80 +454,6 @@ export class CatalogStagingManager {
   }
 
   /**
-   * Rulează fluxul complet pentru orice sursă de catalog activă.
-   * Lidl rămâne disponibil prin metoda pilot existentă pentru compatibilitate.
-   */
-  static async runImportForRetailer(retailerId: string): Promise<{
-    success: boolean;
-    totalExtracted: number;
-    autoMatched: number;
-    needsReview: number;
-    published: number;
-    sampleOffers: CatalogExtractedOffer[];
-    error?: string;
-  }> {
-    const source = StorageService.getCatalogSources().find(
-      candidate => candidate.retailerId === retailerId && candidate.status === 'active'
-    );
-
-    if (!source) {
-      return {
-        success: false,
-        totalExtracted: 0,
-        autoMatched: 0,
-        needsReview: 0,
-        published: 0,
-        sampleOffers: [],
-        error: `Nu există o sursă activă pentru ${retailerId}. Activează sursa și verifică autorizarea înainte de indexare.`
-      };
-    }
-
-    const documents = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
-    if (documents.length === 0) {
-      return {
-        success: false,
-        totalExtracted: 0,
-        autoMatched: 0,
-        needsReview: 0,
-        published: 0,
-        sampleOffers: [],
-        error: `Nu au fost descoperite cataloage pentru ${source.retailerName}.`
-      };
-    }
-
-    let totalExtracted = 0;
-    let autoMatched = 0;
-    let needsReview = 0;
-    let published = 0;
-    const sampleOffers: CatalogExtractedOffer[] = [];
-    let lastError: string | undefined;
-
-    for (const document of documents) {
-      StorageService.addCatalogDocument(document);
-      const result = await this.executeImportForDocument(document, { autoPublishValidated: true });
-      if (!result.run || result.run.status === 'failed') {
-        lastError = result.error || `Procesarea documentului ${document.title} a eșuat.`;
-        continue;
-      }
-      totalExtracted += result.run.totalRawExtracted;
-      autoMatched += result.run.autoMatchedCount;
-      needsReview += result.run.needsReviewCount;
-      published += result.run.publishedCount;
-      sampleOffers.push(...result.offers.slice(0, 10 - sampleOffers.length));
-    }
-
-    return {
-      success: totalExtracted > 0,
-      totalExtracted,
-      autoMatched,
-      needsReview,
-      published,
-      sampleOffers,
-      error: totalExtracted > 0 ? undefined : lastError || 'Importul nu a extras oferte.'
-    };
-  }
-
-  /**
    * Rulează importul pilot cap-coadă pentru retailerul pilot: Lidl România
    */
   static async runPilotImportLidl(): Promise<{
@@ -505,49 +465,203 @@ export class CatalogStagingManager {
     sampleOffers: CatalogExtractedOffer[];
     error?: string;
   }> {
+    return this.runPilotImportForRetailer('lidl');
+  }
+
+  /**
+   * Rulează importul pilot pentru un retailer specific (Lidl, Kaufland etc.)
+   */
+  static async runPilotImportForRetailer(retailerId: string): Promise<{
+    success: boolean;
+    retailerId: string;
+    totalExtracted: number;
+    autoMatched: number;
+    needsReview: number;
+    published: number;
+    sampleOffers: CatalogExtractedOffer[];
+    error?: string;
+  }> {
     const todayStr = new Date().toISOString().split('T')[0];
-    const lidlDoc: CatalogDocument = {
-      id: `doc-lidl-live-${todayStr}`,
-      sourceId: 'cat-src-lidl',
-      retailerId: 'lidl',
-      documentUrl: 'https://www.lidl.ro/c/ofertele-saptamanale-lidl-plus/a10106219',
-      title: `Catalog Săptămânal Lidl Plus Live (${todayStr})`,
-      format: 'html',
-      validFrom: todayStr,
-      downloadStatus: 'pending',
-      parseStatus: 'pending',
-      rawExtractedCount: 0,
-      matchedCount: 0,
-      validatedCount: 0,
-      publishedCount: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    const sources = StorageService.getCatalogSources();
+    const source = sources.find(s => s.retailerId === retailerId);
 
-    StorageService.addCatalogDocument(lidlDoc);
-
-    const result = await this.executeImportForDocument(lidlDoc, { autoPublishValidated: true });
-
-    if (!result.run || result.run.status === 'failed') {
+    if (!source) {
       return {
         success: false,
+        retailerId,
         totalExtracted: 0,
         autoMatched: 0,
         needsReview: 0,
         published: 0,
         sampleOffers: [],
-        error: result.error || 'Importul pilot a eșuat.'
+        error: `Sursa de catalog pentru retailerul "${retailerId}" nu este configurată.`
       };
     }
 
+    if (source.status === 'disabled') {
+      return {
+        success: false,
+        retailerId,
+        totalExtracted: 0,
+        autoMatched: 0,
+        needsReview: 0,
+        published: 0,
+        sampleOffers: [],
+        error: `Sursa ${source.retailerName} este dezactivată: ${source.legalStatusNotice}`
+      };
+    }
+
+    if (retailerId === 'lidl') {
+      const lidlDoc: CatalogDocument = {
+        id: `doc-lidl-live-${todayStr}`,
+        sourceId: source.id,
+        retailerId: 'lidl',
+        documentUrl: source.catalogUrl,
+        title: `Catalog Săptămânal Lidl Plus Live (${todayStr})`,
+        format: 'html',
+        validFrom: todayStr,
+        downloadStatus: 'pending',
+        parseStatus: 'pending',
+        rawExtractedCount: 0,
+        matchedCount: 0,
+        validatedCount: 0,
+        publishedCount: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      StorageService.addCatalogDocument(lidlDoc);
+      const result = await this.executeImportForDocument(lidlDoc, { autoPublishValidated: true });
+
+      if (!result.run || result.run.status === 'failed') {
+        return {
+          success: false,
+          retailerId,
+          totalExtracted: 0,
+          autoMatched: 0,
+          needsReview: 0,
+          published: 0,
+          sampleOffers: [],
+          error: result.error || 'Importul pilot Lidl a eșuat.'
+        };
+      }
+
+      return {
+        success: true,
+        retailerId,
+        totalExtracted: result.run.totalRawExtracted,
+        autoMatched: result.run.autoMatchedCount,
+        needsReview: result.run.needsReviewCount,
+        published: result.run.publishedCount,
+        sampleOffers: result.offers.slice(0, 10)
+      };
+    }
+
+    if (retailerId === 'kaufland') {
+      const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery');
+      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
+
+      if (docs.length === 0) {
+        return {
+          success: false,
+          retailerId,
+          totalExtracted: 0,
+          autoMatched: 0,
+          needsReview: 0,
+          published: 0,
+          sampleOffers: [],
+          error: 'Nu a fost identificat un catalog PDF activ pe portalul Kaufland România.'
+        };
+      }
+
+      const kauflandDoc = docs[0];
+      StorageService.addCatalogDocument(kauflandDoc);
+      const result = await this.executeImportForDocument(kauflandDoc, { autoPublishValidated: true });
+
+      if (!result.run || result.run.status === 'failed') {
+        return {
+          success: false,
+          retailerId,
+          totalExtracted: 0,
+          autoMatched: 0,
+          needsReview: 0,
+          published: 0,
+          sampleOffers: [],
+          error: result.error || 'Importul catalogului Kaufland a eșuat.'
+        };
+      }
+
+      return {
+        success: true,
+        retailerId,
+        totalExtracted: result.run.totalRawExtracted,
+        autoMatched: result.run.autoMatchedCount,
+        needsReview: result.run.needsReviewCount,
+        published: result.run.publishedCount,
+        sampleOffers: result.offers.slice(0, 10)
+      };
+    }
+
+    // Pentru ceilalți retaileri, încercăm descoperirea automată
+    const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery');
+    const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
+
+    if (docs.length === 0) {
+      return {
+        success: false,
+        retailerId,
+        totalExtracted: 0,
+        autoMatched: 0,
+        needsReview: 0,
+        published: 0,
+        sampleOffers: [],
+        error: `Retailerul ${source.retailerName} nu are cataloage descărcabile automat: ${source.legalStatusNotice}`
+      };
+    }
+
+    const doc = docs[0];
+    StorageService.addCatalogDocument(doc);
+    const result = await this.executeImportForDocument(doc, { autoPublishValidated: true });
+
     return {
-      success: true,
+      success: result.run.status !== 'failed',
+      retailerId,
       totalExtracted: result.run.totalRawExtracted,
       autoMatched: result.run.autoMatchedCount,
       needsReview: result.run.needsReviewCount,
       published: result.run.publishedCount,
-      sampleOffers: result.offers.slice(0, 10)
+      sampleOffers: result.offers.slice(0, 10),
+      error: result.error
     };
+  }
+
+  /**
+   * Rulează importul automat pentru toți retailerii marcați ca activi (Lidl, Kaufland etc.)
+   */
+  static async runActiveImports(): Promise<{
+    results: Array<{ retailerId: string; success: boolean; totalExtracted: number; published: number; error?: string }>;
+    totalExtracted: number;
+    totalPublished: number;
+  }> {
+    const sources = StorageService.getCatalogSources().filter(s => s.status === 'active');
+    const results: Array<{ retailerId: string; success: boolean; totalExtracted: number; published: number; error?: string }> = [];
+    let totalExtracted = 0;
+    let totalPublished = 0;
+
+    for (const src of sources) {
+      const res = await this.runPilotImportForRetailer(src.retailerId);
+      results.push({
+        retailerId: src.retailerId,
+        success: res.success,
+        totalExtracted: res.totalExtracted,
+        published: res.published,
+        error: res.error
+      });
+      totalExtracted += res.totalExtracted;
+      totalPublished += res.published;
+    }
+
+    return { results, totalExtracted, totalPublished };
   }
 
   /**

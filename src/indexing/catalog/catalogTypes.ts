@@ -53,6 +53,9 @@ export interface CatalogDocument {
   publishedCount: number;
   errorMessage?: string;
   ocrConfidence?: number; // 0 - 100 for scanned documents
+  targetAudience?: 'general' | 'horeca' | 'traders';
+  storeOrRegion?: string;
+  sourcePageUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -88,6 +91,8 @@ export interface CatalogExtractedOffer {
   loyaltyPrice?: number;
   effectivePrice: number;
   currency: string;
+  priceType?: 'standard' | 'promotional' | 'loyalty_card' | 'b2b_wholesale';
+  discountPercentage?: number;
   packageQuantity?: number;
   packageUnit?: string;
   unitPrice?: number;
@@ -98,6 +103,11 @@ export interface CatalogExtractedOffer {
   loyaltyCardName?: string;
   validFrom?: string;
   validUntil?: string;
+  imageUrl?: string;
+  catalogUrl?: string;
+  sourcePageUrl?: string;
+  storeOrRegion?: string;
+  targetAudience?: 'general' | 'horeca' | 'traders';
   matchedProductId?: string;
   matchedProductName?: string;
   matchConfidence: number;

@@ -19,7 +19,6 @@ import { CatalogDownloader } from './src/indexing/catalog/CatalogDownloader.ts';
 import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.ts';
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
-import { ProductMatcher } from './src/services/ProductMatcher.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
 
 
@@ -265,7 +264,8 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
   }
 
   const token = authHeader.slice(7).trim();
-  if (!token || token !== ADMIN_API_KEY) {
+  const isValid = token === ADMIN_API_KEY || (!isProd && token === DEFAULT_DEV_ADMIN_KEY);
+  if (!token || !isValid) {
     return res.status(403).json({ error: 'Acces interzis. Token administrativ invalid.' });
   }
 
@@ -1546,15 +1546,17 @@ app.post('/api/admin/catalog-importer/discover', requireAdminAuth, async (req, r
   }
 });
 
-// 7. Rulare Import Pilot (Lidl România Live)
+// 7. Rulare Import Pilot (Lidl / Kaufland / Multi-Retailer Live)
 app.post('/api/admin/catalog-importer/run-pilot', requireAdminAuth, async (req, res) => {
   try {
-    const pilotResult = await CatalogStagingManager.runPilotImportLidl();
+    const { retailerId = 'lidl' } = req.body || {};
+    const pilotResult = await CatalogStagingManager.runPilotImportForRetailer(retailerId);
     res.json({
       success: pilotResult.success,
+      retailerId: pilotResult.retailerId,
       message: pilotResult.success
-        ? `Import pilot Lidl finalizat cu succes! ${pilotResult.totalExtracted} oferte extrase, ${pilotResult.autoMatched} potrivite, ${pilotResult.published} publicate.`
-        : `Import pilot eșuat: ${pilotResult.error}`,
+        ? `Import pilot ${pilotResult.retailerId.toUpperCase()} finalizat cu succes! ${pilotResult.totalExtracted} oferte extrase, ${pilotResult.autoMatched} potrivite, ${pilotResult.published} publicate.`
+        : `Import pilot ${pilotResult.retailerId.toUpperCase()} eșuat: ${pilotResult.error}`,
       result: pilotResult
     });
   } catch (err: any) {
@@ -1562,22 +1564,77 @@ app.post('/api/admin/catalog-importer/run-pilot', requireAdminAuth, async (req, 
   }
 });
 
-  // 8. Rulare import complet pentru orice retailer cu sursă activă
-  app.post('/api/admin/catalog-importer/run-retailer', requireAdminAuth, async (req, res) => {
-    try {
-      const { retailerId } = req.body;
-      if (!retailerId || typeof retailerId !== 'string') {
-        return res.status(400).json({ success: false, error: 'retailerId este obligatoriu.' });
-      }
-      const result = await CatalogStagingManager.runImportForRetailer(retailerId);
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message || 'Importul retailerului a eșuat.' });
-    }
-  });
+// 7b. Rulare Import pentru toate sursele active
+app.post('/api/admin/catalog-importer/run-active', requireAdminAuth, async (req, res) => {
+  try {
+    const result = await CatalogStagingManager.runActiveImports();
+    res.json({
+      success: true,
+      message: `Rularea surselor active a fost finalizată: ${result.totalExtracted} oferte extrase, ${result.totalPublished} publicate.`,
+      result
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Eroare la rularea surselor active: ${err.message}` });
+  }
+});
 
-  // 9. Procesare document specific
-  app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, async (req, res) => {
+// 7c. Verificare conectivitate PostgreSQL și stare mod demonstrativ
+app.get('/api/admin/catalog-importer/db-check', requireAdminAuth, async (req, res) => {
+  const configured = isPostgresConfigured();
+  if (!configured) {
+    return res.json({
+      success: true,
+      connected: false,
+      configured: false,
+      mode: 'in_memory_fallback',
+      statusLabel: 'Mod Demonstrativ (Memorie)',
+      warning: 'PostgreSQL nu este configurat (DATABASE_URL absent). Aplicația utilizează fallback-ul în memorie. Ofertele, rulările și jurnalele nu persistă la repornirea containerului.',
+      checkedAt: new Date().toISOString()
+    });
+  }
+
+  try {
+    const pool = getPool();
+    if (!pool) {
+      return res.json({
+        success: true,
+        connected: false,
+        configured: true,
+        mode: 'pool_error',
+        statusLabel: 'Deconectat',
+        warning: 'Pool-ul PostgreSQL nu a putut fi inițializat.',
+        checkedAt: new Date().toISOString()
+      });
+    }
+
+    const t0 = Date.now();
+    await pool.query('SELECT 1');
+    const latencyMs = Date.now() - t0;
+
+    res.json({
+      success: true,
+      connected: true,
+      configured: true,
+      mode: 'postgres',
+      statusLabel: 'PostgreSQL Conectat',
+      latencyMs,
+      checkedAt: new Date().toISOString()
+    });
+  } catch (err: any) {
+    res.json({
+      success: true,
+      connected: false,
+      configured: true,
+      mode: 'connection_failed',
+      statusLabel: 'Eroare Conexiune',
+      warning: `Conexiunea PostgreSQL a eșuat: ${err.message}`,
+      checkedAt: new Date().toISOString()
+    });
+  }
+});
+
+// 8. Procesare document specific
+app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { autoPublish = false } = req.body;
@@ -1627,7 +1684,7 @@ app.get('/api/admin/catalog-importer/staging', requireAdminAuth, (req, res) => {
     res.json({
       success: true,
       count: offers.length,
-      offers: offers.slice(0, 100)
+      offers: offers.slice(0, 200)
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la obținerea cozii de staging.' });
@@ -1645,30 +1702,49 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (re
     }
 
     if (action === 'approve') {
-      const stagedOffer = StorageService.getCatalogExtractedOffers().find(offer => offer.id === id);
-      const automaticMatch = !matchedProductId && stagedOffer
-        ? ProductMatcher.matchProduct({
-            rawName: stagedOffer.rawTitle,
-            barcode: stagedOffer.rawBarcode,
-            brand: stagedOffer.rawBrand,
-            packageWeightOrVolume: stagedOffer.packageQuantity,
-            packageUnit: stagedOffer.packageUnit as any,
-            category: stagedOffer.rawCategory
-          }).matchedProduct
-        : undefined;
-      const resolvedProductId = matchedProductId || automaticMatch?.id;
       const updateData: any = {
         stagingStatus: 'VALIDATED',
         reviewedBy: 'admin',
         reviewedAt: new Date().toISOString()
       };
-      if (resolvedProductId) {
-        updateData.matchedProductId = resolvedProductId;
+
+      if (matchedProductId) {
+        updateData.matchedProductId = matchedProductId;
         const allProducts = StorageService.getAllProducts();
-        const prod = allProducts.find(p => p.id === resolvedProductId);
+        const prod = allProducts.find(p => p.id === matchedProductId);
         if (prod) updateData.matchedProductName = prod.name;
         updateData.matchMethod = 'manual';
         updateData.matchConfidence = 1.0;
+      } else {
+        const existingOffers = StorageService.getCatalogExtractedOffers();
+        const targetOffer = existingOffers.find(o => o.id === id);
+        if (targetOffer && !targetOffer.matchedProductId) {
+          const { category, subcategory } = mapRetailerCategoryToStandard(targetOffer.rawTitle);
+          const normUnit = ['kg', 'g'].includes(targetOffer.packageUnit || '')
+            ? 'kg'
+            : ['l', 'ml'].includes(targetOffer.packageUnit || '')
+            ? 'l'
+            : 'buc';
+          const newProd: any = {
+            id: `prod-cat-${targetOffer.retailerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            name: targetOffer.rawTitle,
+            brand: targetOffer.rawBrand || 'Marcă Magazin',
+            category,
+            subcategory,
+            defaultUnit: targetOffer.packageUnit || 'buc',
+            packageWeightOrVolume: targetOffer.packageQuantity || 1,
+            packageUnit: targetOffer.packageUnit || 'buc',
+            normalizedUnit: normUnit,
+            barcode: targetOffer.rawBarcode || undefined,
+            baseReferencePrice: targetOffer.normalPrice || targetOffer.effectivePrice,
+            isRomanianProduct: true
+          };
+          StorageService.addCustomProduct(newProd);
+          updateData.matchedProductId = newProd.id;
+          updateData.matchedProductName = newProd.name;
+          updateData.matchMethod = 'manual';
+          updateData.matchConfidence = 1.0;
+        }
       }
 
       const updated = StorageService.updateCatalogExtractedOffer(id, updateData);
@@ -1688,6 +1764,80 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (re
     }
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la revizuirea ofertei.' });
+  }
+});
+
+// 10b. Aprobare sau respingere în masă
+app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, (req, res) => {
+  try {
+    const { offerIds, action } = req.body;
+    if (!Array.isArray(offerIds) || !['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'Date invalide pentru revizuire în masă.' });
+    }
+
+    const allStaged = StorageService.getCatalogExtractedOffers();
+    let updatedCount = 0;
+
+    for (const id of offerIds) {
+      const targetOffer = allStaged.find(o => o.id === id);
+      if (!targetOffer) continue;
+
+      if (action === 'approve') {
+        let pId = targetOffer.matchedProductId;
+        let pName = targetOffer.matchedProductName;
+        if (!pId) {
+          const { category, subcategory } = mapRetailerCategoryToStandard(targetOffer.rawTitle);
+          const normUnit = ['kg', 'g'].includes(targetOffer.packageUnit || '')
+            ? 'kg'
+            : ['l', 'ml'].includes(targetOffer.packageUnit || '')
+            ? 'l'
+            : 'buc';
+          const newProd: any = {
+            id: `prod-cat-${targetOffer.retailerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            name: targetOffer.rawTitle,
+            brand: targetOffer.rawBrand || 'Marcă Magazin',
+            category,
+            subcategory,
+            defaultUnit: targetOffer.packageUnit || 'buc',
+            packageWeightOrVolume: targetOffer.packageQuantity || 1,
+            packageUnit: targetOffer.packageUnit || 'buc',
+            normalizedUnit: normUnit,
+            barcode: targetOffer.rawBarcode || undefined,
+            baseReferencePrice: targetOffer.normalPrice || targetOffer.effectivePrice,
+            isRomanianProduct: true
+          };
+          StorageService.addCustomProduct(newProd);
+          pId = newProd.id;
+          pName = newProd.name;
+        }
+
+        StorageService.updateCatalogExtractedOffer(id, {
+          stagingStatus: 'VALIDATED',
+          matchedProductId: pId,
+          matchedProductName: pName,
+          matchMethod: 'manual',
+          matchConfidence: 1.0,
+          reviewedBy: 'admin',
+          reviewedAt: new Date().toISOString()
+        });
+        updatedCount++;
+      } else {
+        StorageService.updateCatalogExtractedOffer(id, {
+          stagingStatus: 'REJECTED',
+          reviewedBy: 'admin',
+          reviewedAt: new Date().toISOString()
+        });
+        updatedCount++;
+      }
+    }
+
+    res.json({
+      success: true,
+      updatedCount,
+      message: `${updatedCount} oferte au fost ${action === 'approve' ? 'validate' : 'respinse'} cu succes.`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Eroare la revizuirea în masă: ${err.message}` });
   }
 });
 

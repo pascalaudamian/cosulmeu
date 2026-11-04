@@ -34,6 +34,13 @@ export class CatalogDownloader {
     'leaflet.lidl.ro',
     'cdn.lidl.ro',
     'media.kaufland.com',
+    'assets.leaflets.schwarz',
+    'leaflets.schwarz',
+    'endpoints.leaflets.schwarz',
+    'view.publitas.com',
+    'publitas.com',
+    'files.rewe.co.at',
+    'rewe.co.at',
     'carrefour-romania.ro'
   ];
 
