@@ -62,9 +62,14 @@ export function getDbConfig(): DbConfig {
     };
   }
 
-  // Option 2: Supabase or Direct connection string
-  if (process.env.SUPABASE_DB_URL || process.env.DATABASE_URL) {
-    const rawUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '';
+  // Option 2: Supabase or Vercel Postgres connection string
+  const connectionString =
+    process.env.SUPABASE_DB_URL ||
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL_NON_POOLING ||
+    process.env.POSTGRES_URL;
+  if (connectionString) {
+    const rawUrl = connectionString || '';
     const isLocal = rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1') || process.env.PGSSLMODE === 'disable';
     return {
       configured: true,
@@ -107,8 +112,17 @@ export function getPool(): pg.Pool | null {
   }
 
   if (!global._postgresPool) {
-    if (process.env.SUPABASE_DB_URL || process.env.DATABASE_URL) {
-      const connectionString = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+    if (
+      process.env.SUPABASE_DB_URL ||
+      process.env.DATABASE_URL ||
+      process.env.POSTGRES_URL_NON_POOLING ||
+      process.env.POSTGRES_URL
+    ) {
+      const connectionString =
+        process.env.SUPABASE_DB_URL ||
+        process.env.DATABASE_URL ||
+        process.env.POSTGRES_URL_NON_POOLING ||
+        process.env.POSTGRES_URL;
       global._postgresPool = new Pool({
         connectionString,
         ssl: config.ssl,
