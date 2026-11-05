@@ -30,8 +30,8 @@ import {
   CatalogExtractedOffer,
   CatalogImportError,
   CatalogImporterStats
-} from '../indexing/catalog/catalogTypes';
-import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/CatalogSourceDiscovery';
+} from '../indexing/catalog/catalogTypes.js';
+import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/CatalogSourceDiscovery.js';
 import {
   INITIAL_SHOPPING_LISTS,
   SAMPLE_RECEIPTS,

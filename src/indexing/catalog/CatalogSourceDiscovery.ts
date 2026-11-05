@@ -2,8 +2,8 @@
 // Descoperire automată a cataloagelor publice pentru retailerii din România
 
 import * as cheerio from 'cheerio';
-import { CatalogSource, CatalogDocument, CatalogFormat } from './catalogTypes';
-import { CatalogDownloader } from './CatalogDownloader';
+import { CatalogSource, CatalogDocument, CatalogFormat } from './catalogTypes.js';
+import { CatalogDownloader } from './CatalogDownloader.js';
 
 export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
   {
