@@ -386,6 +386,7 @@ export class CatalogParserEngine {
 
       const lines = text.split('\n').map((l: string) => l.trim()).filter((l: string) => l.length > 0);
       const offers: RawParsedOffer[] = [];
+      const products: RawCatalogProduct[] = [];
       const seenTitles = new Set<string>();
 
       // Euristică 1: Linii cu preț explicit și monedă ("4,99 lei", "12.50 RON")
@@ -481,6 +482,21 @@ export class CatalogParserEngine {
           }
         }
 
+        if (!foundPrice) {
+          const productKey = line.toLowerCase();
+          if (!seenTitles.has(productKey)) {
+            seenTitles.add(productKey);
+            const packageMatch = line.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
+            products.push({
+              rawTitle: line,
+              rawBrand: i > 0 && lines[i - 1].length <= 30 ? lines[i - 1] : undefined,
+              packageQuantity: packageMatch ? parseFloat(packageMatch[1].replace(',', '.')) : undefined,
+              packageUnit: packageMatch?.[2]?.toLowerCase(),
+              confidenceScore: Math.round(ocrConfidence * 0.6) / 100
+            });
+          }
+        }
+
         if (foundPrice) {
           let pkgQty: number | undefined = undefined;
           let pkgUnit: string | undefined = undefined;
@@ -539,7 +555,8 @@ export class CatalogParserEngine {
       return {
         success: offers.length > 0,
         offers,
-        totalExtracted: offers.length,
+        products,
+        totalExtracted: offers.length || products.length,
         format: 'pdf',
         ocrConfidence
       };
