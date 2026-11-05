@@ -24,6 +24,7 @@ import { createHash } from 'node:crypto';
 import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 
 
+dotenv.config({ path: '.env.development.local' });
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
