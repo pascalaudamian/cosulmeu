@@ -55,6 +55,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
   const [selectedSubcategory, setSelectedSubcategory] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedBrand, setSelectedBrand] = useState<string>('toate');
+  const [selectedRetailer, setSelectedRetailer] = useState<string>('toate');
   const [onlyPromo, setOnlyPromo] = useState<boolean>(false);
   const [onlyAvailable, setOnlyAvailable] = useState<boolean>(false);
   const [onlyRomanian, setOnlyRomanian] = useState<boolean>(false);
@@ -130,6 +131,9 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
     if (selectedBrand && selectedBrand !== 'toate') {
       params.set('brand', selectedBrand);
     }
+    if (selectedRetailer && selectedRetailer !== 'toate') {
+      params.set('retailer', selectedRetailer);
+    }
     if (onlyPromo) {
       params.set('onlyPromo', 'true');
     }
@@ -195,6 +199,9 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
         if (selectedBrand && selectedBrand !== 'toate') {
           filtered = filtered.filter(p => p.brand.toLowerCase() === selectedBrand.toLowerCase());
         }
+        if (selectedRetailer && selectedRetailer !== 'toate') {
+          filtered = filtered.filter(p => allOffers.some(o => o.productId === p.id && o.storeId === selectedRetailer));
+        }
         if (onlyPromo) filtered = filtered.filter(p => p.isPromo);
         if (onlyAvailable) filtered = filtered.filter(p => p.offersCount > 0);
         if (onlyRomanian) filtered = filtered.filter(p => p.isRomanianProduct);
@@ -219,6 +226,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
     selectedSubcategory,
     searchQuery,
     selectedBrand,
+    selectedRetailer,
     onlyPromo,
     onlyAvailable,
     onlyRomanian,
@@ -232,6 +240,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
     setSelectedSubcategory('');
     setSearchQuery('');
     setSelectedBrand('toate');
+    setSelectedRetailer('toate');
     setOnlyPromo(false);
     setOnlyAvailable(false);
     setOnlyRomanian(false);
@@ -491,7 +500,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
               <span>BIO</span>
             </button>
 
-            {(onlyPromo || onlyAvailable || onlyRomanian || onlyBio || selectedCategory !== 'toate' || searchQuery || selectedBrand !== 'toate') && (
+            {(onlyPromo || onlyAvailable || onlyRomanian || onlyBio || selectedCategory !== 'toate' || searchQuery || selectedBrand !== 'toate' || selectedRetailer !== 'toate') && (
               <button
                 onClick={handleResetFilters}
                 className="px-2.5 py-1.5 text-xs text-rose-600 hover:text-rose-800 font-semibold flex items-center gap-1"
@@ -500,6 +509,26 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 <RotateCcw className="w-3 h-3" /> Resetează filtre
               </button>
             )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label htmlFor="retailer-filter" className="text-xs font-semibold text-slate-500 whitespace-nowrap">
+              Retailer:
+            </label>
+            <select
+              id="retailer-filter"
+              value={selectedRetailer}
+              onChange={e => {
+                setSelectedRetailer(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+            >
+              <option value="toate">Toți retailerii</option>
+              {STORES.map(store => (
+                <option key={store.id} value={store.id}>{store.name}</option>
+              ))}
+            </select>
           </div>
 
           {/* Sortare */}

@@ -73,10 +73,10 @@ export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
     name: 'Reviste Promoționale Profi Loco & City',
     catalogUrl: 'https://www.profi.ro/reviste-ro/',
     format: 'pdf',
-    status: 'disabled',
+    status: 'active',
     updateFrequencyDays: 7,
-    authRequired: true,
-    legalStatusNotice: 'Protecție WAF Cloudflare activă (HTTP 403 Forbidden); accesul automat prin scraping direct este restricționat per politicile etice civice.'
+    authRequired: false,
+    legalStatusNotice: 'Sursă activată pentru importul catalogului public Profi Rom Food; respectă limitele de acces și termenii publicați.'
   },
   {
     id: 'cat-src-mega-image',
@@ -97,10 +97,10 @@ export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
     name: 'Cataloage Metro HoReCa & Revânzători',
     catalogUrl: 'https://www.metro.ro/cataloagele-metro',
     format: 'pdf',
-    status: 'disabled',
+    status: 'active',
     updateFrequencyDays: 14,
-    authRequired: true,
-    legalStatusNotice: 'Protecție WAF Akamai (HTTP 403 Forbidden) și acces condiționat de statutul de client autorizat B2B (HoReCa / Revânzător).'
+    authRequired: false,
+    legalStatusNotice: 'Sursă activată pentru importul catalogului public Metro Cash & Carry România; respectă limitele de acces și termenii publicați.'
   }
 ];
 
