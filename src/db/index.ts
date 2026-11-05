@@ -123,8 +123,9 @@ export function getPool(): pg.Pool | null {
         process.env.DATABASE_URL ||
         process.env.POSTGRES_URL_NON_POOLING ||
         process.env.POSTGRES_URL;
+      const sanitizedConnectionString = connectionString?.replace(/([?&])ssl(mode|cert|key|rootcert)=[^&]*/gi, '$1').replace(/[?&]$/, '');
       global._postgresPool = new Pool({
-        connectionString,
+        connectionString: sanitizedConnectionString,
         ssl: config.ssl,
         max: 10,
         connectionTimeoutMillis: 5000,

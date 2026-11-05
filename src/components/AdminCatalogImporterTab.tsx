@@ -669,8 +669,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           <div className="mt-4 p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2.5">
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div className="flex-1">
-              <strong className="font-semibold text-amber-300">Mod Demonstrativ Activ (Date Nepersistente): </strong>
-              PostgreSQL nu este configurat în mediul de execuție (variabila <code>DATABASE_URL</code> lipsește). Aplicația funcționează complet folosind stocarea în memorie (<code>StorageService fallback</code>). Importurile, documentele și ofertele sunt izolate și nu vor persista la o repornire a containerului.
+              <strong className="font-semibold text-amber-300">
+                {dbStatus?.configured ? 'Conexiunea PostgreSQL necesită atenție: ' : 'Mod Demonstrativ Activ (Date Nepersistente): '}
+              </strong>
+              {dbStatus?.configured
+                ? `${dbStatus.message || 'Conexiunea la PostgreSQL nu a putut fi verificată.'} Datele noi rămân temporar în fallback până la remedierea conexiunii.`
+                : 'PostgreSQL nu este configurat în mediul de execuție. Aplicația funcționează complet folosind stocarea în memorie (StorageService fallback). Importurile, documentele și ofertele sunt izolate și nu vor persista la o repornire a containerului.'}
             </div>
           </div>
         )}
