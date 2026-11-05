@@ -492,12 +492,13 @@ app.get('/api/categories', (req, res) => {
 // GET /api/products - Catalog public de produse cu filtrare, căutare, sortare și paginare
 app.get('/api/products', (req, res) => {
   try {
-    const {
-      category,
-      subcategory,
-      brand,
-      search,
-      onlyPromo,
+  const {
+    category,
+    subcategory,
+    brand,
+    retailer,
+    search,
+    onlyPromo,
       onlyAvailable,
       sortBy = 'relevance',
       page = '1',
