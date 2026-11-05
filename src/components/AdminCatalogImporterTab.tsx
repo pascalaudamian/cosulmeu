@@ -62,6 +62,7 @@ interface DbCheckResult {
   mode: string;
   statusLabel: string;
   warning?: string;
+  message?: string;
   latencyMs?: number;
   checkedAt?: string;
 }

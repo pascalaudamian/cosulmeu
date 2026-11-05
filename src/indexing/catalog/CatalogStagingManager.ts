@@ -94,6 +94,46 @@ export class CatalogStagingManager {
       document.retailerId
     );
 
+    if ((!parseRes.success || parseRes.offers.length === 0) && (parseRes.products?.length || 0) > 0) {
+      const discoveredProducts = parseRes.products || [];
+      const now = new Date().toISOString();
+      for (const candidate of discoveredProducts) {
+        const { category, subcategory } = mapRetailerCategoryToStandard(candidate.rawCategory || candidate.rawTitle);
+        const product: Product = {
+          id: `prod-discovered-${document.retailerId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: candidate.rawTitle,
+          brand: candidate.rawBrand || 'Marcă necunoscută',
+          category: category as any,
+          subcategory,
+          defaultUnit: (candidate.packageUnit as any) || 'buc',
+          packageWeightOrVolume: candidate.packageQuantity || 1,
+          packageUnit: (candidate.packageUnit as any) || 'buc',
+          normalizedUnit: ['kg', 'g'].includes(candidate.packageUnit || '') ? 'kg' : ['l', 'ml'].includes(candidate.packageUnit || '') ? 'l' : 'buc',
+          barcode: candidate.rawBarcode,
+          imageUrl: candidate.imageUrl,
+          baseReferencePrice: 0,
+          isRomanianProduct: true
+        };
+        StorageService.addCustomProduct(product);
+      }
+
+      const warning = `Catalogul a fost descărcat, dar nu conține prețuri valide. Au fost extrase și salvate ${discoveredProducts.length} produse pentru procesare ulterioară.`;
+      errors.push(warning);
+      StorageService.updateCatalogDocument(document.id, {
+        parseStatus: 'parsed',
+        rawExtractedCount: discoveredProducts.length,
+        errorMessage: warning,
+        updatedAt: now
+      });
+      importRun.status = 'completed';
+      importRun.completedAt = now;
+      importRun.durationMs = Date.now() - startTime;
+      importRun.totalRawExtracted = discoveredProducts.length;
+      importRun.errors = errors;
+      StorageService.updateCatalogImportRun(runId, importRun);
+      return { run: importRun, offers: [], error: warning };
+    }
+
     if (!parseRes.success || parseRes.offers.length === 0) {
       const errMsg = parseRes.error || 'Nu au fost identificate oferte valide în document.';
       errors.push(`Parsare eșuată: ${errMsg}`);

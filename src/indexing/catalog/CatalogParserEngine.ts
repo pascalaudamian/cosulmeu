@@ -32,9 +32,21 @@ export interface RawParsedOffer {
   confidenceScore: number;
 }
 
+export interface RawCatalogProduct {
+  rawTitle: string;
+  rawBrand?: string;
+  rawCategory?: string;
+  rawBarcode?: string;
+  packageQuantity?: number;
+  packageUnit?: string;
+  imageUrl?: string;
+  confidenceScore: number;
+}
+
 export interface ParseResult {
   success: boolean;
   offers: RawParsedOffer[];
+  products?: RawCatalogProduct[];
   totalExtracted: number;
   format: CatalogFormat;
   ocrConfidence?: number;
@@ -293,9 +305,38 @@ export class CatalogParserEngine {
       });
     }
 
+    const products: RawCatalogProduct[] = [];
+    if (offers.length === 0) {
+      const seenProducts = new Set<string>();
+      $('[data-grid-data], [class*="product"], [class*="offer"], [class*="card"], article').each((_, el) => {
+        let data: any = {};
+        const rawAttr = $(el).attr('data-grid-data');
+        if (rawAttr) {
+          try { data = JSON.parse(rawAttr); data = Array.isArray(data) ? data[0] || {} : data; } catch { data = {}; }
+        }
+        const title = String(data.fullTitle || data.title || data.keyfacts?.fullTitle || $(el).find('h2, h3, h4, .article-title, [class*="title"], [class*="name"]').first().text() || '').trim();
+        const key = title.toLowerCase();
+        if (title.length < 3 || seenProducts.has(key)) return;
+        seenProducts.add(key);
+        const packaging = String(data.packaging || data.price?.packaging?.text || $(el).find('.m-price__subline, .pricebox__basic-quantity').text() || '');
+        const packageMatch = packaging.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
+        products.push({
+          rawTitle: title,
+          rawBrand: typeof data.brand === 'string' ? data.brand : data.brand?.name,
+          rawCategory: typeof data.category === 'string' ? data.category : data.category?.name,
+          rawBarcode: data.gtin13 || data.gtin8 || data.sku,
+          packageQuantity: packageMatch ? parseFloat(packageMatch[1].replace(',', '.')) : undefined,
+          packageUnit: packageMatch?.[2]?.toLowerCase(),
+          imageUrl: data.image || $(el).find('img').first().attr('src'),
+          confidenceScore: rawAttr ? 0.8 : 0.55
+        });
+      });
+    }
+
     return {
       success: offers.length > 0,
       offers,
+      products,
       totalExtracted: offers.length,
       format: 'html',
       warnings: warnings.length > 0 ? warnings : undefined
