@@ -1,21 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Navbar } from './components/Navbar';
-import { MobileNav } from './components/MobileNav';
-import { DemoNoticeBanner } from './components/DemoNoticeBanner';
-import { DashboardView } from './components/DashboardView';
-import { ShoppingListView } from './components/ShoppingListView';
-import { PriceComparisonView } from './components/PriceComparisonView';
-import { ReceiptScanView } from './components/ReceiptScanView';
-import { ReceiptHistoryView } from './components/ReceiptHistoryView';
-import { PriceHistoryView } from './components/PriceHistoryView';
-import { StoresView } from './components/StoresView';
-import { ProfileView } from './components/ProfileView';
-import { AdminSourcesView } from './components/AdminSourcesView';
-import { ProductsView } from './components/ProductsView';
-import { ProductDetailView } from './components/ProductDetailView';
+import { Navbar } from './components/Navbar.js';
+import { MobileNav } from './components/MobileNav.js';
+import { DemoNoticeBanner } from './components/DemoNoticeBanner.js';
+import { DashboardView } from './components/DashboardView.js';
+import { ShoppingListView } from './components/ShoppingListView.js';
+import { PriceComparisonView } from './components/PriceComparisonView.js';
+import { ReceiptScanView } from './components/ReceiptScanView.js';
+import { ReceiptHistoryView } from './components/ReceiptHistoryView.js';
+import { PriceHistoryView } from './components/PriceHistoryView.js';
+import { StoresView } from './components/StoresView.js';
+import { ProfileView } from './components/ProfileView.js';
+import { AdminSourcesView } from './components/AdminSourcesView.js';
+import { ProductsView } from './components/ProductsView.js';
+import { ProductDetailView } from './components/ProductDetailView.js';
 
-import { StorageService } from './services/StorageService';
-import { ShoppingList, Receipt, UserProfile, PriceAlert } from './types';
+import { StorageService } from './services/StorageService.js';
+import { ShoppingList, Receipt, UserProfile, PriceAlert } from './types.js';
 import { ShieldCheck, Heart } from 'lucide-react';
 
 export default function App() {

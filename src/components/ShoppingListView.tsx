@@ -18,9 +18,9 @@ import {
   AlertTriangle,
   RotateCcw
 } from 'lucide-react';
-import { ShoppingList, ShoppingListItem, ProductCategory, UnitType, Product } from '../types';
-import { StorageService } from '../services/StorageService';
-import { PriceComparisonService } from '../services/PriceComparisonService';
+import { ShoppingList, ShoppingListItem, ProductCategory, UnitType, Product } from '../types.js';
+import { StorageService } from '../services/StorageService.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
 
 interface ShoppingListViewProps {
   lists: ShoppingList[];

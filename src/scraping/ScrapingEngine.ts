@@ -3,8 +3,8 @@
 // Folosește Cheerio pentru HTML static și o abstracție Playwright pentru pagini dinamice
 
 import * as cheerio from 'cheerio';
-import { ScrapedProductCandidate, PromotionRecord } from '../indexing/types';
-import { UnitType } from '../types';
+import { ScrapedProductCandidate, PromotionRecord } from '../indexing/types.js';
+import { UnitType } from '../types.js';
 
 export interface ScrapingRequestOptions {
   retailerId: string;

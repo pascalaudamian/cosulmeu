@@ -1,10 +1,10 @@
 // src/indexing/PromotionIndexer.ts
 // Modul pentru indexarea, validarea și asocierea promoțiilor și reducerilor de la retaileri
 
-import { PromotionRecord } from './types';
-import { ProductMatcher } from '../services/ProductMatcher';
-import { StorageService } from '../services/StorageService';
-import { getPool } from '../db/index';
+import { PromotionRecord } from './types.js';
+import { ProductMatcher } from '../services/ProductMatcher.js';
+import { StorageService } from '../services/StorageService.js';
+import { getPool } from '../db/index.js';
 
 export interface PromotionIndexingResult {
   promotionsIndexedCount: number;

@@ -12,11 +12,11 @@ import {
   ArrowRight,
   TrendingDown
 } from 'lucide-react';
-import { ShoppingList, BasketStoreComparison } from '../types';
-import { PriceComparisonService } from '../services/PriceComparisonService';
-import { StorageService } from '../services/StorageService';
-import { MultiStoreOptimizationModal } from './MultiStoreOptimizationModal';
-import { STORES } from '../data/mockData';
+import { ShoppingList, BasketStoreComparison } from '../types.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { StorageService } from '../services/StorageService.js';
+import { MultiStoreOptimizationModal } from './MultiStoreOptimizationModal.js';
+import { STORES } from '../data/mockData.js';
 
 interface PriceComparisonViewProps {
   activeList: ShoppingList;

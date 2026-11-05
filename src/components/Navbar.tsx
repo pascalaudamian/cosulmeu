@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ShoppingBasket, Bell, MapPin, ChevronDown, Check, Sparkles, TrendingDown, ShoppingBag } from 'lucide-react';
-import { ROMANIAN_CITIES } from '../data/mockData';
-import { UserProfile, PriceAlert } from '../types';
+import { ROMANIAN_CITIES } from '../data/mockData.js';
+import { UserProfile, PriceAlert } from '../types.js';
 
 interface NavbarProps {
   currentTab: string;

@@ -25,10 +25,10 @@ import {
   HelpCircle,
   X
 } from 'lucide-react';
-import { Product, Store, ProductOffer, PriceObservation, ShoppingList } from '../types';
-import { PriceComparisonService } from '../services/PriceComparisonService';
-import { StorageService } from '../services/StorageService';
-import { STORES } from '../data/mockData';
+import { Product, Store, ProductOffer, PriceObservation, ShoppingList } from '../types.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { StorageService } from '../services/StorageService.js';
+import { STORES } from '../data/mockData.js';
 
 interface ProductDetailViewProps {
   productId: string;

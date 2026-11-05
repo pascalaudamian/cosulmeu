@@ -5,7 +5,7 @@ import {
   UnitType,
   ConfidenceLevel,
   DataSourceType
-} from '../types';
+} from '../types.js';
 
 export interface RawPriceRecord {
   rawName: string;

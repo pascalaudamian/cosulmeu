@@ -1,6 +1,6 @@
-import { PriceObservation, Product } from '../types';
-import { StorageService } from './StorageService';
-import { PRODUCT_OFFERS, STORES } from '../data/mockData';
+import { PriceObservation, Product } from '../types.js';
+import { StorageService } from './StorageService.js';
+import { PRODUCT_OFFERS, STORES } from '../data/mockData.js';
 
 export interface ProductPriceStats {
   productId: string;

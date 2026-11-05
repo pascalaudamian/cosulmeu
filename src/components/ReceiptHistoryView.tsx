@@ -12,10 +12,10 @@ import {
   ShieldCheck,
   ShoppingBag
 } from 'lucide-react';
-import { Receipt } from '../types';
-import { StorageService } from '../services/StorageService';
-import { PriceComparisonService } from '../services/PriceComparisonService';
-import { STORES } from '../data/mockData';
+import { Receipt } from '../types.js';
+import { StorageService } from '../services/StorageService.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { STORES } from '../data/mockData.js';
 
 interface ReceiptHistoryViewProps {
   receipts: Receipt[];

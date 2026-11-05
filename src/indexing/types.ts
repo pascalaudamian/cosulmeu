@@ -8,7 +8,7 @@ import {
   UnitType,
   ConfidenceLevel,
   DataSourceType
-} from '../types';
+} from '../types.js';
 
 export type CollectorStatus =
   | 'disabled'                // Dezactivat explicit (lipsă drepturi reutilizare sau specificație)

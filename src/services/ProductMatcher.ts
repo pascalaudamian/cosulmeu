@@ -1,5 +1,5 @@
-import { Product, ProductMatchCandidate, UnitType } from '../types';
-import { StorageService } from './StorageService';
+import { Product, ProductMatchCandidate, UnitType } from '../types.js';
+import { StorageService } from './StorageService.js';
 
 export class ProductMatcher {
   /**

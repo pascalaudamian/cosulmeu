@@ -1,4 +1,4 @@
-import { Store, Product, ProductOffer, PriceObservation, ShoppingList, Receipt, UserProfile, DataSource, SourceSyncRun, ProductMatchCandidate } from '../types';
+import { Store, Product, ProductOffer, PriceObservation, ShoppingList, Receipt, UserProfile, DataSource, SourceSyncRun, ProductMatchCandidate } from '../types.js';
 
 export const STORES: Store[] = [
   {

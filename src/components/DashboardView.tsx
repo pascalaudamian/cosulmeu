@@ -13,9 +13,9 @@ import {
   CheckCircle2,
   AlertCircle
 } from 'lucide-react';
-import { UserProfile, ShoppingList, Receipt as ReceiptType } from '../types';
-import { PriceComparisonService } from '../services/PriceComparisonService';
-import { STORES } from '../data/mockData';
+import { UserProfile, ShoppingList, Receipt as ReceiptType } from '../types.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { STORES } from '../data/mockData.js';
 
 interface DashboardViewProps {
   userProfile: UserProfile;

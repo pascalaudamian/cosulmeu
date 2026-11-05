@@ -31,11 +31,11 @@ import {
   Heart,
   MoreHorizontal
 } from 'lucide-react';
-import { Product, Store as StoreType, ShoppingList } from '../types';
-import { CATEGORIES_TAXONOMY, CategoryDefinition } from '../data/categories';
-import { PriceComparisonService } from '../services/PriceComparisonService';
-import { StorageService } from '../services/StorageService';
-import { STORES } from '../data/mockData';
+import { Product, Store as StoreType, ShoppingList } from '../types.js';
+import { CATEGORIES_TAXONOMY, CategoryDefinition } from '../data/categories.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { StorageService } from '../services/StorageService.js';
+import { STORES } from '../data/mockData.js';
 
 interface ProductsViewProps {
   onSelectProduct: (productId: string) => void;

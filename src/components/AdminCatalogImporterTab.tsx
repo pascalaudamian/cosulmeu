@@ -49,8 +49,8 @@ import {
   CatalogImportRun,
   CatalogImporterStats,
   CatalogImportError
-} from '../indexing/catalog/catalogTypes';
-import { Product } from '../types';
+} from '../indexing/catalog/catalogTypes.js';
+import { Product } from '../types.js';
 
 interface AdminCatalogImporterTabProps {
   adminToken: string;

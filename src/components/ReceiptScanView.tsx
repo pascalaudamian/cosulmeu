@@ -17,10 +17,10 @@ import {
   ShieldCheck,
   Check
 } from 'lucide-react';
-import { Receipt, ReceiptItem, ProductCategory } from '../types';
-import { STORES } from '../data/mockData';
-import { StorageService } from '../services/StorageService';
-import { PriceComparisonService } from '../services/PriceComparisonService';
+import { Receipt, ReceiptItem, ProductCategory } from '../types.js';
+import { STORES } from '../data/mockData.js';
+import { StorageService } from '../services/StorageService.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
 
 interface ReceiptScanViewProps {
   onReceiptSaved: (receipt: Receipt) => void;

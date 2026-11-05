@@ -34,22 +34,22 @@ import {
   ShoppingBag,
   BookOpen
 } from 'lucide-react';
-import { DataSource, SourceSyncRun, ProductMatchCandidate, ProductOffer, Store } from '../types';
+import { DataSource, SourceSyncRun, ProductMatchCandidate, ProductOffer, Store } from '../types.js';
 import {
   RetailerRegistryEntry,
   BatchProcessingResult,
   PromotionRecord,
   ReceiptDiscoveryItem,
   IndexingMonitorStats
-} from '../indexing/types';
-import { INITIAL_RETAILER_ENTRIES } from '../indexing/RetailerRegistry';
-import { StorageService } from '../services/StorageService';
-import { FileImportAdapter, LidlPriceFileAdapter } from '../sources/FileImportAdapter';
-import { MonitorulPreturilorAdapter } from '../sources/MonitorulPreturilorAdapter';
-import { ReceiptSourceAdapter } from '../sources/ReceiptSourceAdapter';
-import { AffiliateFeedAdapter } from '../sources/AffiliateFeedAdapter';
-import { PriceComparisonService } from '../services/PriceComparisonService';
-import { STORES } from '../data/mockData';
+} from '../indexing/types.js';
+import { INITIAL_RETAILER_ENTRIES } from '../indexing/RetailerRegistry.js';
+import { StorageService } from '../services/StorageService.js';
+import { FileImportAdapter, LidlPriceFileAdapter } from '../sources/FileImportAdapter.js';
+import { MonitorulPreturilorAdapter } from '../sources/MonitorulPreturilorAdapter.js';
+import { ReceiptSourceAdapter } from '../sources/ReceiptSourceAdapter.js';
+import { AffiliateFeedAdapter } from '../sources/AffiliateFeedAdapter.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { STORES } from '../data/mockData.js';
 import { AdminIndexQualityTab } from './AdminIndexQualityTab.tsx';
 import { AdminCatalogImporterTab } from './AdminCatalogImporterTab.tsx';
 

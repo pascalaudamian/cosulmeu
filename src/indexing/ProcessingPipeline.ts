@@ -5,13 +5,13 @@ import {
   CollectionBatch,
   BatchProcessingResult,
   ValidatedCollectorItem
-} from './types';
-import { ProductMatcher } from '../services/ProductMatcher';
-import { StorageService } from '../services/StorageService';
-import { RetailerRegistry } from './RetailerRegistry';
-import { getCollectorForRetailer } from './RetailerCollectors';
-import { getPool } from '../db/index';
-import { ProductOffer, PriceObservation, ProductMatchCandidate, SourceSyncRun } from '../types';
+} from './types.js';
+import { ProductMatcher } from '../services/ProductMatcher.js';
+import { StorageService } from '../services/StorageService.js';
+import { RetailerRegistry } from './RetailerRegistry.js';
+import { getCollectorForRetailer } from './RetailerCollectors.js';
+import { getPool } from '../db/index.js';
+import { ProductOffer, PriceObservation, ProductMatchCandidate, SourceSyncRun } from '../types.js';
 
 export class ProcessingPipeline {
   /**

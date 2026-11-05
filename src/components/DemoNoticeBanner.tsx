@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Info, X, ShieldAlert } from 'lucide-react';
-import { StorageService } from '../services/StorageService';
+import { StorageService } from '../services/StorageService.js';
 
 export const DemoNoticeBanner: React.FC = () => {
   const [dismissed, setDismissed] = useState<boolean>(() => StorageService.isDemoBannerDismissed());

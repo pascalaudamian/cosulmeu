@@ -5,17 +5,17 @@ import {
   ValidationResult,
   InvalidPriceRecord,
   SourceImportResult
-} from './PriceSourceAdapter';
+} from './PriceSourceAdapter.js';
 import {
   ProductOffer,
   SourceSyncRun,
   ProductMatchCandidate,
   UnitType,
   PriceObservation
-} from '../types';
-import { StorageService } from '../services/StorageService';
-import { ProductMatcher } from '../services/ProductMatcher';
-import { STORES } from '../data/mockData';
+} from '../types.js';
+import { StorageService } from '../services/StorageService.js';
+import { ProductMatcher } from '../services/ProductMatcher.js';
+import { STORES } from '../data/mockData.js';
 
 export class FileImportAdapter implements PriceSourceAdapter {
   readonly id: string;

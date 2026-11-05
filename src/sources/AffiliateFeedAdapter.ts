@@ -4,10 +4,10 @@ import {
   ValidatedPriceRecord,
   ValidationResult,
   SourceImportResult
-} from './PriceSourceAdapter';
-import { SourceSyncRun, ProductOffer, ProductMatchCandidate, PriceObservation } from '../types';
-import { FileImportAdapter } from './FileImportAdapter';
-import { StorageService } from '../services/StorageService';
+} from './PriceSourceAdapter.js';
+import { SourceSyncRun, ProductOffer, ProductMatchCandidate, PriceObservation } from '../types.js';
+import { FileImportAdapter } from './FileImportAdapter.js';
+import { StorageService } from '../services/StorageService.js';
 
 export class AffiliateFeedAdapter implements PriceSourceAdapter {
   readonly id = 'src-affiliate-feed';

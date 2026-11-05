@@ -1,6 +1,6 @@
-import { ShoppingListItem, Store, ProductOffer, BasketStoreComparison, Product } from '../types';
-import { STORES } from '../data/mockData';
-import { StorageService } from './StorageService';
+import { ShoppingListItem, Store, ProductOffer, BasketStoreComparison, Product } from '../types.js';
+import { STORES } from '../data/mockData.js';
+import { StorageService } from './StorageService.js';
 
 export class PriceComparisonService {
   /**

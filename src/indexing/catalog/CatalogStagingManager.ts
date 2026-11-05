@@ -558,7 +558,7 @@ export class CatalogStagingManager {
     }
 
     if (retailerId === 'kaufland') {
-      const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery');
+      const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery.js');
       const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
 
       if (docs.length === 0) {
@@ -603,7 +603,7 @@ export class CatalogStagingManager {
     }
 
     // Pentru ceilalți retaileri, încercăm descoperirea automată
-    const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery');
+    const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery.js');
     const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
 
     if (docs.length === 0) {

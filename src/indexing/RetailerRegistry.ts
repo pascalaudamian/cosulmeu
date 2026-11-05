@@ -1,8 +1,8 @@
 // src/indexing/RetailerRegistry.ts
 // Registrul Centralizat al celor 7 Retaileri din România pentru Motorul de Indexare
 
-import { RetailerRegistryEntry, CollectorStatus, CollectorAccessMethod, BatchProcessingResult } from './types';
-import { getPool } from '../db/index';
+import { RetailerRegistryEntry, CollectorStatus, CollectorAccessMethod, BatchProcessingResult } from './types.js';
+import { getPool } from '../db/index.js';
 
 export const INITIAL_RETAILER_ENTRIES: RetailerRegistryEntry[] = [
   {

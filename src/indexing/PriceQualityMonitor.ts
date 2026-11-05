@@ -1,7 +1,7 @@
 // src/indexing/PriceQualityMonitor.ts
 // Modul avansat de monitorizare continuă a calității prețurilor și evaluare a prospețimii (Price Freshness Score)
 
-import { ProductOffer, Product, PriceObservation } from '../types';
+import { ProductOffer, Product, PriceObservation } from '../types.js';
 import {
   PriceFreshnessStatus,
   PriceFreshnessThresholds,
@@ -17,10 +17,10 @@ import {
   IndexQualityOverview,
   RetailerRegistryEntry,
   PromotionRecord
-} from './types';
-import { RetailerRegistry } from './RetailerRegistry';
-import { StorageService } from '../services/StorageService';
-import { getPool } from '../db/index';
+} from './types.js';
+import { RetailerRegistry } from './RetailerRegistry.js';
+import { StorageService } from '../services/StorageService.js';
+import { getPool } from '../db/index.js';
 
 export class PriceQualityMonitor {
   // Configurație implicită a pragurilor de prospețime (ore)

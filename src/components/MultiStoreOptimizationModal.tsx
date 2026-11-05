@@ -10,9 +10,9 @@ import {
   AlertCircle,
   HelpCircle
 } from 'lucide-react';
-import { ShoppingListItem } from '../types';
-import { OptimizationService } from '../services/OptimizationService';
-import { PriceComparisonService } from '../services/PriceComparisonService';
+import { ShoppingListItem } from '../types.js';
+import { OptimizationService } from '../services/OptimizationService.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
 
 interface MultiStoreOptimizationModalProps {
   items: ShoppingListItem[];

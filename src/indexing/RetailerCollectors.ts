@@ -9,11 +9,11 @@ import {
   CollectionBatch,
   RawCollectorItem,
   ValidatedCollectorItem
-} from './types';
-import { RetailerRegistry } from './RetailerRegistry';
-import { UnitType } from '../types';
-import { CatalogDownloader } from './catalog/CatalogDownloader';
-import { CatalogParserEngine } from './catalog/CatalogParserEngine';
+} from './types.js';
+import { RetailerRegistry } from './RetailerRegistry.js';
+import { UnitType } from '../types.js';
+import { CatalogDownloader } from './catalog/CatalogDownloader.js';
+import { CatalogParserEngine } from './catalog/CatalogParserEngine.js';
 
 export abstract class BaseRetailerCollector implements PriceCollector {
   readonly retailerId: string;

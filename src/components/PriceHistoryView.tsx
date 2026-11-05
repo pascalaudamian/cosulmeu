@@ -15,11 +15,11 @@ import {
   Filter,
   CheckCircle2
 } from 'lucide-react';
-import { Product, PriceAlert } from '../types';
-import { StorageService } from '../services/StorageService';
-import { PriceHistoryService, ProductPriceStats } from '../services/PriceHistoryService';
-import { PriceComparisonService } from '../services/PriceComparisonService';
-import { PRODUCTS, STORES } from '../data/mockData';
+import { Product, PriceAlert } from '../types.js';
+import { StorageService } from '../services/StorageService.js';
+import { PriceHistoryService, ProductPriceStats } from '../services/PriceHistoryService.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { PRODUCTS, STORES } from '../data/mockData.js';
 
 interface PriceHistoryViewProps {
   alerts: PriceAlert[];

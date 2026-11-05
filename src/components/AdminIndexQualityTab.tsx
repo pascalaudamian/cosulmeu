@@ -35,9 +35,9 @@ import {
   PriceFreshnessThresholds,
   PriceQualityWeights,
   PriceFreshnessStatus
-} from '../indexing/types';
-import { PriceComparisonService } from '../services/PriceComparisonService';
-import { STORES } from '../data/mockData';
+} from '../indexing/types.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { STORES } from '../data/mockData.js';
 
 interface AdminIndexQualityTabProps {
   adminToken: string;

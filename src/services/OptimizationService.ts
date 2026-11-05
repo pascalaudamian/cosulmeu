@@ -1,7 +1,7 @@
-import { ShoppingListItem, MultiStoreOptimization, Store, ProductOffer, BasketStoreComparison } from '../types';
-import { STORES, PRODUCT_OFFERS, PRODUCTS } from '../data/mockData';
-import { PriceComparisonService } from './PriceComparisonService';
-import { StorageService } from './StorageService';
+import { ShoppingListItem, MultiStoreOptimization, Store, ProductOffer, BasketStoreComparison } from '../types.js';
+import { STORES, PRODUCT_OFFERS, PRODUCTS } from '../data/mockData.js';
+import { PriceComparisonService } from './PriceComparisonService.js';
+import { StorageService } from './StorageService.js';
 
 export class OptimizationService {
   /**

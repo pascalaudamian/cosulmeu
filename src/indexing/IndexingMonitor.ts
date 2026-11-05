@@ -1,10 +1,10 @@
 // src/indexing/IndexingMonitor.ts
 // Modul centralizat de monitorizare și telemetrie pentru Motorul de Indexare
 
-import { IndexingMonitorStats, IndexingRunRecord } from './types';
-import { RetailerRegistry } from './RetailerRegistry';
-import { StorageService } from '../services/StorageService';
-import { getPool } from '../db/index';
+import { IndexingMonitorStats, IndexingRunRecord } from './types.js';
+import { RetailerRegistry } from './RetailerRegistry.js';
+import { StorageService } from '../services/StorageService.js';
+import { getPool } from '../db/index.js';
 
 export class IndexingMonitor {
   /**

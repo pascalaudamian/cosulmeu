@@ -4,9 +4,9 @@ import {
   ValidatedPriceRecord,
   ValidationResult,
   SourceImportResult
-} from './PriceSourceAdapter';
-import { SourceSyncRun, ProductOffer, ProductMatchCandidate, Receipt } from '../types';
-import { StorageService } from '../services/StorageService';
+} from './PriceSourceAdapter.js';
+import { SourceSyncRun, ProductOffer, ProductMatchCandidate, Receipt } from '../types.js';
+import { StorageService } from '../services/StorageService.js';
 
 export class ReceiptSourceAdapter implements PriceSourceAdapter {
   readonly id = 'src-verified-receipts';

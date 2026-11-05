@@ -12,10 +12,10 @@ import {
   AlertTriangle,
   Info
 } from 'lucide-react';
-import { UserProfile } from '../types';
-import { StorageService } from '../services/StorageService';
-import { PriceComparisonService } from '../services/PriceComparisonService';
-import { ROMANIAN_CITIES, STORES } from '../data/mockData';
+import { UserProfile } from '../types.js';
+import { StorageService } from '../services/StorageService.js';
+import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { ROMANIAN_CITIES, STORES } from '../data/mockData.js';
 
 interface ProfileViewProps {
   userProfile: UserProfile;

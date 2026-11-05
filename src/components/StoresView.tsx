@@ -1,7 +1,7 @@
 import React from 'react';
 import { Store as StoreIcon, MapPin, Star, Tag, ExternalLink, ShieldCheck, ShoppingBag } from 'lucide-react';
-import { STORES } from '../data/mockData';
-import { PRODUCT_OFFERS } from '../data/mockData';
+import { STORES } from '../data/mockData.js';
+import { PRODUCT_OFFERS } from '../data/mockData.js';
 
 interface StoresViewProps {
   userCity: string;

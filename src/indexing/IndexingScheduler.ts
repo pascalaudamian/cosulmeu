@@ -1,11 +1,11 @@
 // src/indexing/IndexingScheduler.ts
 // Scheduler și Worker Zilnic cu Lock Distribuit, Rate Limiting, Backoff Exponențial și Circuit Breaker
 
-import { RetailerRegistry } from './RetailerRegistry';
-import { getCollectorForRetailer } from './RetailerCollectors';
-import { ProcessingPipeline } from './ProcessingPipeline';
-import { BatchProcessingResult, CollectorStatus } from './types';
-import { getPool } from '../db/index';
+import { RetailerRegistry } from './RetailerRegistry.js';
+import { getCollectorForRetailer } from './RetailerCollectors.js';
+import { ProcessingPipeline } from './ProcessingPipeline.js';
+import { BatchProcessingResult, CollectorStatus } from './types.js';
+import { getPool } from '../db/index.js';
 
 export interface SchedulerStatus {
   isRunning: boolean;

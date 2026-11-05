@@ -11,7 +11,7 @@ import {
   ProductMatchCandidate,
   UserErrorReport,
   MatchAuditEntry
-} from '../types';
+} from '../types.js';
 import {
   PromotionRecord,
   ReceiptDiscoveryItem,
@@ -22,7 +22,7 @@ import {
   DailyQualityReportRecord,
   PriceFreshnessThresholds,
   PriceQualityWeights
-} from '../indexing/types';
+} from '../indexing/types.js';
 import {
   CatalogSource,
   CatalogDocument,
@@ -42,7 +42,7 @@ import {
   DATA_SOURCES,
   INITIAL_SYNC_RUNS,
   INITIAL_MATCH_CANDIDATES
-} from '../data/mockData';
+} from '../data/mockData.js';
 
 const KEYS = {
   SHOPPING_LISTS: 'cosul_meu_lists_v1',

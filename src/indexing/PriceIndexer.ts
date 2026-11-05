@@ -1,10 +1,10 @@
 // src/indexing/PriceIndexer.ts
 // Modul pentru indexarea prețurilor, detecția anomaliilor și persistența append-only
 
-import { ProductOffer, PriceObservation } from '../types';
-import { RetailerProductRecord } from './types';
-import { StorageService } from '../services/StorageService';
-import { getPool } from '../db/index';
+import { ProductOffer, PriceObservation } from '../types.js';
+import { RetailerProductRecord } from './types.js';
+import { StorageService } from '../services/StorageService.js';
+import { getPool } from '../db/index.js';
 
 export interface PriceIndexingResult {
   acceptedOffersCount: number;
