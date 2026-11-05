@@ -20,6 +20,8 @@ import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
+import { createHash } from 'node:crypto';
+import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 
 
 dotenv.config();
@@ -272,8 +274,55 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
   next();
 };
 
-// Admin Token Verification Endpoint
-app.post('/api/admin/verify-token', requireAdminAuth, (req, res) => {
+  // User authentication API. Passwords and administrator keys are stored only as hashes.
+  app.post('/api/auth/register', async (req, res) => {
+    try {
+      const { email, password, displayName } = req.body ?? {};
+      if (typeof email !== 'string' || !/^\S+@\S+\.\S+$/.test(email) || typeof password !== 'string' || password.length < 12) {
+        return res.status(400).json({ error: 'Email invalid sau parola trebuie să aibă cel puțin 12 caractere.' });
+      }
+      const pool = getPool();
+      const result = await pool.query(
+        'INSERT INTO app_users (email, display_name, password_hash) VALUES ($1, $2, $3) RETURNING id, email, display_name, role',
+        [email.trim().toLowerCase(), typeof displayName === 'string' && displayName.trim() ? displayName.trim() : email.split('@')[0], hashSecret(password)]
+      );
+      const token = createSessionToken();
+      await pool.query('INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + ($3 * interval \'1 second\'))', [createHash('sha256').update(token).digest('hex'), result.rows[0].id, SESSION_TTL_SECONDS]);
+      return res.status(201).setHeader('Set-Cookie', sessionCookie(token)).json({ user: result.rows[0] });
+    } catch (error: any) {
+      if (error?.code === '23505') return res.status(409).json({ error: 'Există deja un cont cu această adresă.' });
+      console.error('[auth] register failed', error);
+      return res.status(500).json({ error: 'Înregistrarea nu a putut fi finalizată.' });
+    }
+  });
+
+  app.post('/api/auth/login', async (req, res) => {
+    try {
+      const { email, password } = req.body ?? {};
+      const pool = getPool();
+      const result = await pool.query('SELECT id, email, display_name, role, password_hash FROM app_users WHERE email = $1 AND is_active = true', [String(email ?? '').trim().toLowerCase()]);
+      const user = result.rows[0];
+      if (!user || typeof password !== 'string' || !verifySecret(password, user.password_hash)) return res.status(401).json({ error: 'Email sau parolă invalidă.' });
+      const token = createSessionToken();
+      await pool.query('INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + ($3 * interval \'1 second\'))', [createHash('sha256').update(token).digest('hex'), user.id, SESSION_TTL_SECONDS]);
+      const { password_hash: _passwordHash, ...safeUser } = user;
+      return res.setHeader('Set-Cookie', sessionCookie(token)).json({ user: safeUser });
+    } catch (error) {
+      console.error('[auth] login failed', error);
+      return res.status(500).json({ error: 'Autentificarea nu a putut fi finalizată.' });
+    }
+  });
+
+  app.get('/api/auth/me', async (req, res) => {
+    const token = parseSessionCookie(req.headers.cookie);
+    if (!token) return res.status(401).json({ error: 'Sesiune lipsă.' });
+    const result = await getPool().query('SELECT u.id, u.email, u.display_name, u.role FROM app_sessions s JOIN app_users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now() AND u.is_active = true', [createHash('sha256').update(token).digest('hex')]);
+    if (!result.rows[0]) return res.status(401).json({ error: 'Sesiune invalidă.' });
+    return res.json({ user: result.rows[0] });
+  });
+
+  // Admin Token Verification Endpoint
+  app.post('/api/admin/verify-token', requireAdminAuth, (req, res) => {
   res.json({
     success: true,
     message: 'Token administrativ validat cu succes.',
