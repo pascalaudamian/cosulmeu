@@ -282,6 +282,7 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
         return res.status(400).json({ error: 'Email invalid sau parola trebuie să aibă cel puțin 12 caractere.' });
       }
       const pool = getPool();
+      if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
       const result = await pool.query(
         'INSERT INTO app_users (email, display_name, password_hash) VALUES ($1, $2, $3) RETURNING id, email, display_name, role',
         [email.trim().toLowerCase(), typeof displayName === 'string' && displayName.trim() ? displayName.trim() : email.split('@')[0], hashSecret(password)]
@@ -300,6 +301,7 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
     try {
       const { email, password } = req.body ?? {};
       const pool = getPool();
+      if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
       const result = await pool.query('SELECT id, email, display_name, role, password_hash FROM app_users WHERE email = $1 AND is_active = true', [String(email ?? '').trim().toLowerCase()]);
       const user = result.rows[0];
       if (!user || typeof password !== 'string' || !verifySecret(password, user.password_hash)) return res.status(401).json({ error: 'Email sau parolă invalidă.' });
@@ -316,7 +318,9 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
   app.get('/api/auth/me', async (req, res) => {
     const token = parseSessionCookie(req.headers.cookie);
     if (!token) return res.status(401).json({ error: 'Sesiune lipsă.' });
-    const result = await getPool().query('SELECT u.id, u.email, u.display_name, u.role FROM app_sessions s JOIN app_users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now() AND u.is_active = true', [createHash('sha256').update(token).digest('hex')]);
+    const pool = getPool();
+    if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
+    const result = await pool.query('SELECT u.id, u.email, u.display_name, u.role FROM app_sessions s JOIN app_users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now() AND u.is_active = true', [createHash('sha256').update(token).digest('hex')]);
     if (!result.rows[0]) return res.status(401).json({ error: 'Sesiune invalidă.' });
     return res.json({ user: result.rows[0] });
   });

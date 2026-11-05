@@ -2,7 +2,7 @@
 // Motor unificat de parsare a cataloagelor (HTML, PDF, CSV, XML)
 
 import * as cheerio from 'cheerio';
-import { CatalogFormat } from './catalogTypes';
+import { CatalogFormat } from './catalogTypes.js';
 
 export interface RawParsedOffer {
   rawTitle: string;
@@ -54,13 +54,6 @@ export class CatalogParserEngine {
     try {
       if (format === 'html') {
         const htmlText = typeof content === 'string' ? content : content.toString('utf-8');
-        if (retailerId === 'carrefour') {
-          return this.parseCarrefourCatalog(htmlText);
-        } else if (retailerId === 'penny') {
-          return this.parsePennyCatalog(htmlText);
-        } else if (retailerId === 'mega-image') {
-          return this.parseMegaImageCatalog(htmlText);
-        }
         return this.parseHtmlCatalog(htmlText, retailerId);
       } else if (format === 'pdf') {
         const buffer = typeof content === 'string' ? Buffer.from(content) : content;

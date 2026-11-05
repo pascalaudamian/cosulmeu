@@ -7,15 +7,15 @@ import {
   CatalogImportRun,
   CatalogImportError,
   CatalogSource
-} from './catalogTypes';
-import { CatalogDownloader } from './CatalogDownloader';
-import { CatalogParserEngine, RawParsedOffer } from './CatalogParserEngine';
-import { ProductMatcher } from '../../services/ProductMatcher';
-import { StorageService } from '../../services/StorageService';
-import { DatabaseService, isPostgresConfigured, getPool } from '../../db/index';
-import { Product, ProductOffer, PriceObservation, UnitType } from '../../types';
-import { PriceQualityMonitor } from '../PriceQualityMonitor';
-import { mapRetailerCategoryToStandard } from '../../data/categories';
+} from './catalogTypes.js';
+import { CatalogDownloader } from './CatalogDownloader.js';
+import { CatalogParserEngine, RawParsedOffer } from './CatalogParserEngine.js';
+import { ProductMatcher } from '../../services/ProductMatcher.js';
+import { StorageService } from '../../services/StorageService.js';
+import { DatabaseService, isPostgresConfigured, getPool } from '../../db/index.js';
+import { Product, ProductOffer, PriceObservation, UnitType } from '../../types.js';
+import { PriceQualityMonitor } from '../PriceQualityMonitor.js';
+import { mapRetailerCategoryToStandard } from '../../data/categories.js';
 
 export class CatalogStagingManager {
   /**
