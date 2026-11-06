@@ -102,6 +102,7 @@ export class CatalogParserEngine {
   static parseHtmlCatalog(html: string, retailerId?: string): ParseResult {
     const $ = cheerio.load(html);
     const offers: RawParsedOffer[] = [];
+    const products: RawCatalogProduct[] = [];
     const warnings: string[] = [];
 
     // 1. Verificare JSON-LD structurat
@@ -305,7 +306,6 @@ export class CatalogParserEngine {
       });
     }
 
-    const products: RawCatalogProduct[] = [];
     if (offers.length === 0) {
       const seenProducts = new Set<string>();
       $('[data-grid-data], [class*="product"], [class*="offer"], [class*="card"], article').each((_, el) => {
@@ -331,6 +331,22 @@ export class CatalogParserEngine {
           confidenceScore: rawAttr ? 0.8 : 0.55
         });
       });
+
+      if (products.length === 0) {
+        const seenTitles = new Set<string>();
+        $('script:not([type="application/ld+json"])').each((_, script) => {
+          const source = $(script).html() || '';
+          const titlePattern = /(?:fullTitle|productName|productTitle|name)\\s*["']?\\s*[:=]\\s*["']([^"']{3,160})["']/gi;
+          let match: RegExpExecArray | null;
+          while ((match = titlePattern.exec(source))) {
+            const title = match[1].replace(/\\\\u0026/g, '&').trim();
+            const key = title.toLowerCase();
+            if (seenTitles.has(key) || /^(product|item|offer|category|brand)$/i.test(title)) continue;
+            seenTitles.add(key);
+            products.push({ rawTitle: title, confidenceScore: 0.45 });
+          }
+        });
+      }
     }
 
     return {
@@ -386,6 +402,7 @@ export class CatalogParserEngine {
 
       const lines = text.split('\n').map((l: string) => l.trim()).filter((l: string) => l.length > 0);
       const offers: RawParsedOffer[] = [];
+      const products: RawCatalogProduct[] = [];
       const seenTitles = new Set<string>();
 
       // Euristică 1: Linii cu preț explicit și monedă ("4,99 lei", "12.50 RON")
@@ -481,6 +498,21 @@ export class CatalogParserEngine {
           }
         }
 
+        if (!foundPrice) {
+          const productKey = line.toLowerCase();
+          if (!seenTitles.has(productKey)) {
+            seenTitles.add(productKey);
+            const packageMatch = line.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
+            products.push({
+              rawTitle: line,
+              rawBrand: i > 0 && lines[i - 1].length <= 30 ? lines[i - 1] : undefined,
+              packageQuantity: packageMatch ? parseFloat(packageMatch[1].replace(',', '.')) : undefined,
+              packageUnit: packageMatch?.[2]?.toLowerCase(),
+              confidenceScore: Math.round(ocrConfidence * 0.6) / 100
+            });
+          }
+        }
+
         if (foundPrice) {
           let pkgQty: number | undefined = undefined;
           let pkgUnit: string | undefined = undefined;
@@ -539,7 +571,8 @@ export class CatalogParserEngine {
       return {
         success: offers.length > 0,
         offers,
-        totalExtracted: offers.length,
+        products,
+        totalExtracted: offers.length || products.length,
         format: 'pdf',
         ocrConfidence
       };
