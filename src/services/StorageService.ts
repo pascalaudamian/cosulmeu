@@ -870,8 +870,15 @@ export class StorageService {
       const storedSources = JSON.parse(data) as CatalogSource[];
       const storedById = new Map(storedSources.map(source => [source.id, source]));
 
-      // Keep user changes, but backfill newly registered retailers and their catalog URLs.
-      return INITIAL_CATALOG_SOURCES.map(source => storedById.get(source.id) || source);
+      // Keep user changes, but backfill newly registered retailers and sync updated official URLs.
+      return INITIAL_CATALOG_SOURCES.map(source => {
+        const stored = storedById.get(source.id);
+        if (!stored) return source;
+        if (stored.catalogUrl !== source.catalogUrl) {
+          return { ...stored, ...source };
+        }
+        return stored;
+      });
     } catch {
       return INITIAL_CATALOG_SOURCES;
     }
