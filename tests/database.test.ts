@@ -41,9 +41,6 @@ async function runDatabaseTests() {
   delete process.env.DATABASE_URL;
   delete process.env.SUPABASE_DB_URL;
   delete process.env.PGHOST;
-  delete process.env.POSTGRES_URL;
-  delete process.env.POSTGRES_URL_NON_POOLING;
-  delete process.env.POSTGRES_PRISMA_URL;
 
   const emptyConfig = getDbConfig();
   assert(emptyConfig.configured === false && emptyConfig.type === 'none', 'În absența variabilelor DB, configurația este marcată ca none/neconfigurat');
@@ -150,7 +147,7 @@ async function runDatabaseTests() {
   const statusRes = await makeRequest('GET', '/api/storage/status');
   assert(statusRes.status === 200, `/api/storage/status returnează 200 OK (obținut: ${statusRes.status})`);
   assert(statusRes.body.success === true, 'Răspunsul conține success: true');
-  assert(['demo_memory', 'postgresql'].includes(statusRes.body.persistenceMode), `persistenceMode este raportat corect ca ${statusRes.body.persistenceMode}`);
+  assert(statusRes.body.persistenceMode === 'demo_memory', `În mediul demo, persistenceMode este raportat corect ca demo_memory (obținut: ${statusRes.body.persistenceMode})`);
 
   // Testare /api/catalog/products
   const catalogRes = await makeRequest('GET', '/api/catalog/products');
@@ -179,8 +176,8 @@ async function runDatabaseTests() {
 
   assert(serverImportRes.status === 200, `POST /api/admin/sources/:id/import autorizat returnează 200 OK (obținut: ${serverImportRes.status})`);
   assert(serverImportRes.body.success === true, 'Importul pe server a fost executat cu succes');
-  assert(typeof serverImportRes.body.persisted === 'boolean', 'Răspunsul specifică transparent starea de persistență');
-  assert(['demo_memory', 'postgresql'].includes(serverImportRes.body.persistenceMode), `persistenceMode este raportat transparent ca ${serverImportRes.body.persistenceMode}`);
+  assert(serverImportRes.body.persisted === false, 'În absența PostgreSQL, răspunsul specifică transparent persisted: false');
+  assert(serverImportRes.body.persistenceMode === 'demo_memory', 'persistenceMode este raportat transparent ca demo_memory');
 
   console.log(`\n🎉 Toate testele pentru Stratul de Persistență au rulat: ${passed} trecute, ${failed} eșuate.`);
 

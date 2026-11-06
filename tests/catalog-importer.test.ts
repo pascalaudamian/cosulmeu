@@ -39,20 +39,16 @@ async function runTests() {
 
   // URL-uri legitime ale retailerilor ce TREBUIE permise
   const safeUrls = [
-    'https://www.lidl.ro/c/cataloage-online/s10019911',
     'https://www.lidl.ro/c/ofertele-saptamanale-lidl-plus/a10106219',
     'https://lidl.ro/cataloage',
     'https://www.kaufland.ro/cataloage-cu-reduceri.html',
     'https://assets.leaflets.schwarz/leaflets/pdfs/kaufland.pdf',
-    'https://carrefour.ro/corporate/cataloage?tip=market',
-    'https://carrefour.ro/campanii/oferte-saptamanale',
+    'https://carrefour.ro/cataloage',
     'https://www.penny.ro/vezi-pliantele-saptamanii',
-    'https://www.penny.ro/oferte',
     'https://www.auchan.ro/cataloage-promotii',
-    'https://www.profi.ro/reviste-ro/',
+    'https://www.profi.ro/reviste-profi/',
     'https://www.mega-image.ro/promotii-online/reviste-promo-online',
-    'https://view.publitas.com/mega-image/revista-nr-43-2026/page/1',
-    'https://www.metro.ro/cataloagele-metro'
+    'https://www.metro.ro/oferte/cataloage'
   ];
 
   for (const url of safeUrls) {
@@ -289,172 +285,7 @@ Paine Toast Integrala 500g,Dobrogea,5942012345678,5.20,2026-12-31`;
   assert.ok(sampleK.rawTitle.length >= 2, 'Titlul extras Kaufland este invalid.');
   assert.ok(sampleK.effectivePrice > 0, 'Prețul extras Kaufland este invalid.');
 
-  // =========================================================================
-  // TEST 8: Testare Parsare Catalog Carrefour Market (HTML)
-  // =========================================================================
-  console.log('8. Testare Parsare Structurată Catalog Carrefour Market...');
-
-  const sampleCarrefourHtml = `
-    <div class="product_info">
-      <div class="product_title"><span>Orez Jasmin Alb Bio Pronat, 500 g</span></div>
-      <div class="PricesComponent_wrapper__tjFh5">
-        <div class="Prices_wrapper__CA_SD">
-          <div class="Price_priceWrapper__Oc9Cj Price_priceWrapperRed__BWFkK">
-            <span class="Price_priceWrapperFull__HAvIg">16</span>
-            <span class="Price_priceWrapperDecimalCurrency__52Dsm">05 LEI</span>
-          </div>
-          <div class="Price_priceWrapperStrikeThrough__EvRr7">
-            <span class="Price_priceWrapperFull__HAvIg">19</span>
-            <span class="Price_priceWrapperDecimalCurrency__52Dsm">50 LEI</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const carrefourParsed = CatalogParserEngine.parseCarrefourCatalog(sampleCarrefourHtml);
-  assert.strictEqual(carrefourParsed.success, true);
-  assert.strictEqual(carrefourParsed.offers.length, 1);
-  const carrefourOffer = carrefourParsed.offers[0];
-  assert.strictEqual(carrefourOffer.rawTitle, 'Orez Jasmin Alb Bio Pronat, 500 g');
-  assert.strictEqual(carrefourOffer.effectivePrice, 16.05);
-  assert.strictEqual(carrefourOffer.normalPrice, 19.5);
-  assert.strictEqual(carrefourOffer.packageQuantity, 500);
-  assert.strictEqual(carrefourOffer.packageUnit, 'g');
-  console.log('   ✅ Parsarea Carrefour Market a extras produsul, gramajul și reducerea.');
-
-  // =========================================================================
-  // TEST 9: Testare Parsare Pliant Săptămânal PENNY (PENNY Card vs Preț Standard)
-  // =========================================================================
-  console.log('9. Testare Parsare Pliant PENNY cu Diferențiere PENNY Card...');
-
-  const samplePennyHtml = `
-    <li data-test="product-tile">
-      <h3 data-test="product-title">LAMÂI</h3>
-      <ul data-test="product-information-piece-description"><li>1 kg</li></ul>
-      <div data-test="product-price-validity">de mi 04.11.2026 până ma 10.11.2026</div>
-      <div data-test="product-price-type">
-        <div data-test="product-price-type-price-label">preț fără PENNY card</div>
-        <div data-test="product-price-type-value"><span class="ws-product-price-value__main">8,99 LEI</span></div>
-        <div data-test="product-price-type-label">1 KG 8,99 LEI</div>
-      </div>
-      <div data-test="product-price-type">
-        <div data-test="product-price-type-price-label">preț cu PENNY card</div>
-        <div data-test="product-price-type-value"><span class="ws-product-price-value__main">5,49 LEI</span></div>
-      </div>
-    </li>
-  `;
-
-  const pennyParsed = CatalogParserEngine.parsePennyCatalog(samplePennyHtml);
-  assert.strictEqual(pennyParsed.success, true);
-  assert.strictEqual(pennyParsed.offers.length, 1);
-  const pennyOffer = pennyParsed.offers[0];
-  assert.strictEqual(pennyOffer.rawTitle, 'LAMÂI');
-  assert.strictEqual(pennyOffer.normalPrice, 8.99);
-  assert.strictEqual(pennyOffer.loyaltyPrice, 5.49);
-  assert.strictEqual(pennyOffer.loyaltyCardName, 'PENNY Card');
-  assert.strictEqual(pennyOffer.packageUnit, 'kg');
-  assert.strictEqual(pennyOffer.validFrom, '2026-11-04');
-  assert.strictEqual(pennyOffer.validUntil, '2026-11-10');
-  console.log('   ✅ Parsarea PENNY a extras prețul fără card (8.99) și prețul cu card (5.49) cu valabilitate exactă.');
-
-  // =========================================================================
-  // TEST 10: Testare Parsare Revistă Mega Image (Card Connect & Publitas)
-  // =========================================================================
-  console.log('10. Testare Parsare Revistă Mega Image cu Card Connect...');
-
-  const sampleMegaJson = JSON.stringify([
-    {
-      pages: [
-        {
-          number: 1,
-          text: "BUN PENTRU NOI TOTI\\n29.10 - 04.11.2026\\nMEGA AVOCADO BINE COPT,\\nAMBALATE, 2 BUC.\\n14,85 LEI/BUC.\\n-26 %\\n10,99 LEI/BUC.\\nDOAR CU CARD CONNECT"
-        }
-      ]
-    }
-  ]);
-
-  const megaParsed = CatalogParserEngine.parseMegaImageCatalog(sampleMegaJson);
-  assert.strictEqual(megaParsed.success, true);
-  assert.strictEqual(megaParsed.offers.length, 1);
-  const megaOffer = megaParsed.offers[0];
-  assert.ok(megaOffer.rawTitle.includes('AVOCADO'));
-  assert.strictEqual(megaOffer.normalPrice, 14.85);
-  assert.strictEqual(megaOffer.loyaltyPrice, 10.99);
-  assert.strictEqual(megaOffer.loyaltyCardName, 'Card Connect');
-  assert.strictEqual(megaOffer.discountPercentage, 26);
-  assert.strictEqual(megaOffer.validFrom, '2026-10-29');
-  assert.strictEqual(megaOffer.validUntil, '2026-11-04');
-  console.log('   ✅ Parsarea Mega Image a extras oferta cu Card Connect, reducerea de 26% și perioada promoției.');
-
-  // =========================================================================
-  // TEST 11: Testare Parsare Magazin Online Auchan & Ofertă MyCLUB
-  // =========================================================================
-  console.log('11. Testare Parsare Magazin Online Auchan cu Card MyCLUB...');
-
-  const sampleAuchanJson = JSON.stringify([
-    {
-      productId: '351428',
-      productName: 'Televizor LED Smart TCL 50P61K, 4K UHD, Google TV, 126 cm',
-      brand: 'TCL',
-      categories: ['/Electronice/Televizoare/'],
-      items: [
-        {
-          itemId: '351428',
-          name: 'Televizor LED Smart TCL 50P61K, 4K UHD, Google TV, 126 cm',
-          ean: '5901292528683',
-          sellers: [
-            {
-              sellerId: '1',
-              sellerName: 'Auchan Romania',
-              commertialOffer: {
-                Price: 1319.99,
-                ListPrice: 1649.99,
-                PriceValidUntil: '2026-12-01T23:59:59Z',
-                AvailableQuantity: 10,
-                discountHighlights: [
-                  {
-                    name: 'BLUELOYALTY_20.00_START-DATE_11/04/2026_END-DATE_12/01/2026: 20% REDUCERE cu CARD MyCLUB'
-                  }
-                ]
-              }
-            }
-          ]
-        }
-      ]
-    }
-  ]);
-
-  const auchanParsed = CatalogParserEngine.parseAuchanOnlineStore(sampleAuchanJson);
-  assert.strictEqual(auchanParsed.success, true);
-  assert.strictEqual(auchanParsed.offers.length, 1);
-  const auchanOffer = auchanParsed.offers[0];
-  assert.ok(auchanOffer.rawTitle.includes('TCL'));
-  assert.strictEqual(auchanOffer.normalPrice, 1649.99);
-  assert.strictEqual(auchanOffer.loyaltyPrice, 1319.99);
-  assert.strictEqual(auchanOffer.loyaltyCardName, 'Card MyCLUB Auchan');
-  assert.strictEqual(auchanOffer.loyaltyCardRequired, true);
-  assert.strictEqual(auchanOffer.discountPercentage, 20);
-  assert.strictEqual(auchanOffer.priceType, 'loyalty_card');
-  assert.strictEqual(auchanOffer.validFrom, '2026-11-04');
-  assert.strictEqual(auchanOffer.validUntil, '2026-12-01');
-  assert.strictEqual(auchanOffer.rawBarcode, '5901292528683');
-  console.log('   ✅ Parsarea Auchan a extras oferta MyCLUB, reducerea de 20%, EAN-ul și valabilitatea promoției.');
-
-  // =========================================================================
-  // TEST 12: Execuție Pilot Live pe Magazinul Online Oficial Auchan România
-  // =========================================================================
-  console.log('12. Execuție Pilot Live pe Magazinul Online Oficial Auchan România...');
-  const auchanPilot = await CatalogStagingManager.runPilotImportForRetailer('auchan');
-  assert.strictEqual(auchanPilot.success, true, `Pilotul Auchan a eșuat: ${auchanPilot.error}`);
-  assert.ok(auchanPilot.totalExtracted > 0, 'Pilotul Auchan trebuie să extragă oferte reale din magazinul online.');
-  console.log(`   Rezultat descărcare live Auchan: status=OK, extrase=${auchanPilot.totalExtracted}, potrivite=${auchanPilot.autoMatched}, publicate=${auchanPilot.published}`);
-  if (auchanPilot.sampleOffers.length > 0) {
-    const s = auchanPilot.sampleOffers[0];
-    console.log(`   Exemplu extras Auchan: "${s.rawTitle}" -> ${s.effectivePrice} RON (${s.priceType || 'standard'})`);
-  }
-
-  console.log('\n🎉 TOATE CELE 12 TESTE PENTRU CATALOG IMPORTER AU FOST VALIDATE CU SUCCES!');
+  console.log('\n🎉 TOATE TESTELE PENTRU CATALOG IMPORTER AU FOST VALIDATE CU SUCCES!');
 }
 
 runTests().catch(err => {

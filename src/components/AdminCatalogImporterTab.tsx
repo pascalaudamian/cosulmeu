@@ -78,14 +78,14 @@ interface TimelineStep {
 }
 
 const ALL_8_RETAILERS = [
-  { id: 'lidl', name: 'Lidl România', format: 'HTML & PDF', defaultStatus: 'ACTIVE', color: 'blue' },
+  { id: 'lidl', name: 'Lidl România', format: 'HTML', defaultStatus: 'ACTIVE', color: 'blue' },
   { id: 'kaufland', name: 'Kaufland România', format: 'PDF', defaultStatus: 'ACTIVE', color: 'red' },
-  { id: 'carrefour', name: 'Carrefour România', format: 'HTML', defaultStatus: 'ACTIVE', color: 'sky' },
-  { id: 'penny', name: 'Penny România', format: 'HTML', defaultStatus: 'ACTIVE', color: 'amber' },
-  { id: 'auchan', name: 'Auchan România', format: 'Magazin Online & VTEX', defaultStatus: 'ACTIVE', color: 'rose' },
-  { id: 'profi', name: 'Profi Rom Food', format: 'PDF / WAF', defaultStatus: 'BLOCKED', color: 'emerald' },
-  { id: 'mega-image', name: 'Mega Image', format: 'Publitas / HTML', defaultStatus: 'ACTIVE', color: 'red' },
-  { id: 'metro', name: 'Metro Cash & Carry', format: 'PDF / B2B', defaultStatus: 'BLOCKED', color: 'yellow' }
+  { id: 'carrefour', name: 'Carrefour România', format: 'HTML / SPA', defaultStatus: 'WAITING_FOR_AUTHORIZATION', color: 'sky' },
+  { id: 'penny', name: 'Penny România', format: 'HTML / Viewer', defaultStatus: 'WAITING_FOR_AUTHORIZATION', color: 'amber' },
+  { id: 'auchan', name: 'Auchan România', format: 'HTML / VTEX', defaultStatus: 'WAITING_FOR_AUTHORIZATION', color: 'rose' },
+  { id: 'profi', name: 'Profi Rom Food', format: 'PDF', defaultStatus: 'BLOCKED', color: 'emerald' },
+  { id: 'mega-image', name: 'Mega Image', format: 'HTML / Publitas', defaultStatus: 'WAITING_FOR_AUTHORIZATION', color: 'red' },
+  { id: 'metro', name: 'Metro Cash & Carry', format: 'PDF', defaultStatus: 'BLOCKED', color: 'yellow' }
 ];
 
 export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = ({ adminToken }) => {

@@ -16,7 +16,7 @@ export interface DownloadResult {
 }
 
 export class CatalogDownloader {
-  public static readonly MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
+  public static readonly MAX_FILE_SIZE_BYTES = 64 * 1024 * 1024; // 64 MB; Kaufland PDF catalogs can exceed 30 MB
   public static readonly DEFAULT_TIMEOUT_MS = 20000; // 20 secunde
 
   /**
@@ -28,8 +28,6 @@ export class CatalogDownloader {
     'carrefour.ro',
     'penny.ro',
     'auchan.ro',
-    'auchan.vtexassets.com',
-    'vtexassets.com',
     'profi.ro',
     'mega-image.ro',
     'metro.ro',

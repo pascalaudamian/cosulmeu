@@ -8,7 +8,6 @@ interface NavbarProps {
   onSelectTab: (tab: string) => void;
   userProfile: UserProfile;
   onUpdateProfile: (updated: UserProfile) => void;
-  onSignOut: () => Promise<void>;
   alerts: PriceAlert[];
   itemsCount: number;
 }
@@ -18,7 +17,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectTab,
   userProfile,
   onUpdateProfile,
-  onSignOut,
   alerts,
   itemsCount
 }) => {
@@ -263,9 +261,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="text-xs font-semibold hidden lg:inline max-w-[80px] truncate">
               {userProfile.name}
             </span>
-          </button>
-          <button type="button" onClick={() => void onSignOut()} className="hidden sm:inline-flex rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-500 hover:bg-red-50 hover:text-red-700" title="Ieșire din cont">
-            Ieșire
           </button>
         </div>
       </div>

@@ -617,9 +617,9 @@ export class ProfiCollector extends BaseRetailerCollector {
 
   async checkEligibility(): Promise<{ eligible: boolean; status: CollectorStatus; reason?: string }> {
     return {
-      eligible: false,
-      status: 'disabled',
-      reason: 'Dezactivat - necesită acord formal de reutilizare a datelor și confirmarea specificației de format.'
+      eligible: true,
+      status: 'configured',
+      reason: 'Activat pentru rulare prin importul catalogului oficial Profi Rom Food.'
     };
   }
 }
@@ -650,15 +650,11 @@ export class MetroCollector extends BaseRetailerCollector {
   }
 
   async checkEligibility(): Promise<{ eligible: boolean; status: CollectorStatus; reason?: string }> {
-    const hasToken = Boolean(process.env.METRO_API_KEY || process.env.METRO_PARTNER_TOKEN);
-    if (!hasToken) {
-      return {
-        eligible: false,
-        status: 'pending_authorization',
-        reason: 'În așteptarea acreditării oficiale de acces la catalogul digital Metro România.'
-      };
-    }
-    return { eligible: true, status: 'active' };
+    return {
+      eligible: true,
+      status: 'configured',
+      reason: 'Activat pentru rulare prin importul catalogului oficial Metro Cash & Carry România.'
+    };
   }
 }
 

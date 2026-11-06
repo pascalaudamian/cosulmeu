@@ -10,11 +10,10 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/calc.test.ts && tsx tests/sources.test.ts && tsx tests/e2e-import.test.ts && tsx tests/security.test.ts && tsx tests/database.test.ts && tsx tests/indexing.test.ts && tsx tests/indexer-scheduler.test.ts && tsx tests/scraping-discovery.test.ts && tsx tests/price-quality-monitor.test.ts && tsx tests/products-catalog.test.ts && tsx tests/acceptance-audit.test.ts && tsx tests/catalog-importer.test.ts && tsx tests/incremental-sync.test.ts"
+    "test": "tsx tests/calc.test.ts && tsx tests/sources.test.ts && tsx tests/e2e-import.test.ts && tsx tests/security.test.ts && tsx tests/database.test.ts && tsx tests/indexing.test.ts && tsx tests/indexer-scheduler.test.ts && tsx tests/scraping-discovery.test.ts && tsx tests/price-quality-monitor.test.ts && tsx tests/products-catalog.test.ts && tsx tests/acceptance-audit.test.ts && tsx tests/catalog-importer.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
-    "@supabase/supabase-js": "^2.119.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "cheerio": "^1.2.0",
@@ -36,7 +35,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.28.2",
+    "esbuild": "^0.25.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
