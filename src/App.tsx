@@ -17,8 +17,12 @@ import { ProductDetailView } from './components/ProductDetailView.js';
 import { StorageService } from './services/StorageService.js';
 import { ShoppingList, Receipt, UserProfile, PriceAlert } from './types.js';
 import { ShieldCheck, Heart } from 'lucide-react';
+import { useAuth } from './auth/AuthProvider.js';
+import { AuthScreen } from './components/AuthScreen.js';
+import { supabase } from './lib/supabase.js';
 
 export default function App() {
+  const { user, loading, signOut } = useAuth();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [productFilterCategory, setProductFilterCategory] = useState<string>('toate');
@@ -41,6 +45,54 @@ export default function App() {
   const [trackedProductIds, setTrackedProductIds] = useState<string[]>(() =>
     StorageService.getTrackedProducts()
   );
+
+  useEffect(() => {
+    if (!user) return;
+    const userId = user.id;
+    const userEmail = user.email;
+    supabase.from('profiles').select('first_name,last_name,display_name,city,preferences').eq('id', userId).maybeSingle().then(({ data }) => {
+      if (!data) return;
+      const preferences = (data.preferences || {}) as Record<string, unknown>;
+      setUserProfile(prev => ({
+        ...prev,
+        name: data.display_name || [data.first_name, data.last_name].filter(Boolean).join(' ') || prev.name,
+        email: userEmail || prev.email,
+        city: data.city || prev.city,
+        monthlySavingsGoal: typeof preferences.monthlySavingsGoal === 'number' ? preferences.monthlySavingsGoal : prev.monthlySavingsGoal,
+        notificationsEnabled: typeof preferences.notificationsEnabled === 'boolean' ? preferences.notificationsEnabled : prev.notificationsEnabled,
+      }));
+    });
+  }, [user]);
+
+  const handleProfileUpdate = (profile: UserProfile) => {
+    if (!user) return;
+    setUserProfile(profile);
+    void supabase.from('profiles').upsert({
+      id: user.id,
+      display_name: profile.name,
+      city: profile.city,
+      preferences: {
+        monthlySavingsGoal: profile.monthlySavingsGoal,
+        notificationsEnabled: profile.notificationsEnabled,
+        preferredStores: profile.preferredStores,
+        defaultTransportCostEstimate: profile.defaultTransportCostEstimate,
+        useLoyaltyCards: profile.useLoyaltyCards,
+      },
+      updated_at: new Date().toISOString(),
+    });
+    void supabase.from('user_preferences').upsert({
+      user_id: user.id,
+      notifications_enabled: profile.notificationsEnabled,
+      price_alerts_enabled: profile.notificationsEnabled,
+      updated_at: new Date().toISOString(),
+    });
+  };
+
+  if (loading) {
+    return <div className="min-h-screen grid place-items-center bg-slate-50 text-sm font-bold text-slate-500">Se verifică sesiunea…</div>;
+  }
+
+  if (!user) return <AuthScreen />;
 
   // Sync active list
   const activeList =
@@ -68,11 +120,15 @@ export default function App() {
       setSelectedProductId(productParam);
       setCurrentTab('product-detail');
     } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile'].includes(tabParam)) {
-      setCurrentTab(tabParam);
+      setCurrentTab(tabParam === 'admin-sources' && !user?.user_metadata?.is_admin ? 'profile' : tabParam);
     }
-  }, []);
+  }, [user]);
 
   const handleSelectTab = (tab: string) => {
+    if (tab === 'admin-sources' && !user?.user_metadata?.is_admin) {
+      setCurrentTab('profile');
+      return;
+    }
     setCurrentTab(tab);
     if (tab !== 'product-detail') {
       setSelectedProductId(null);
@@ -181,7 +237,8 @@ export default function App() {
         currentTab={currentTab}
         onSelectTab={handleSelectTab}
         userProfile={userProfile}
-        onUpdateProfile={setUserProfile}
+        onUpdateProfile={handleProfileUpdate}
+        onSignOut={signOut}
         alerts={priceAlerts}
         itemsCount={activeList.items.length}
       />
