@@ -102,7 +102,7 @@ export default function App() {
       setSelectedProductId(productParam);
       setCurrentTab('product-detail');
     } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile'].includes(tabParam)) {
-      setCurrentTab(tabParam === 'admin-sources' && !user?.user_metadata?.is_admin ? 'profile' : tabParam);
+      setCurrentTab(tabParam);
     }
   }, [user]);
 
@@ -110,7 +110,9 @@ export default function App() {
     return <div className="min-h-screen grid place-items-center bg-slate-50 text-sm font-bold text-slate-500">Se verifică sesiunea…</div>;
   }
 
-  if (!user) return <AuthScreen />;
+  if (!user) {
+    return currentTab === 'admin-sources' ? <AdminSourcesView /> : <AuthScreen />;
+  }
 
   // Sync active list
   const activeList =
@@ -124,10 +126,6 @@ export default function App() {
     };
 
   const handleSelectTab = (tab: string) => {
-    if (tab === 'admin-sources' && !user?.user_metadata?.is_admin) {
-      setCurrentTab('profile');
-      return;
-    }
     setCurrentTab(tab);
     if (tab !== 'product-detail') {
       setSelectedProductId(null);
