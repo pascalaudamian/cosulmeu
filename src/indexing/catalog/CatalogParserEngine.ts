@@ -102,6 +102,7 @@ export class CatalogParserEngine {
   static parseHtmlCatalog(html: string, retailerId?: string): ParseResult {
     const $ = cheerio.load(html);
     const offers: RawParsedOffer[] = [];
+    const products: RawCatalogProduct[] = [];
     const warnings: string[] = [];
 
     // 1. Verificare JSON-LD structurat
@@ -305,7 +306,6 @@ export class CatalogParserEngine {
       });
     }
 
-    const products: RawCatalogProduct[] = [];
     if (offers.length === 0) {
       const seenProducts = new Set<string>();
       $('[data-grid-data], [class*="product"], [class*="offer"], [class*="card"], article').each((_, el) => {
@@ -331,6 +331,22 @@ export class CatalogParserEngine {
           confidenceScore: rawAttr ? 0.8 : 0.55
         });
       });
+
+      if (products.length === 0) {
+        const seenTitles = new Set<string>();
+        $('script:not([type="application/ld+json"])').each((_, script) => {
+          const source = $(script).html() || '';
+          const titlePattern = /(?:fullTitle|productName|productTitle|name)\\s*["']?\\s*[:=]\\s*["']([^"']{3,160})["']/gi;
+          let match: RegExpExecArray | null;
+          while ((match = titlePattern.exec(source))) {
+            const title = match[1].replace(/\\\\u0026/g, '&').trim();
+            const key = title.toLowerCase();
+            if (seenTitles.has(key) || /^(product|item|offer|category|brand)$/i.test(title)) continue;
+            seenTitles.add(key);
+            products.push({ rawTitle: title, confidenceScore: 0.45 });
+          }
+        });
+      }
     }
 
     return {
