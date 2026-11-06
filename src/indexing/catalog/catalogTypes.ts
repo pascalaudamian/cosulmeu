@@ -75,6 +75,18 @@ export interface CatalogImportRun {
   rejectedCount: number;
   durationMs?: number;
   errors: string[];
+  newProductsCount?: number;
+  identifiedExistingCount?: number;
+  updatedProductsCount?: number;
+  unchangedProductsCount?: number;
+  newOffersCount?: number;
+  updatedOffersCount?: number;
+  expiredOffersCount?: number;
+  changedPricesCount?: number;
+  unchangedPricesCount?: number;
+  itemsWithoutPriceCount?: number;
+  itemsWithoutOfferCount?: number;
+  stagingCount?: number;
 }
 
 export interface CatalogExtractedOffer {

@@ -108,7 +108,7 @@ export const INITIAL_RETAILER_ENTRIES: RetailerRegistryEntry[] = [
     timeoutMs: 10000,
     maxRetries: 3,
     consecutiveFailures: 0,
-    suspensionReason: 'În așteptarea aprobării accesului la feed-ul oficial B2B / API autorizat.',
+    suspensionReason: 'În așteptarea acreditării oficiale de acces la API-ul național deschis.',
     offersCount: 6,
     autoMatchRate: 87,
     pendingCandidatesCount: 0,

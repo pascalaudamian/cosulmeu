@@ -432,58 +432,19 @@ export class CatalogStagingManager {
     // Persistență în PostgreSQL dacă este configurat și conectat
     if (isPostgresConfigured()) {
       try {
-        const pool = getPool();
-        if (pool) {
-          for (const off of newOffers) {
-            await pool.query(
-              `INSERT INTO product_offers (
-                id, product_id, store_id, source_id, price, original_price, normal_price,
-                promo_price, loyalty_price, unit_price, unit_price_measure, is_promo,
-                promo_details, loyalty_card_required, loyalty_card_name, valid_until,
-                observation_date, source, confidence_level, verification_status, last_checked
-              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW())
-              ON CONFLICT (product_id, store_id) DO UPDATE SET
-                price = EXCLUDED.price,
-                normal_price = EXCLUDED.normal_price,
-                promo_price = EXCLUDED.promo_price,
-                loyalty_price = EXCLUDED.loyalty_price,
-                unit_price = EXCLUDED.unit_price,
-                is_promo = EXCLUDED.is_promo,
-                promo_details = EXCLUDED.promo_details,
-                valid_until = EXCLUDED.valid_until,
-                observation_date = EXCLUDED.observation_date,
-                verification_status = 'verified',
-                last_checked = NOW()`,
-              [
-                off.id,
-                off.productId,
-                off.storeId,
-                off.sourceId,
-                off.price,
-                off.originalPrice || null,
-                off.normalPrice || null,
-                off.promoPrice || null,
-                off.loyaltyPrice || null,
-                off.unitPrice,
-                off.unitPriceMeasure,
-                off.isPromo,
-                off.promoDetails || null,
-                off.loyaltyCardRequired || false,
-                off.loyaltyCardName || null,
-                off.validUntil || null,
-                off.observationDate,
-                off.source,
-                off.confidenceLevel,
-                off.verificationStatus
-              ]
-            );
-          }
-          await DatabaseService.appendPriceObservations(newObservations);
-          await DatabaseService.saveCatalogExtractedOffers(toPublish.map(p => ({
-            ...p,
-            stagingStatus: 'PUBLISHED' as const,
-            updatedAt: new Date().toISOString()
-          })));
+        const retailerId = toPublish[0]?.retailerId || 'lidl';
+        const runId = toPublish[0]?.runId || `run-pub-${retailerId}-${Date.now()}`;
+        const syncRes = await DatabaseService.syncBatchIncremental({
+          runId,
+          documentId: toPublish[0]?.documentId,
+          sourceId: `src-${retailerId}-catalog`,
+          retailerId,
+          offers: toPublish,
+          autoPublish: true
+        });
+
+        if (!syncRes.success && syncRes.stats.errors.length > 0) {
+          errors.push(...syncRes.stats.errors);
         }
       } catch (pgErr: any) {
         errors.push(`Avertisment salvare PostgreSQL: ${pgErr.message}`);
@@ -552,26 +513,27 @@ export class CatalogStagingManager {
     }
 
     if (retailerId === 'lidl') {
-      const lidlDoc: CatalogDocument = {
-        id: `doc-lidl-live-${todayStr}`,
-        sourceId: source.id,
-        retailerId: 'lidl',
-        documentUrl: source.catalogUrl,
-        title: `Catalog Săptămânal Lidl Plus Live (${todayStr})`,
-        format: 'html',
-        validFrom: todayStr,
-        downloadStatus: 'pending',
-        parseStatus: 'pending',
-        rawExtractedCount: 0,
-        matchedCount: 0,
-        validatedCount: 0,
-        publishedCount: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+      const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery.js');
+      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
 
-      StorageService.addCatalogDocument(lidlDoc);
-      const result = await this.executeImportForDocument(lidlDoc, { autoPublishValidated: true });
+      // Prioritize the HTML weekly offers or first valid document
+      const targetDoc = docs.find(d => d.format === 'html' || d.documentUrl.includes('ofertele-saptamanale')) || docs[docs.length - 1] || docs[0];
+
+      if (!targetDoc) {
+        return {
+          success: false,
+          retailerId,
+          totalExtracted: 0,
+          autoMatched: 0,
+          needsReview: 0,
+          published: 0,
+          sampleOffers: [],
+          error: 'Nu au fost identificate cataloage disponibile pentru Lidl.'
+        };
+      }
+
+      StorageService.addCatalogDocument(targetDoc);
+      const result = await this.executeImportForDocument(targetDoc, { autoPublishValidated: true });
 
       if (!result.run || result.run.status === 'failed') {
         return {

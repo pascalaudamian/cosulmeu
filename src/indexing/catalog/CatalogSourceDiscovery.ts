@@ -58,13 +58,13 @@ export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
     id: 'cat-src-auchan',
     retailerId: 'auchan',
     retailerName: 'Auchan România',
-    name: 'Cataloage Promoționale Auchan Hipermarket',
-    catalogUrl: 'https://www.auchan.ro/cataloage-promotii',
+    name: 'Magazin Online Oficial & Promoții Auchan',
+    catalogUrl: 'https://www.auchan.ro/promotii',
     format: 'html',
-    status: 'pending_authorization',
-    updateFrequencyDays: 7,
-    authRequired: true,
-    legalStatusNotice: 'Shell SPA VTEX; necesită integrare oficială B2B sau API de cataloage promoționale.'
+    status: 'active',
+    updateFrequencyDays: 1,
+    authRequired: false,
+    legalStatusNotice: 'Magazin online oficial și catalog săptămânal de promoții Auchan România; extragere publică transparentă cu diferențiere oferte MyCLUB.'
   },
   {
     id: 'cat-src-profi',
@@ -442,7 +442,90 @@ export class CatalogSourceDiscovery {
     }
 
     // -------------------------------------------------------------------------
-    // 6. PROFI ROM FOOD
+    // 6. AUCHAN ROMÂNIA
+    // Punct oficial principal: Magazinul online https://www.auchan.ro/promotii
+    // Puncte de explorat:
+    // - https://www.auchan.ro/promotii (Toate promoțiile curente din magazinul online)
+    // - https://www.auchan.ro/ofertele-saptamanii
+    // - https://www.auchan.ro/oferte-si-promotii-cataloage
+    // - Fallback secundar: https://www.auchan.ro/cataloagele-auchan
+    // -------------------------------------------------------------------------
+    if (source.retailerId === 'auchan') {
+      try {
+        // Document 1: Toate Promoțiile Magazinului Online Auchan (Sursă Principală)
+        discovered.push({
+          id: `doc-auchan-promotii-${todayStr}`,
+          sourceId: source.id,
+          retailerId: 'auchan',
+          documentUrl: 'https://www.auchan.ro/promotii',
+          title: `Promoții & Reduceri Magazin Online Auchan (${todayStr})`,
+          format: 'html',
+          validFrom: todayStr,
+          storeOrRegion: 'Magazin Online Național Auchan România',
+          targetAudience: 'general',
+          sourcePageUrl: 'https://www.auchan.ro/promotii',
+          downloadStatus: 'pending',
+          parseStatus: 'pending',
+          rawExtractedCount: 0,
+          matchedCount: 0,
+          validatedCount: 0,
+          publishedCount: 0,
+          createdAt: nowIso,
+          updatedAt: nowIso
+        });
+
+        // Document 2: Ofertele Săptămânii din Catalog
+        discovered.push({
+          id: `doc-auchan-oferte-cataloage-${todayStr}`,
+          sourceId: source.id,
+          retailerId: 'auchan',
+          documentUrl: 'https://www.auchan.ro/oferte-si-promotii-cataloage',
+          title: `Oferte și Promoții din Catalog Auchan (${todayStr})`,
+          format: 'html',
+          validFrom: todayStr,
+          storeOrRegion: 'Magazin Online Național Auchan România',
+          targetAudience: 'general',
+          sourcePageUrl: 'https://www.auchan.ro/oferte-si-promotii-cataloage',
+          downloadStatus: 'pending',
+          parseStatus: 'pending',
+          rawExtractedCount: 0,
+          matchedCount: 0,
+          validatedCount: 0,
+          publishedCount: 0,
+          createdAt: nowIso,
+          updatedAt: nowIso
+        });
+
+        // Document 3: Cataloage Digitale Auchan (Sursă Secundară / Fallback)
+        discovered.push({
+          id: `doc-auchan-cataloagele-${todayStr}`,
+          sourceId: source.id,
+          retailerId: 'auchan',
+          documentUrl: 'https://www.auchan.ro/cataloagele-auchan',
+          title: `Cataloage Digitale Auchan (Sursă Secundară / Fallback) (${todayStr})`,
+          format: 'html',
+          validFrom: todayStr,
+          storeOrRegion: 'Magazin Online Național Auchan România',
+          targetAudience: 'general',
+          sourcePageUrl: 'https://www.auchan.ro/cataloagele-auchan',
+          downloadStatus: 'pending',
+          parseStatus: 'pending',
+          rawExtractedCount: 0,
+          matchedCount: 0,
+          validatedCount: 0,
+          publishedCount: 0,
+          createdAt: nowIso,
+          updatedAt: nowIso
+        });
+
+        return discovered;
+      } catch (err: any) {
+        console.warn('Eroare descoperire Auchan:', err.message);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 7. PROFI ROM FOOD
     // Punct oficial: https://www.profi.ro/reviste-ro/
     // -------------------------------------------------------------------------
     if (source.retailerId === 'profi') {
