@@ -88,6 +88,24 @@ export default function App() {
     });
   };
 
+  // Sync tab and product with URL if provided. This must run on every render path
+  // so the auth-loading and signed-out states keep the same hook order.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab');
+    const productParam = params.get('product');
+    const categoryParam = params.get('category');
+
+    if (categoryParam) setProductFilterCategory(categoryParam);
+
+    if (productParam) {
+      setSelectedProductId(productParam);
+      setCurrentTab('product-detail');
+    } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile'].includes(tabParam)) {
+      setCurrentTab(tabParam === 'admin-sources' && !user?.user_metadata?.is_admin ? 'profile' : tabParam);
+    }
+  }, [user]);
+
   if (loading) {
     return <div className="min-h-screen grid place-items-center bg-slate-50 text-sm font-bold text-slate-500">Se verifică sesiunea…</div>;
   }
@@ -104,25 +122,6 @@ export default function App() {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-
-  // Sync tab and product with URL if provided
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tabParam = params.get('tab');
-    const productParam = params.get('product');
-    const categoryParam = params.get('category');
-
-    if (categoryParam) {
-      setProductFilterCategory(categoryParam);
-    }
-
-    if (productParam) {
-      setSelectedProductId(productParam);
-      setCurrentTab('product-detail');
-    } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile'].includes(tabParam)) {
-      setCurrentTab(tabParam === 'admin-sources' && !user?.user_metadata?.is_admin ? 'profile' : tabParam);
-    }
-  }, [user]);
 
   const handleSelectTab = (tab: string) => {
     if (tab === 'admin-sources' && !user?.user_metadata?.is_admin) {
