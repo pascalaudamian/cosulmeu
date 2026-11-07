@@ -604,6 +604,52 @@ export class CatalogStagingManager {
       };
     }
 
+    if (retailerId === 'auchan') {
+      const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery.js');
+      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
+
+      const targetDoc = docs.find(d => d.documentUrl.includes('/promotii') || d.documentUrl.includes('oferte-si-promotii')) || docs[0];
+
+      if (!targetDoc) {
+        return {
+          success: false,
+          retailerId,
+          totalExtracted: 0,
+          autoMatched: 0,
+          needsReview: 0,
+          published: 0,
+          sampleOffers: [],
+          error: 'Nu au fost identificate pagini de produse disponibile pentru Auchan.'
+        };
+      }
+
+      StorageService.addCatalogDocument(targetDoc);
+      const result = await this.executeImportForDocument(targetDoc, { autoPublishValidated: true });
+
+      if (!result.run || result.run.status === 'failed') {
+        return {
+          success: false,
+          retailerId,
+          totalExtracted: 0,
+          autoMatched: 0,
+          needsReview: 0,
+          published: 0,
+          sampleOffers: [],
+          error: result.error || 'Importul pilot Auchan a eșuat.'
+        };
+      }
+
+      return {
+        success: true,
+        retailerId,
+        totalExtracted: result.run.totalRawExtracted,
+        autoMatched: result.run.autoMatchedCount,
+        needsReview: result.run.needsReviewCount,
+        published: result.run.publishedCount,
+        sampleOffers: result.offers.slice(0, 10)
+      };
+    }
+
     // Pentru ceilalți retaileri, încercăm descoperirea automată
     const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery.js');
     const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);

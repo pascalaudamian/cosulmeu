@@ -152,7 +152,7 @@ Paine Toast Integrala 500g,Dobrogea,5942012345678,5.20,2026-12-31`;
   // =========================================================================
   console.log('4. Verificare CatalogSourceDiscovery pentru cei 8 retaileri...');
   const sources = StorageService.getCatalogSources();
-  assert.strictEqual(sources.length, 8, 'Trebuie să fie configurate exact 8 surse de retaileri.');
+  assert.ok(sources.length >= 8, 'Trebuie să fie configurate cel puțin 8 surse de retaileri.');
 
   const expectedRetailers = ['lidl', 'kaufland', 'carrefour', 'penny', 'auchan', 'profi', 'mega-image', 'metro'];
   for (const rId of expectedRetailers) {

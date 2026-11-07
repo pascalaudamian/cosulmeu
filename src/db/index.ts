@@ -1347,17 +1347,24 @@ export class DatabaseService {
             : 'buc';
 
           const newId = `prod-${params.retailerId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          const safeProdTitle = (item.rawTitle || 'Produs fără nume').trim().slice(0, 250);
+          const safeBrand = (item.rawBrand || 'Marcă Magazin').trim().slice(0, 120);
+          const safeCategory = String(category).slice(0, 60);
+          const safeUnit = item.packageUnit ? String(item.packageUnit).slice(0, 16) : 'buc';
+          const safeNormUnit = String(normUnit).slice(0, 16);
+          const safeBarcode = item.rawBarcode ? item.rawBarcode.trim().slice(0, 60) : null;
+
           const newProd: Product = {
             id: newId,
-            name: item.rawTitle,
-            brand: item.rawBrand || 'Marcă Magazin',
+            name: safeProdTitle,
+            brand: safeBrand,
             category: category as any,
             subcategory,
-            defaultUnit: (item.packageUnit as any) || 'buc',
+            defaultUnit: safeUnit as any,
             packageWeightOrVolume: item.packageQuantity || 1,
-            packageUnit: (item.packageUnit as any) || 'buc',
-            normalizedUnit: normUnit,
-            barcode: item.rawBarcode || undefined,
+            packageUnit: safeUnit as any,
+            normalizedUnit: safeNormUnit as any,
+            barcode: safeBarcode || undefined,
             baseReferencePrice: item.normalPrice || item.effectivePrice,
             isRomanianProduct: true
           };
@@ -1370,14 +1377,14 @@ export class DatabaseService {
             ON CONFLICT (id) DO NOTHING`,
             [
               newProd.id,
-              newProd.name,
-              newProd.brand,
-              newProd.category,
-              newProd.defaultUnit,
+              safeProdTitle,
+              safeBrand,
+              safeCategory,
+              safeUnit,
               newProd.packageWeightOrVolume,
-              newProd.packageUnit,
-              newProd.normalizedUnit,
-              newProd.barcode || null,
+              safeUnit,
+              safeNormUnit,
+              safeBarcode,
               newProd.isRomanianProduct,
               newProd.baseReferencePrice
             ]
@@ -1392,8 +1399,16 @@ export class DatabaseService {
         item.matchedProductName = canonicalProduct.name;
 
         // Pas 2: Asociere în retailer_products
-        const externalSku = item.rawBarcode || item.id;
-        const retProdId = `rp-${params.retailerId}-${externalSku}`;
+        const rawSku = (item.rawBarcode || item.id || `sku-${Date.now()}`).trim();
+        const externalSku = rawSku.slice(0, 100);
+        const skuSlug = externalSku.replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 40) || 'item';
+        const retProdId = `rp-${params.retailerId}-${skuSlug}`.slice(0, 60);
+
+        const safeScrapedName = (item.rawTitle || 'Produs fără nume').trim().slice(0, 250);
+        const safeScrapedBrand = item.rawBrand ? item.rawBrand.trim().slice(0, 120) : null;
+        const safeScrapedUnit = item.packageUnit ? String(item.packageUnit).slice(0, 16) : null;
+        const safeScrapedBarcode = item.rawBarcode ? item.rawBarcode.trim().slice(0, 60) : null;
+
         await client.query(
           `INSERT INTO retailer_products (
             id, retailer_id, product_id, external_sku, scraped_name,
@@ -1411,11 +1426,11 @@ export class DatabaseService {
             params.retailerId,
             canonicalId,
             externalSku,
-            item.rawTitle,
-            item.rawBrand || null,
+            safeScrapedName,
+            safeScrapedBrand,
             item.packageQuantity || null,
-            item.packageUnit || null,
-            item.rawBarcode || null
+            safeScrapedUnit,
+            safeScrapedBarcode
           ]
         );
 
@@ -1432,6 +1447,11 @@ export class DatabaseService {
           // Ofertă nouă
           stats.newOffersCount++;
           stats.changedPricesCount++;
+
+          const safeOfferMeasure = (item.unitPriceMeasure || 'lei/buc').slice(0, 30);
+          const safeLoyaltyCardName = item.loyaltyCardName ? item.loyaltyCardName.slice(0, 60) : null;
+          const guaranteedPromoPrice = item.promoPrice ?? item.loyaltyPrice ?? item.effectivePrice;
+          const safePromoTitle = (item.rawTitle || 'Promoție').trim().slice(0, 250);
 
           await client.query(
             `INSERT INTO product_offers (
@@ -1452,11 +1472,11 @@ export class DatabaseService {
               item.promoPrice || null,
               item.loyaltyPrice || null,
               item.unitPrice || item.effectivePrice,
-              item.unitPriceMeasure || 'lei/buc',
+              safeOfferMeasure,
               Boolean(item.isPromo),
               item.promoDetails || null,
               Boolean(item.loyaltyCardRequired || item.loyaltyPrice),
-              item.loyaltyCardName || null,
+              safeLoyaltyCardName,
               item.validUntil || null,
               todayStr
             ]
@@ -1501,11 +1521,11 @@ export class DatabaseService {
                 promoId,
                 params.retailerId,
                 canonicalId,
-                item.rawTitle,
+                safePromoTitle,
                 item.normalPrice || null,
-                item.promoPrice || null,
+                guaranteedPromoPrice,
                 item.loyaltyPrice || null,
-                item.loyaltyCardName || null,
+                safeLoyaltyCardName,
                 item.validUntil || null,
                 item.promoDetails || null
               ]
@@ -1519,6 +1539,11 @@ export class DatabaseService {
 
           if (priceChanged) {
             stats.changedPricesCount++;
+
+            const safeOfferMeasure = (item.unitPriceMeasure || 'lei/buc').slice(0, 30);
+            const safeLoyaltyCardName = item.loyaltyCardName ? item.loyaltyCardName.slice(0, 60) : null;
+            const guaranteedPromoPrice = item.promoPrice ?? item.loyaltyPrice ?? item.effectivePrice;
+            const safePromoTitle = (item.rawTitle || 'Promoție').trim().slice(0, 250);
 
             await client.query(
               `UPDATE product_offers SET
@@ -1546,11 +1571,11 @@ export class DatabaseService {
                 item.promoPrice || null,
                 item.loyaltyPrice || null,
                 item.unitPrice || item.effectivePrice,
-                item.unitPriceMeasure || 'lei/buc',
+                safeOfferMeasure,
                 Boolean(item.isPromo),
                 item.promoDetails || null,
                 Boolean(item.loyaltyCardRequired || item.loyaltyPrice),
-                item.loyaltyCardName || null,
+                safeLoyaltyCardName,
                 item.validUntil || null,
                 todayStr,
                 offerId
@@ -1595,11 +1620,11 @@ export class DatabaseService {
                   promoId,
                   params.retailerId,
                   canonicalId,
-                  item.rawTitle,
+                  safePromoTitle,
                   item.normalPrice || null,
-                  item.promoPrice || null,
+                  guaranteedPromoPrice,
                   item.loyaltyPrice || null,
-                  item.loyaltyCardName || null,
+                  safeLoyaltyCardName,
                   item.validUntil || null,
                   item.promoDetails || null
                 ]
