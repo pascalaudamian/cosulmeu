@@ -168,6 +168,27 @@ export default function App() {
     }
   };
 
+  // Keep every hook before conditional loading/auth returns.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab');
+    const productParam = params.get('product');
+    const categoryParam = params.get('category');
+
+    if (categoryParam) setProductFilterCategory(categoryParam);
+
+    if (productParam) {
+      setSelectedProductId(productParam);
+      setCurrentTab('product-detail');
+    } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile', 'auth'].includes(tabParam)) {
+      if (tabParam === 'admin-sources' && !isAdmin) {
+        setCurrentTab(user ? 'profile' : 'auth');
+      } else {
+        setCurrentTab(tabParam);
+      }
+    }
+  }, [user, isAdmin]);
+
   if (loading) {
     return (
       <div className="min-h-screen grid place-items-center bg-slate-50 text-sm font-bold text-slate-500">
@@ -189,29 +210,6 @@ export default function App() {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-
-  // Sync tab and product with URL if provided
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tabParam = params.get('tab');
-    const productParam = params.get('product');
-    const categoryParam = params.get('category');
-
-    if (categoryParam) {
-      setProductFilterCategory(categoryParam);
-    }
-
-    if (productParam) {
-      setSelectedProductId(productParam);
-      setCurrentTab('product-detail');
-    } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile', 'auth'].includes(tabParam)) {
-      if (tabParam === 'admin-sources' && !isAdmin) {
-        setCurrentTab(user ? 'profile' : 'auth');
-      } else {
-        setCurrentTab(tabParam);
-      }
-    }
-  }, [user, isAdmin]);
 
   const handleSelectTab = (tab: string) => {
     if (tab === 'admin-sources' && !isAdmin) {
