@@ -275,14 +275,26 @@ export interface MultiStoreOptimization {
 }
 
 export interface UserProfile {
+  id?: string;
   name: string;
   email: string;
+  username?: string;
+  avatarUrl?: string;
+  avatar_url?: string;
+  phone?: string;
+  phoneNumber?: string;
+  phone_number?: string;
   city: string;
   preferredStores: string[];
+  preferredStoreId?: string;
+  preferredLanguage?: string;
+  role?: 'user' | 'admin';
   monthlySavingsGoal: number;
   notificationsEnabled: boolean;
   defaultTransportCostEstimate: number;
   useLoyaltyCards: boolean; // whether user has supermarket loyalty cards
+  createdAt?: string;
+  created_at?: string;
 }
 
 export interface SavingsSummary {

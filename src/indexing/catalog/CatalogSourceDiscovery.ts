@@ -58,13 +58,25 @@ export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
     id: 'cat-src-auchan',
     retailerId: 'auchan',
     retailerName: 'Auchan România',
-    name: 'Magazin Online Oficial & Promoții Auchan',
-    catalogUrl: 'https://www.auchan.ro/promotii',
+    name: 'Auchan – Magazin Online Oficial',
+    catalogUrl: 'https://www.auchan.ro/',
     format: 'html',
     status: 'active',
     updateFrequencyDays: 1,
     authRequired: false,
     legalStatusNotice: 'Magazin online oficial și catalog săptămânal de promoții Auchan România; extragere publică transparentă cu diferențiere oferte MyCLUB.'
+  },
+  {
+    id: 'cat-src-auchan-catalog',
+    retailerId: 'auchan',
+    retailerName: 'Auchan România',
+    name: 'Auchan – Catalogul & Revistele Digitale',
+    catalogUrl: 'https://www.auchan.ro/cataloagele-auchan/catalog-auchan',
+    format: 'html',
+    status: 'active',
+    updateFrequencyDays: 7,
+    authRequired: false,
+    legalStatusNotice: 'Cataloage și reviste promoționale digitale oficiale Auchan România; extragere publică transparentă oferte.'
   },
   {
     id: 'cat-src-profi',
@@ -89,6 +101,18 @@ export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
     updateFrequencyDays: 7,
     authRequired: false,
     legalStatusNotice: 'Reviste promoționale și catalog lunar distribuite public prin platforma de publicații online Publitas.'
+  },
+  {
+    id: 'cat-src-mega-image-revista',
+    retailerId: 'mega-image',
+    retailerName: 'Mega Image',
+    name: 'Mega Image – Revista Promo Curentă',
+    catalogUrl: 'https://www.mega-image.ro/promotii-online/reviste-promo-online/revista-promo',
+    format: 'html',
+    status: 'active',
+    updateFrequencyDays: 7,
+    authRequired: false,
+    legalStatusNotice: 'Revista promoțională curentă Mega Image cu diferențiere oferte Card Connect.'
   },
   {
     id: 'cat-src-metro',
@@ -452,71 +476,114 @@ export class CatalogSourceDiscovery {
     // -------------------------------------------------------------------------
     if (source.retailerId === 'auchan') {
       try {
-        // Document 1: Toate Promoțiile Magazinului Online Auchan (Sursă Principală)
-        discovered.push({
-          id: `doc-auchan-promotii-${todayStr}`,
-          sourceId: source.id,
-          retailerId: 'auchan',
-          documentUrl: 'https://www.auchan.ro/promotii',
-          title: `Promoții & Reduceri Magazin Online Auchan (${todayStr})`,
-          format: 'html',
-          validFrom: todayStr,
-          storeOrRegion: 'Magazin Online Național Auchan România',
-          targetAudience: 'general',
-          sourcePageUrl: 'https://www.auchan.ro/promotii',
-          downloadStatus: 'pending',
-          parseStatus: 'pending',
-          rawExtractedCount: 0,
-          matchedCount: 0,
-          validatedCount: 0,
-          publishedCount: 0,
-          createdAt: nowIso,
-          updatedAt: nowIso
-        });
+        if (source.id === 'cat-src-auchan-catalog' || source.catalogUrl.includes('catalog-auchan')) {
+          // Sursa: Auchan Catalog Digital (https://www.auchan.ro/cataloagele-auchan/catalog-auchan)
+          discovered.push({
+            id: `doc-auchan-catalog-direct-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/cataloagele-auchan/catalog-auchan',
+            title: `Catalog Oficial Digital Auchan (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Auchan Național',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
 
-        // Document 2: Ofertele Săptămânii din Catalog
-        discovered.push({
-          id: `doc-auchan-oferte-cataloage-${todayStr}`,
-          sourceId: source.id,
-          retailerId: 'auchan',
-          documentUrl: 'https://www.auchan.ro/oferte-si-promotii-cataloage',
-          title: `Oferte și Promoții din Catalog Auchan (${todayStr})`,
-          format: 'html',
-          validFrom: todayStr,
-          storeOrRegion: 'Magazin Online Național Auchan România',
-          targetAudience: 'general',
-          sourcePageUrl: 'https://www.auchan.ro/oferte-si-promotii-cataloage',
-          downloadStatus: 'pending',
-          parseStatus: 'pending',
-          rawExtractedCount: 0,
-          matchedCount: 0,
-          validatedCount: 0,
-          publishedCount: 0,
-          createdAt: nowIso,
-          updatedAt: nowIso
-        });
+          discovered.push({
+            id: `doc-auchan-cataloage-hub-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/cataloagele-auchan',
+            title: `Pliante & Reviste Auchan România (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Auchan Național',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+        } else {
+          // Sursa: Magazinul Online Auchan (https://www.auchan.ro/promotii & https://www.auchan.ro/)
+          discovered.push({
+            id: `doc-auchan-promotii-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/promotii',
+            title: `Promoții & Reduceri Magazin Online Auchan (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Magazin Online Național Auchan România',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
 
-        // Document 3: Cataloage Digitale Auchan (Sursă Secundară / Fallback)
-        discovered.push({
-          id: `doc-auchan-cataloagele-${todayStr}`,
-          sourceId: source.id,
-          retailerId: 'auchan',
-          documentUrl: 'https://www.auchan.ro/cataloagele-auchan',
-          title: `Cataloage Digitale Auchan (Sursă Secundară / Fallback) (${todayStr})`,
-          format: 'html',
-          validFrom: todayStr,
-          storeOrRegion: 'Magazin Online Național Auchan România',
-          targetAudience: 'general',
-          sourcePageUrl: 'https://www.auchan.ro/cataloagele-auchan',
-          downloadStatus: 'pending',
-          parseStatus: 'pending',
-          rawExtractedCount: 0,
-          matchedCount: 0,
-          validatedCount: 0,
-          publishedCount: 0,
-          createdAt: nowIso,
-          updatedAt: nowIso
-        });
+          discovered.push({
+            id: `doc-auchan-store-home-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/',
+            title: `Magazin Online Oficial Auchan – Produse Recomandate (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Magazin Online Național Auchan România',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+
+          discovered.push({
+            id: `doc-auchan-oferte-cataloage-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/oferte-si-promotii-cataloage',
+            title: `Oferte și Promoții din Catalog Auchan (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Magazin Online Național Auchan România',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+        }
 
         return discovered;
       } catch (err: any) {
