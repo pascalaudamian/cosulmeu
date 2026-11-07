@@ -706,7 +706,32 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
         )}
       </div>
 
-      {/* 2. OPERATIONAL KPI BAR (Clickable cards that switch/filter views) */}
+      {/* 2. OPERATIONAL STATUS */}
+      <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs ${
+        importErrors.length > 0 || (stats?.stagedPendingReview || 0) > 0
+          ? 'border-amber-200 bg-amber-50 text-amber-900'
+          : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+      }`}>
+        <div className="flex items-center gap-2">
+          {importErrors.length > 0 || (stats?.stagedPendingReview || 0) > 0 ? (
+            <AlertCircle className="h-4 w-4 text-amber-600" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+          )}
+          <span className="font-semibold">
+            {importErrors.length > 0
+              ? `${importErrors.length} probleme necesită atenție`
+              : (stats?.stagedPendingReview || 0) > 0
+                ? `${stats?.stagedPendingReview} oferte așteaptă validarea`
+                : 'Sistem operațional — toate fluxurile sunt disponibile'}
+          </span>
+        </div>
+        <span className="text-slate-600">
+          Ultima actualizare: {formatTimeAgo(stats?.lastRunAt)}
+        </span>
+      </div>
+
+      {/* 3. OPERATIONAL KPI BAR (Clickable cards that switch/filter views) */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
         {/* KPI 1: Active Retailers */}
         <div
@@ -720,7 +745,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             <Server className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-500" />
           </div>
           <div className="text-xl font-bold text-slate-900 mt-1">
-            {stats?.activeSources || 2} <span className="text-xs text-slate-400 font-normal">/ 8</span>
+            {stats?.activeSources ?? sources.filter(source => source.status === 'active').length} <span className="text-xs text-slate-400 font-normal">active</span>
           </div>
           <div className="text-[10px] text-emerald-600 font-medium mt-0.5">Vezi lista retailerilor →</div>
         </div>
@@ -846,7 +871,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-semibold text-xs transition-all shadow-sm disabled:opacity-50 cursor-pointer"
             >
               {isRunningActive ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              <span>Rulează Importurile Active (Lidl & Kaufland)</span>
+              <span>Rulează importurile active</span>
             </button>
 
             {/* Primary Action 2: Run Test for Specific Retailer */}

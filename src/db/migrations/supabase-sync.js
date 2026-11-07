@@ -2,10 +2,10 @@
 import pg from 'pg';
 const { Pool } = pg;
 
-const connectionString =
-  process.env.POSTGRES_URL_NON_POOLING ||
-  process.env.DATABASE_URL ||
-  'postgres://postgres.bwanbgbimktluajvwzsj:JmpyZ55DR5f0oIVq@aws-0-eu-west-1.pooler.supabase.com:5432/postgres';
+  const connectionString = process.env.POSTGRES_URL_NON_POOLING || process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('Missing POSTGRES_URL_NON_POOLING or DATABASE_URL for the sync migration.');
+  }
 
 const pool = new Pool({
   connectionString: connectionString.replace(/([?&])ssl(mode|cert|key|rootcert)=[^&]*/gi, '$1').replace(/[?&]$/, ''),
