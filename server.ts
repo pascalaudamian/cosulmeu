@@ -490,7 +490,7 @@ app.get('/api/categories', (req, res) => {
 });
 
 // GET /api/products - Catalog public de produse cu filtrare, căutare, sortare și paginare
-app.get('/api/products', (req, res) => {
+app.get('/api/products', async (req, res) => {
   try {
   const {
     category,
@@ -505,8 +505,11 @@ app.get('/api/products', (req, res) => {
       limit = '12'
     } = req.query;
 
-    const allProducts = StorageService.getAllProducts();
-    const allOffers = StorageService.getProductOffers();
+    // Production catalog reads from PostgreSQL so products published by the
+    // admin are visible in the public Products section after the request completes.
+    const [allProducts, allOffers] = isPostgresConfigured()
+      ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers()])
+      : [StorageService.getAllProducts(), StorageService.getProductOffers()];
 
     // Mapare oferte valide per produs
     const todayStr = new Date().toISOString().split('T')[0];
@@ -1901,11 +1904,23 @@ app.post('/api/admin/catalog-importer/publish-validated', requireAdminAuth, asyn
   try {
     const { offerIds } = req.body;
     const pubResult = await CatalogStagingManager.publishValidatedOffers(offerIds);
+    const persistedProductCount = isPostgresConfigured()
+      ? (await DatabaseService.getProducts()).length
+      : StorageService.getAllProducts().length;
+    const persistedOfferCount = isPostgresConfigured()
+      ? (await DatabaseService.getOffers()).length
+      : StorageService.getProductOffers().length;
+    const persisted = pubResult.errors.length === 0;
+
     res.json({
-      success: true,
+      success: persisted,
       publishedCount: pubResult.publishedCount,
+      persistedProductCount,
+      persistedOfferCount,
       errors: pubResult.errors,
-      message: `Au fost publicate ${pubResult.publishedCount} oferte validate în catalogul public.`
+      message: persisted
+        ? `Au fost publicate ${pubResult.publishedCount} oferte validate în catalogul public. Produsele sunt salvate și indexate.`
+        : `Publicarea a fost finalizată cu avertismente: ${pubResult.errors.join('; ')}`
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la publicarea ofertelor validate.' });
