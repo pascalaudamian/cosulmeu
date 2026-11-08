@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/calc.test.ts && tsx tests/sources.test.ts && tsx tests/e2e-import.test.ts && tsx tests/security.test.ts && tsx tests/database.test.ts && tsx tests/indexing.test.ts && tsx tests/indexer-scheduler.test.ts && tsx tests/scraping-discovery.test.ts && tsx tests/price-quality-monitor.test.ts && tsx tests/products-catalog.test.ts && tsx tests/acceptance-audit.test.ts && tsx tests/catalog-importer.test.ts && tsx tests/incremental-sync.test.ts && tsx tests/user-profiles.test.ts"
+    "test": "tsx tests/calc.test.ts && tsx tests/sources.test.ts && tsx tests/e2e-import.test.ts && tsx tests/security.test.ts && tsx tests/database.test.ts && tsx tests/indexing.test.ts && tsx tests/indexer-scheduler.test.ts && tsx tests/scraping-discovery.test.ts && tsx tests/price-quality-monitor.test.ts && tsx tests/products-catalog.test.ts && tsx tests/acceptance-audit.test.ts && tsx tests/catalog-importer.test.ts && tsx tests/incremental-sync.test.ts && tsx tests/user-profiles.test.ts && tsx tests/admin-dashboard.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

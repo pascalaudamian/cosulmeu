@@ -329,3 +329,94 @@ export interface MatchAuditEntry {
   performedBy: string;
   timestamp: string;
 }
+
+export interface AdminAuditLog {
+  id: string;
+  userEmail: string;
+  userId?: string;
+  action: string;
+  targetType: string;
+  targetId?: string;
+  details?: Record<string, any>;
+  ipAddress?: string;
+  createdAt: string;
+}
+
+export type OverallSystemStatus =
+  | 'TOTUL FUNCȚIONEAZĂ'
+  | 'IMPORT ÎN DESFĂȘURARE'
+  | 'NECESITĂ ATENȚIE'
+  | 'SISTEM PARȚIAL DISPONIBIL'
+  | 'EROARE CRITICĂ';
+
+export interface OperationalKpiMetric {
+  key: string;
+  label: string;
+  value: number;
+  unit?: string;
+  period: string;
+  updatedAt: string;
+  previousValue?: number;
+  delta?: number;
+  status: 'positive' | 'neutral' | 'warning' | 'critical';
+  details?: string;
+}
+
+export interface OperationalDashboardData {
+  overallStatus: OverallSystemStatus;
+  statusMessage: string;
+  activeRetailersCount: number;
+  configuredRetailersCount: number;
+  activeSourcesCount: number;
+  configuredSourcesCount: number;
+  blockedSourcesCount: number;
+  runningImportsCount: number;
+  lastSuccessfulSync?: string;
+  nextScheduledSync?: string;
+  dbStatus: {
+    connected: boolean;
+    configured: boolean;
+    persistenceMode: 'postgresql' | 'demo_memory';
+    dbType: string;
+    message: string;
+    latencyMs?: number;
+  };
+  lastAdminActivity?: AdminAuditLog;
+  kpis: {
+    configuredRetailers: OperationalKpiMetric;
+    configuredSources: OperationalKpiMetric;
+    activeSources: OperationalKpiMetric;
+    discoveredDocuments: OperationalKpiMetric;
+    downloadedDocuments: OperationalKpiMetric;
+    extractedProducts: OperationalKpiMetric;
+    distinctProducts: OperationalKpiMetric;
+    newProducts: OperationalKpiMetric;
+    updatedProducts: OperationalKpiMetric;
+    extractedOffers: OperationalKpiMetric;
+    validatedOffers: OperationalKpiMetric;
+    approvedOffers: OperationalKpiMetric;
+    publishedOffers: OperationalKpiMetric;
+    changedPrices: OperationalKpiMetric;
+    itemsWithoutPrice: OperationalKpiMetric;
+    processingErrors: OperationalKpiMetric;
+  };
+  pipelineStages: {
+    stage: 'discovery' | 'download' | 'parse' | 'validation' | 'approval' | 'publishing';
+    name: string;
+    status: 'PASS' | 'PROCESSING' | 'PENDING' | 'PARTIAL' | 'BLOCKED' | 'FAILED';
+    processedCount: number;
+    pendingCount: number;
+    errorCount: number;
+    lastExecutedAt?: string;
+    durationMs?: number;
+  }[];
+  activeAlerts: {
+    id: string;
+    severity: 'info' | 'warning' | 'critical';
+    title: string;
+    message: string;
+    targetTab: string;
+    linkActionLabel?: string;
+  }[];
+}
+

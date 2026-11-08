@@ -2,13 +2,24 @@
 import pg from 'pg';
 const { Pool } = pg;
 
-  const connectionString = process.env.POSTGRES_URL_NON_POOLING || process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error('Missing POSTGRES_URL_NON_POOLING or DATABASE_URL for the sync migration.');
-  }
+const rawConn =
+  process.env.POSTGRES_URL_NON_POOLING ||
+  process.env.POSTGRES_PRISMA_URL ||
+  process.env.POSTGRES_URL ||
+  process.env.SUPABASE_DB_URL ||
+  process.env.DATABASE_URL ||
+  '';
+
+if (!rawConn) {
+  console.warn('⚠️ POSTGRES_URL / DATABASE_URL nu este definit în mediul curent.');
+}
+
+const connectionString = rawConn
+  .replace(/([?&])ssl(mode|cert|key|rootcert)=[^&]*/gi, '$1')
+  .replace(/[?&]$/, '');
 
 const pool = new Pool({
-  connectionString: connectionString.replace(/([?&])ssl(mode|cert|key|rootcert)=[^&]*/gi, '$1').replace(/[?&]$/, ''),
+  connectionString: connectionString || undefined,
   ssl: { rejectUnauthorized: false }
 });
 
