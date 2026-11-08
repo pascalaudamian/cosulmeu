@@ -1,10 +1,16 @@
 // src/db/migrations/user-profiles-migration.js
 import pg from 'pg';
 
-const rawConn = process.env.POSTGRES_URL_NON_POOLING || process.env.DATABASE_URL;
+const rawConn =
+  process.env.POSTGRES_URL_NON_POOLING ||
+  process.env.POSTGRES_PRISMA_URL ||
+  process.env.POSTGRES_URL ||
+  process.env.SUPABASE_DB_URL ||
+  process.env.DATABASE_URL ||
+  '';
 
 if (!rawConn) {
-  throw new Error('Missing POSTGRES_URL_NON_POOLING or DATABASE_URL for the migration.');
+  console.warn('⚠️ POSTGRES_URL / DATABASE_URL nu este definit în mediul curent.');
 }
 
 const connectionString = rawConn
@@ -12,7 +18,7 @@ const connectionString = rawConn
   .replace(/[?&]$/, '');
 
 const pool = new pg.Pool({
-  connectionString,
+  connectionString: connectionString || undefined,
   ssl: { rejectUnauthorized: false }
 });
 

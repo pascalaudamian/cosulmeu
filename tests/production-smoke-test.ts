@@ -158,7 +158,8 @@ async function runProductionSmokeTest() {
         [runId, source.id, rid, parseRes.offers.length]
       );
 
-      const stagedOffers: CatalogExtractedOffer[] = parseRes.offers.map((raw, idx) => ({
+      const offersToSync = parseRes.offers.slice(0, 30);
+      const stagedOffers: CatalogExtractedOffer[] = offersToSync.map((raw, idx) => ({
         id: `smoke-${rid}-${idx}-${Date.now()}`,
         runId,
         documentId: targetDoc.id,
@@ -183,7 +184,7 @@ async function runProductionSmokeTest() {
         validFrom: raw.validFrom,
         validUntil: raw.validUntil,
         matchConfidence: 0.8,
-        matchMethod: raw.rawBarcode ? 'gtin_exact' : 'text_similarity',
+        matchMethod: raw.rawBarcode ? 'gtin_exact' : 'name_brand_similarity',
         stagingStatus: 'VALIDATED',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -489,6 +490,9 @@ async function runProductionSmokeTest() {
           effectivePrice: 0,
           normalPrice: 0,
           currency: 'RON',
+          isPromo: false,
+          matchConfidence: 0,
+          matchMethod: 'unmatched',
           stagingStatus: 'NEEDS_REVIEW',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()

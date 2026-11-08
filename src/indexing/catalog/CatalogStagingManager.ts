@@ -314,6 +314,99 @@ export class CatalogStagingManager {
   }
 
   /**
+   * Generează rezumatul detaliat înainte de publicarea ofertelor validate (cerința 6 din Admin Dashboard)
+   */
+  static async previewPublishValidated(offerIds?: string[]): Promise<{
+    toPublishCount: number;
+    newProductsCount: number;
+    existingUpdatedCount: number;
+    unchangedProductsCount: number;
+    newOffersCount: number;
+    updatedOffersCount: number;
+    priceChangesCount: number;
+    itemsWithoutPriceCount: number;
+    needsReviewCount: number;
+    retailersInvolved: string[];
+    sampleItems: { id: string; title: string; price: number; retailerId: string; isNewProduct: boolean }[];
+    errors: string[];
+  }> {
+    const allStaged = isPostgresConfigured()
+      ? await DatabaseService.getCatalogExtractedOffers()
+      : StorageService.getCatalogExtractedOffers();
+
+    const existingOffers = isPostgresConfigured()
+      ? await DatabaseService.getOffers()
+      : StorageService.getProductOffers();
+
+    const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
+
+    const targetOffers = offerIds && offerIds.length > 0
+      ? allStaged.filter(o => offerIds.includes(o.id))
+      : allStaged.filter(o => o.stagingStatus === 'VALIDATED');
+
+    const toPublish = targetOffers.filter(o => o.stagingStatus === 'VALIDATED');
+    const needsReview = targetOffers.filter(o => o.stagingStatus === 'NEEDS_REVIEW');
+
+    let newProductsCount = 0;
+    let existingUpdatedCount = 0;
+    let unchangedProductsCount = 0;
+    let newOffersCount = 0;
+    let updatedOffersCount = 0;
+    let priceChangesCount = 0;
+    let itemsWithoutPriceCount = 0;
+    const retailers = new Set<string>();
+    const errors: string[] = [];
+
+    for (const item of toPublish) {
+      retailers.add(item.retailerId);
+      if (!item.effectivePrice || item.effectivePrice <= 0 || isNaN(item.effectivePrice)) {
+        itemsWithoutPriceCount++;
+        errors.push(`Produsul "${item.rawTitle}" are preț invalid (${item.effectivePrice}).`);
+      }
+
+      if (!item.matchedProductId) {
+        newProductsCount++;
+      } else {
+        existingUpdatedCount++;
+      }
+
+      const offerKey = `${item.matchedProductId}__${item.retailerId}`;
+      const existing = existingOfferMap.get(offerKey);
+      if (!existing) {
+        newOffersCount++;
+      } else {
+        updatedOffersCount++;
+        if (Number(existing.price) !== Number(item.effectivePrice)) {
+          priceChangesCount++;
+        } else {
+          unchangedProductsCount++;
+        }
+      }
+    }
+
+    return {
+      toPublishCount: toPublish.length,
+      newProductsCount,
+      existingUpdatedCount,
+      unchangedProductsCount,
+      newOffersCount,
+      updatedOffersCount,
+      priceChangesCount,
+      itemsWithoutPriceCount,
+      needsReviewCount: needsReview.length,
+      retailersInvolved: Array.from(retailers),
+      sampleItems: toPublish.slice(0, 10).map(i => ({
+        id: i.id,
+        title: i.rawTitle,
+        price: i.effectivePrice,
+        retailerId: i.retailerId,
+        isNewProduct: !i.matchedProductId
+      })),
+      errors
+    };
+  }
+
+  /**
    * Publică ofertele validate direct în catalogul public de produse (product_offers și price_observations)
    */
   static async publishValidatedOffers(offerIds?: string[]): Promise<{ publishedCount: number; errors: string[] }> {
