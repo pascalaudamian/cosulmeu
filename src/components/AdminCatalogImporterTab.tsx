@@ -122,6 +122,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
   const [processingDocId, setProcessingDocId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [operationProgress, setOperationProgress] = useState<{ label: string; detail?: string } | null>(null);
 
   // Modals
   const [showAddSourceModal, setShowAddSourceModal] = useState<boolean>(false);
@@ -265,6 +266,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
   const handleRunActiveImports = async () => {
     setIsRunningActive(true);
     setActionMessage(null);
+    setOperationProgress({ label: 'Se pornesc importurile active', detail: 'Se verifică sursele configurate și se descarcă documentele disponibile.' });
     try {
       const res = await fetchWithAuth('/api/admin/catalog-importer/run-active', { method: 'POST' });
       const data = await res.json();
@@ -276,10 +278,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       } else {
         setActionMessage({ type: 'error', text: data.error || 'Importul activ a eșuat.' });
       }
+      setOperationProgress({ label: 'Se actualizează rezultatele', detail: 'Se încarcă statisticile, documentele și ofertele extrase.' });
       await loadAllData();
     } catch (err: any) {
       setActionMessage({ type: 'error', text: `Eroare de rețea: ${err.message}` });
     } finally {
+      setOperationProgress(null);
       setIsRunningActive(false);
     }
   };
@@ -419,8 +423,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
 
   // Publish all validated offers
   const handlePublishValidated = async () => {
+    const validatedCount = stats?.stagedValidated ?? stagingOffers.filter(offer => offer.stagingStatus === 'VALIDATED').length;
+    if (validatedCount === 0) {
+      setActionMessage({ type: 'info', text: 'Nu există oferte validate pregătite pentru publicare.' });
+      return;
+    }
+    if (!window.confirm(`Publici ${validatedCount} oferte validate în catalogul public? Această acțiune va actualiza produsele vizibile.`)) return;
+
     setIsPublishing(true);
     setActionMessage(null);
+    setOperationProgress({ label: 'Se publică ofertele validate', detail: `${validatedCount} oferte sunt transferate în catalogul public.` });
     try {
       const res = await fetchWithAuth('/api/admin/catalog-importer/publish-validated', {
         method: 'POST',
@@ -435,10 +447,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       } else {
         setActionMessage({ type: 'error', text: data.error || 'Publicarea ofertelor a eșuat.' });
       }
+      setOperationProgress({ label: 'Se verifică persistența', detail: 'Se confirmă produsele și ofertele salvate în baza de date.' });
       await loadAllData();
     } catch (err: any) {
       setActionMessage({ type: 'error', text: `Eroare: ${err.message}` });
     } finally {
+      setOperationProgress(null);
       setIsPublishing(false);
     }
   };
@@ -680,8 +694,18 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           </div>
         )}
 
-        {/* Global Action Message Banner */}
-        {actionMessage && (
+  {operationProgress && (
+  <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3.5 text-xs text-blue-900" role="status" aria-live="polite">
+    <div className="flex items-center gap-2 font-semibold">
+      <RefreshCw className="h-4 w-4 animate-spin text-blue-600" />
+      <span>{operationProgress.label}</span>
+    </div>
+    {operationProgress.detail && <p className="mt-1 pl-6 text-blue-700">{operationProgress.detail}</p>}
+  </div>
+  )}
+
+  {/* Global Action Message Banner */}
+  {actionMessage && (
           <div
             className={`mt-4 p-3.5 rounded-xl text-xs flex items-start justify-between gap-3 ${
               actionMessage.type === 'success'
