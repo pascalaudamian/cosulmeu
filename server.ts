@@ -1946,6 +1946,15 @@ app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, (r
       }
     }
 
+    await DatabaseService.logAdminActivity({
+      userEmail: (req.body?.userEmail as string) || 'admin@cosulmeu.ro',
+      action: action === 'approve' ? 'approve_staging_offers' : 'reject_staging_offers',
+      targetType: 'staging_offers',
+      targetId: Array.isArray(offerIds) ? offerIds.slice(0, 5).join(',') : undefined,
+      details: { count: updatedCount, action, totalRequested: offerIds?.length },
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+    });
+
     res.json({
       success: true,
       updatedCount,
@@ -1968,6 +1977,21 @@ app.post('/api/admin/catalog-importer/publish-validated', requireAdminAuth, asyn
       ? (await DatabaseService.getOffers()).length
       : StorageService.getProductOffers().length;
     const persisted = pubResult.errors.length === 0;
+
+    await DatabaseService.logAdminActivity({
+      userEmail: (req.body?.userEmail as string) || 'admin@cosulmeu.ro',
+      action: 'publish_validated_offers',
+      targetType: 'staging_offers',
+      targetId: offerIds ? (Array.isArray(offerIds) ? offerIds.slice(0, 5).join(',') : String(offerIds)) : 'all_validated',
+      details: {
+        publishedCount: pubResult.publishedCount,
+        persistedProductCount,
+        persistedOfferCount,
+        errorsCount: pubResult.errors.length,
+        result: persisted ? 'SUCCESS' : 'WARNINGS'
+      },
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+    });
 
     res.json({
       success: persisted,
@@ -2082,12 +2106,20 @@ app.post('/api/admin/sources/:id/toggle', requireAdminAuth, async (req, res) => 
     const updated = StorageService.updateCatalogSource(id, { status });
     if (!updated) return res.status(404).json({ error: 'Sursa nu a fost găsită.' });
 
+    if (isPostgresConfigured()) {
+      const pool = getPool();
+      if (pool) {
+        await pool.query('UPDATE catalog_sources SET status = $1 WHERE id = $2', [status, id]);
+      }
+    }
+
     await DatabaseService.logAdminActivity({
       userEmail: userEmail || 'admin@cosulmeu.ro',
       action: status === 'active' ? 'enable_source' : 'disable_source',
       targetType: 'catalog_source',
       targetId: id,
-      details: { previousStatus: status === 'active' ? 'disabled' : 'active', newStatus: status, sourceName: updated.name }
+      details: { previousStatus: status === 'active' ? 'disabled' : 'active', newStatus: status, sourceName: updated.name },
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
     });
 
     res.json({ success: true, source: updated, message: `Sursa ${updated.name} este acum ${status}.` });
@@ -2104,13 +2136,31 @@ app.post('/api/admin/import/run-retailer/:retailerId', requireAdminAuth, async (
 
     await DatabaseService.logAdminActivity({
       userEmail: userEmail || 'admin@cosulmeu.ro',
-      action: 'run_retailer_import',
+      action: 'import_started',
       targetType: 'retailer',
       targetId: retailerId,
-      details: { retailerId, timestamp: new Date().toISOString() }
+      details: { retailerId, timestamp: new Date().toISOString() },
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
     });
 
     const result = await CatalogStagingManager.runPilotImportForRetailer(retailerId);
+
+    await DatabaseService.logAdminActivity({
+      userEmail: userEmail || 'admin@cosulmeu.ro',
+      action: result.success ? 'import_completed' : 'import_failed',
+      targetType: 'retailer',
+      targetId: retailerId,
+      details: {
+        retailerId,
+        success: result.success,
+        totalExtracted: result.totalExtracted,
+        autoMatched: result.autoMatched,
+        published: result.published,
+        error: result.error
+      },
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+    });
+
     res.json({ success: true, result });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Eroare la rularea importului pentru retailer.' });

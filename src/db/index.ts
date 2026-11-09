@@ -1806,11 +1806,11 @@ export class DatabaseService {
 
     // Surse predefinite
     const sources = INITIAL_CATALOG_SOURCES;
-    const configuredSourcesCount = sources.length;
-    const activeSourcesCount = sources.filter(s => s.status === 'active').length;
-    const blockedSourcesCount = sources.filter(s => s.retailerId === 'profi' || s.retailerId === 'metro').length;
-    const configuredRetailersCount = 8;
-    const activeRetailersCount = 6; // Lidl, Kaufland, Carrefour, PENNY, Auchan, Mega Image
+    let configuredSourcesCount = sources.length;
+    let activeSourcesCount = sources.filter(s => s.status === 'active').length;
+    let blockedSourcesCount = sources.filter(s => s.retailerId === 'profi' || s.retailerId === 'metro').length;
+    let configuredRetailersCount = 8;
+    let activeRetailersCount = 6; // Lidl, Kaufland, Carrefour, PENNY, Auchan, Mega Image
 
     const fallbackNow = new Date().toISOString();
 
@@ -1870,6 +1870,9 @@ export class DatabaseService {
           (SELECT count(*) FROM product_offers) AS published_offers,
           (SELECT count(*) FROM price_observations) AS price_observations,
           (SELECT count(*) FROM promotions WHERE ends_at IS NULL OR ends_at >= CURRENT_DATE) AS active_promotions,
+          (SELECT count(*) FROM catalog_sources) AS configured_sources,
+          (SELECT count(*) FROM catalog_sources WHERE status = 'active') AS active_sources,
+          (SELECT count(DISTINCT retailer_id) FROM catalog_sources) AS configured_retailers_count,
           (SELECT count(*) FROM catalog_documents) AS total_documents,
           (SELECT count(*) FROM catalog_documents WHERE download_status = 'downloaded') AS downloaded_documents,
           (SELECT count(*) FROM catalog_extracted_offers) AS total_extracted_offers,
@@ -1882,6 +1885,16 @@ export class DatabaseService {
 
       latencyMs = Date.now() - startTime;
       const counts = countsQuery.rows[0] || {};
+
+      if (counts.configured_sources) {
+        configuredSourcesCount = parseInt(counts.configured_sources, 10);
+      }
+      if (counts.active_sources) {
+        activeSourcesCount = parseInt(counts.active_sources, 10);
+      }
+      if (counts.configured_retailers_count) {
+        configuredRetailersCount = parseInt(counts.configured_retailers_count, 10);
+      }
 
       const runsQuery = await pool.query(`
         SELECT id, retailer_id AS "retailerId", status, started_at AS "startedAt", completed_at AS "completedAt",
