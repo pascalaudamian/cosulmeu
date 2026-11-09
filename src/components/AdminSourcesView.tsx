@@ -112,20 +112,17 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   // Authentication state
   const [adminToken, setAdminToken] = useState<string>(() => {
     try {
-      return (
-        sessionStorage.getItem('cosul_meu_admin_token') ||
-        'cosul-meu-admin-secret-2026'
-      );
+      return sessionStorage.getItem('cosul_meu_admin_token') || '';
     } catch {
-      return 'cosul-meu-admin-secret-2026';
+      return '';
     }
   });
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
-      return sessionStorage.getItem('cosul_meu_admin_auth') === 'true' || true;
+      return sessionStorage.getItem('cosul_meu_admin_auth') === 'true' && Boolean(sessionStorage.getItem('cosul_meu_admin_token'));
     } catch {
-      return true;
+      return false;
     }
   });
 
@@ -295,13 +292,14 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
   // Initial load
   useEffect(() => {
+    if (!isAuthenticated) return;
     loadDashboard();
     loadSources();
     loadDocuments();
     loadStaging();
     loadRunsAndErrors();
     loadAuditLogs();
-  }, [loadDashboard, loadSources, loadDocuments, loadStaging, loadRunsAndErrors, loadAuditLogs]);
+  }, [isAuthenticated, loadDashboard, loadSources, loadDocuments, loadStaging, loadRunsAndErrors, loadAuditLogs]);
 
   // Load products when tab is active or filters change
   useEffect(() => {
@@ -501,6 +499,33 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     }
   };
 
+  const handleAdminLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const token = authInput.trim();
+    if (!token) {
+      setAuthError('Introdu tokenul administrativ.');
+      return;
+    }
+
+    setIsVerifyingAuth(true);
+    setAuthError(null);
+    try {
+      const response = await fetch('/api/admin/operational-dashboard', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) throw new Error('Token administrativ invalid sau configurație de producție incompletă.');
+      setAdminToken(token);
+      setIsAuthenticated(true);
+      sessionStorage.setItem('cosul_meu_admin_token', token);
+      sessionStorage.setItem('cosul_meu_admin_auth', 'true');
+      setAuthInput('');
+    } catch (error: any) {
+      setAuthError(error.message || 'Autentificarea administratorului a eșuat.');
+    } finally {
+      setIsVerifyingAuth(false);
+    }
+  };
+
   // Filtered staging items
   const filteredStagingOffers = useMemo(() => {
     return stagingOffers.filter(offer => {
@@ -514,6 +539,26 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       return matchStatus && matchRetailer && matchSearch;
     });
   }, [stagingOffers, stagingFilter, stagingRetailerFilter, stagingSearch]);
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-[70vh] grid place-items-center px-4">
+        <form onSubmit={handleAdminLogin} className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-lg">
+          <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-emerald-50 text-emerald-700">
+            <Lock className="h-6 w-6" />
+          </div>
+          <h1 className="text-xl font-extrabold text-slate-900 text-center">Autentificare administrator</h1>
+          <p className="mt-2 text-center text-sm text-slate-500">Introdu tokenul administrativ configurat pentru producție.</p>
+          <label className="mt-5 block text-xs font-bold text-slate-700" htmlFor="admin-token">Token administrativ</label>
+          <input id="admin-token" type="password" value={authInput} onChange={event => setAuthInput(event.target.value)} autoComplete="current-password" className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="Introdu tokenul" />
+          {authError && <p className="mt-2 text-xs font-semibold text-rose-600" role="alert">{authError}</p>}
+          <button type="submit" disabled={isVerifyingAuth} className="mt-5 w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
+            {isVerifyingAuth ? 'Se verifică…' : 'Intră în panoul admin'}
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 pb-24 max-w-7xl mx-auto">
