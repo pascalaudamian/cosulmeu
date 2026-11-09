@@ -525,19 +525,27 @@ export class CatalogStagingManager {
     // Persistență în PostgreSQL dacă este configurat și conectat
     if (isPostgresConfigured()) {
       try {
-        const retailerId = toPublish[0]?.retailerId || 'lidl';
-        const runId = toPublish[0]?.runId || `run-pub-${retailerId}-${Date.now()}`;
-        const syncRes = await DatabaseService.syncBatchIncremental({
-          runId,
-          documentId: toPublish[0]?.documentId,
-          sourceId: `src-${retailerId}-catalog`,
-          retailerId,
-          offers: toPublish,
-          autoPublish: true
-        });
+        const offersByRetailer = new Map<string, CatalogExtractedOffer[]>();
+        for (const offer of toPublish) {
+          const retailerOffers = offersByRetailer.get(offer.retailerId) || [];
+          retailerOffers.push(offer);
+          offersByRetailer.set(offer.retailerId, retailerOffers);
+        }
 
-        if (!syncRes.success && syncRes.stats.errors.length > 0) {
-          errors.push(...syncRes.stats.errors);
+        for (const [retailerId, retailerOffers] of offersByRetailer) {
+          const runId = retailerOffers[0]?.runId || `run-pub-${retailerId}-${Date.now()}`;
+          const syncRes = await DatabaseService.syncBatchIncremental({
+            runId,
+            documentId: retailerOffers[0]?.documentId,
+            sourceId: `src-${retailerId}-catalog`,
+            retailerId,
+            offers: retailerOffers,
+            autoPublish: true
+          });
+
+          if (!syncRes.success && syncRes.stats.errors.length > 0) {
+            errors.push(...syncRes.stats.errors);
+          }
         }
       } catch (pgErr: any) {
         errors.push(`Avertisment salvare PostgreSQL: ${pgErr.message}`);

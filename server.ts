@@ -1516,6 +1516,103 @@ app.get('/api/admin/catalog-importer/stats', requireAdminAuth, async (req, res) 
 });
 
 // 1.1 Dashboard Operațional Complet (Overview, KPI-uri, Status General)
+const runCatalogPublishSchedule = async (schedule: any) => {
+  const pool = getPool();
+  if (!pool) throw new Error('Baza de date nu este configurată.');
+
+  await pool.query(`UPDATE catalog_publish_schedules SET last_status = 'running', last_error = NULL, updated_at = NOW() WHERE id = $1`, [schedule.id]);
+  try {
+    const retailerIds = Array.isArray(schedule.retailer_ids) ? schedule.retailer_ids : [];
+    const result = await pool.query(
+      `SELECT id FROM catalog_extracted_offers WHERE staging_status = 'VALIDATED' AND ($1::text[] = '{}' OR retailer_id = ANY($1::text[]))`,
+      [retailerIds]
+    );
+    const publishResult = await CatalogStagingManager.publishValidatedOffers(result.rows.map(row => row.id));
+    if (publishResult.errors.length > 0) throw new Error(publishResult.errors.join('; '));
+    await pool.query(`UPDATE catalog_publish_schedules SET last_status = 'success', last_run_at = NOW(), updated_at = NOW() WHERE id = $1`, [schedule.id]);
+    return publishResult;
+  } catch (error: any) {
+    await pool.query(`UPDATE catalog_publish_schedules SET last_status = 'failed', last_run_at = NOW(), last_error = $2, updated_at = NOW() WHERE id = $1`, [schedule.id, error.message]);
+    throw error;
+  }
+};
+
+app.get('/api/admin/catalog-publish-schedules', requireAdminAuth, async (_req, res) => {
+  try {
+    const pool = getPool();
+    if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
+    const result = await pool.query(`SELECT id, name, retailer_ids AS "retailerIds", scheduled_at AS "scheduledAt", timezone, enabled, alert_email AS "alertEmail", last_run_at AS "lastRunAt", next_run_at AS "nextRunAt", last_status AS "lastStatus", last_error AS "lastError" FROM catalog_publish_schedules ORDER BY scheduled_at DESC`);
+    return res.json({ schedules: result.rows });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/admin/catalog-publish-schedules', requireAdminAuth, async (req, res) => {
+  try {
+    const pool = getPool();
+    if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
+    const { name, retailerIds = [], scheduledAt, timezone = 'Europe/Bucharest', alertEmail, enabled = true } = req.body || {};
+    if (!name || !scheduledAt) return res.status(400).json({ error: 'Numele și data programată sunt obligatorii.' });
+    const result = await pool.query(`INSERT INTO catalog_publish_schedules (name, retailer_ids, scheduled_at, timezone, alert_email, enabled, next_run_at) VALUES ($1, $2, $3, $4, $5, $6, $3) RETURNING id, name, retailer_ids AS "retailerIds", scheduled_at AS "scheduledAt", timezone, enabled, alert_email AS "alertEmail", last_status AS "lastStatus"`, [name, retailerIds, scheduledAt, timezone, alertEmail || null, Boolean(enabled)]);
+    return res.status(201).json({ schedule: result.rows[0] });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/admin/catalog-publish-schedules/:id', requireAdminAuth, async (req, res) => {
+  try {
+    const pool = getPool();
+    if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
+    const { name, retailerIds, scheduledAt, timezone, alertEmail, enabled } = req.body || {};
+    const result = await pool.query(`UPDATE catalog_publish_schedules SET name = COALESCE($2, name), retailer_ids = COALESCE($3, retailer_ids), scheduled_at = COALESCE($4, scheduled_at), timezone = COALESCE($5, timezone), alert_email = COALESCE($6, alert_email), enabled = COALESCE($7, enabled), next_run_at = COALESCE($4, next_run_at), updated_at = NOW() WHERE id = $1 RETURNING id, name, retailer_ids AS "retailerIds", scheduled_at AS "scheduledAt", timezone, enabled, alert_email AS "alertEmail", last_status AS "lastStatus", last_error AS "lastError"`, [req.params.id, name || null, retailerIds || null, scheduledAt || null, timezone || null, alertEmail || null, typeof enabled === 'boolean' ? enabled : null]);
+    return res.json({ schedule: result.rows[0] });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/admin/catalog-publish-schedules/:id/run', requireAdminAuth, async (req, res) => {
+  try {
+    const pool = getPool();
+    if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
+    const result = await pool.query(`SELECT id, retailer_ids, name FROM catalog_publish_schedules WHERE id = $1`, [req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Schedulerul nu există.' });
+    return res.json(await runCatalogPublishSchedule(result.rows[0]));
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/admin/catalog-publish-schedules/:id', requireAdminAuth, async (req, res) => {
+  try {
+    const pool = getPool();
+    if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
+    await pool.query('DELETE FROM catalog_publish_schedules WHERE id = $1', [req.params.id]);
+    return res.status(204).end();
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/cron/catalog-publish', async (req, res) => {
+  const cronSecret = process.env.CRON_SECRET || process.env.ADMIN_API_KEY;
+  if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const pool = getPool();
+    if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
+    const result = await pool.query(`SELECT * FROM catalog_publish_schedules WHERE enabled = true AND (next_run_at IS NULL OR next_run_at <= NOW())`);
+    const runs = [];
+    for (const schedule of result.rows) {
+      try { runs.push({ id: schedule.id, ...(await runCatalogPublishSchedule(schedule)) }); } catch (error: any) { runs.push({ id: schedule.id, error: error.message }); }
+    }
+    return res.json({ runs });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/admin/operational-dashboard', requireAdminAuth, async (req, res) => {
   try {
     const data = await DatabaseService.getOperationalMetrics();
