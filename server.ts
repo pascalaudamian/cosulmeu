@@ -1516,6 +1516,12 @@ app.get('/api/admin/catalog-importer/stats', requireAdminAuth, async (req, res) 
 });
 
 // 1.1 Dashboard Operațional Complet (Overview, KPI-uri, Status General)
+const persistCatalogOfferReview = async (offerId: string, updates: Record<string, any>) => {
+  const pool = getPool();
+  if (!pool) return;
+  await pool.query(`UPDATE catalog_extracted_offers SET staging_status = COALESCE($2, staging_status), matched_product_id = COALESCE($3, matched_product_id), matched_product_name = COALESCE($4, matched_product_name), match_method = COALESCE($5, match_method), match_confidence = COALESCE($6, match_confidence), reviewed_by = COALESCE($7, reviewed_by), reviewed_at = COALESCE($8, reviewed_at), rejection_reason = COALESCE($9, rejection_reason), updated_at = NOW() WHERE id = $1`, [offerId, updates.stagingStatus || null, updates.matchedProductId || null, updates.matchedProductName || null, updates.matchMethod || null, updates.matchConfidence ?? null, updates.reviewedBy || null, updates.reviewedAt || null, updates.rejectionReason || null]);
+};
+
 const runCatalogPublishSchedule = async (schedule: any) => {
   const pool = getPool();
   if (!pool) throw new Error('Baza de date nu este configurată.');
@@ -1652,17 +1658,22 @@ app.post('/api/admin/audit-logs', requireAdminAuth, async (req, res) => {
 });
 
 // 2. Surse de catalog
-app.get('/api/admin/catalog-importer/sources', requireAdminAuth, (req, res) => {
+app.get('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, res) => {
   try {
+    const pool = getPool();
+    if (pool) {
+      const result = await pool.query(`SELECT id, retailer_id AS "retailerId", retailer_id AS "retailerName", name, catalog_url AS "catalogUrl", format, status, update_frequency_days AS "updateFrequencyDays", auth_required AS "authRequired", legal_status_notice AS "legalStatusNotice" FROM catalog_sources ORDER BY retailer_id, name`);
+      return res.json({ success: true, sources: result.rows, count: result.rows.length });
+    }
     const sources = StorageService.getCatalogSources();
-    res.json({ success: true, sources, count: sources.length });
+    return res.json({ success: true, sources, count: sources.length });
   } catch (err: any) {
-    res.status(500).json({ error: 'Eroare la obținerea surselor de catalog.' });
+    return res.status(500).json({ error: 'Eroare la obținerea surselor de catalog.' });
   }
 });
 
 // 3. Adăugare / editare sursă de catalog cu validare SSRF
-app.post('/api/admin/catalog-importer/sources', requireAdminAuth, (req, res) => {
+app.post('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, res) => {
   try {
     const { id, retailerId, retailerName, name, catalogUrl, format = 'html', status = 'active', legalStatusNotice } = req.body;
     if (!retailerId || !catalogUrl || !name) {
@@ -1696,6 +1707,10 @@ app.post('/api/admin/catalog-importer/sources', requireAdminAuth, (req, res) => 
       sources.push(newSource);
     }
     StorageService.saveCatalogSources(sources);
+    const pool = getPool();
+    if (pool) {
+      await pool.query(`INSERT INTO catalog_sources (id, retailer_id, name, catalog_url, format, status, update_frequency_days, auth_required, legal_status_notice) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO UPDATE SET retailer_id = EXCLUDED.retailer_id, name = EXCLUDED.name, catalog_url = EXCLUDED.catalog_url, format = EXCLUDED.format, status = EXCLUDED.status, auth_required = EXCLUDED.auth_required, legal_status_notice = EXCLUDED.legal_status_notice, updated_at = NOW()`, [newSource.id, newSource.retailerId, newSource.name, newSource.catalogUrl, newSource.format, newSource.status, newSource.updateFrequencyDays, newSource.authRequired, newSource.legalStatusNotice]);
+    }
 
     res.json({ success: true, source: newSource, message: 'Sursa de catalog a fost salvată cu succes.' });
   } catch (err: any) {
@@ -1704,7 +1719,7 @@ app.post('/api/admin/catalog-importer/sources', requireAdminAuth, (req, res) => 
 });
 
 // 4. Modificare stare sursă (activare / pauză)
-app.patch('/api/admin/catalog-importer/sources/:id/status', requireAdminAuth, (req, res) => {
+app.patch('/api/admin/catalog-importer/sources/:id/status', requireAdminAuth, async (req, res) => {
   try {
     const { status } = req.body;
     if (!['active', 'pending_authorization', 'disabled', 'error'].includes(status)) {
@@ -1714,6 +1729,8 @@ app.patch('/api/admin/catalog-importer/sources/:id/status', requireAdminAuth, (r
     if (!updated) {
       return res.status(404).json({ error: 'Sursa nu a fost găsită.' });
     }
+    const pool = getPool();
+    if (pool) await pool.query('UPDATE catalog_sources SET status = $1, updated_at = NOW() WHERE id = $2', [status, req.params.id]);
     res.json({ success: true, source: updated });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la actualizarea stării sursei.' });
@@ -1904,7 +1921,7 @@ app.get('/api/admin/catalog-importer/staging', requireAdminAuth, (req, res) => {
 });
 
 // 10. Aprobare sau respingere manuală ofertă din Staging
-app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (req, res) => {
+app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { action, matchedProductId, rejectionReason } = req.body;
@@ -1961,16 +1978,19 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (re
 
       const updated = StorageService.updateCatalogExtractedOffer(id, updateData);
       if (!updated) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
+      await persistCatalogOfferReview(id, updateData);
 
       res.json({ success: true, offer: updated, message: 'Oferta a fost validată și este pregătită pentru publicare.' });
     } else {
-      const updated = StorageService.updateCatalogExtractedOffer(id, {
+      const rejectionUpdates = {
         stagingStatus: 'REJECTED',
         rejectionReason: rejectionReason || 'Respinsă manual de administrator.',
         reviewedBy: 'admin',
         reviewedAt: new Date().toISOString()
-      });
+      };
+      const updated = StorageService.updateCatalogExtractedOffer(id, rejectionUpdates as any);
       if (!updated) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
+      await persistCatalogOfferReview(id, rejectionUpdates);
 
       res.json({ success: true, offer: updated, message: 'Oferta a fost respinsă.' });
     }
@@ -2023,7 +2043,7 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (re
           pName = newProd.name;
         }
 
-        StorageService.updateCatalogExtractedOffer(id, {
+        const reviewUpdates = {
           stagingStatus: 'VALIDATED',
           matchedProductId: pId,
           matchedProductName: pName,
@@ -2031,14 +2051,18 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (re
           matchConfidence: 1.0,
           reviewedBy: 'admin',
           reviewedAt: new Date().toISOString()
-        });
+        };
+        StorageService.updateCatalogExtractedOffer(id, reviewUpdates as any);
+        await persistCatalogOfferReview(id, reviewUpdates);
         updatedCount++;
       } else {
-        StorageService.updateCatalogExtractedOffer(id, {
+        const rejectionUpdates = {
           stagingStatus: 'REJECTED',
           reviewedBy: 'admin',
           reviewedAt: new Date().toISOString()
-        });
+        };
+        StorageService.updateCatalogExtractedOffer(id, rejectionUpdates as any);
+        await persistCatalogOfferReview(id, rejectionUpdates);
         updatedCount++;
       }
     }
