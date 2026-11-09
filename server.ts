@@ -1529,7 +1529,7 @@ const runCatalogPublishSchedule = async (schedule: any) => {
     );
     const publishResult = await CatalogStagingManager.publishValidatedOffers(result.rows.map(row => row.id));
     if (publishResult.errors.length > 0) throw new Error(publishResult.errors.join('; '));
-    await pool.query(`UPDATE catalog_publish_schedules SET last_status = 'success', last_run_at = NOW(), updated_at = NOW() WHERE id = $1`, [schedule.id]);
+    await pool.query(`UPDATE catalog_publish_schedules SET last_status = 'success', enabled = false, next_run_at = NULL, last_run_at = NOW(), updated_at = NOW() WHERE id = $1`, [schedule.id]);
     return publishResult;
   } catch (error: any) {
     await pool.query(`UPDATE catalog_publish_schedules SET last_status = 'failed', last_run_at = NOW(), last_error = $2, updated_at = NOW() WHERE id = $1`, [schedule.id, error.message]);
