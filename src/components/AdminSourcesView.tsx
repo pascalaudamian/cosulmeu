@@ -67,6 +67,7 @@ import { AdminIndexQualityTab } from './AdminIndexQualityTab.tsx';
 import { AdminPublishPreviewModal, PublishPreviewData } from './AdminPublishPreviewModal.tsx';
 import { AdminProductDetailModal } from './AdminProductDetailModal.tsx';
 import { AdminImportConfirmModal } from './AdminImportConfirmModal.tsx';
+import AdminPublishScheduler from './AdminPublishScheduler.tsx';
 
 interface AdminSourcesViewProps {
   onRefreshAll?: () => void;
@@ -1770,17 +1771,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             </div>
           </div>
 
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-3">
-            <h3 className="text-base font-extrabold text-slate-900">
-              Planificator Automat (Cron Scheduler)
-            </h3>
-            <p className="text-xs text-slate-600">
-              Colectarea incrementală a prețurilor rulează automat zilnic la ora 04:00 (Europe/Bucharest).
-            </p>
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs font-mono text-slate-700">
-              Programat: 04:00 AM • Fus Orar: Europe/Bucharest • Worker: IndexingScheduler & CatalogStagingManager
-            </div>
-          </div>
+          <AdminPublishScheduler adminToken={adminToken} />
         </div>
       )}
 
