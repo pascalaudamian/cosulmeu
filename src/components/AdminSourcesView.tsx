@@ -170,6 +170,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   // Execution states
   const [isRunningActive, setIsRunningActive] = useState<boolean>(false);
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
+  const [reviewingOfferIds, setReviewingOfferIds] = useState<Set<string>>(new Set());
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
   // Modals
@@ -475,6 +476,29 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     sessionStorage.removeItem('cosul_meu_admin_auth');
     setIsAuthenticated(false);
     setShowLogoutConfirmModal(false);
+  };
+
+  const handleReviewOffer = async (offerId: string, action: 'approve' | 'reject') => {
+    setReviewingOfferIds(previous => new Set(previous).add(offerId));
+    try {
+      const response = await fetchWithAuth(`/api/admin/catalog-importer/staging/${offerId}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ action })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Oferta nu a putut fi actualizată.');
+      setActionMessage({ type: 'success', text: payload.message || (action === 'approve' ? 'Oferta a fost validată.' : 'Oferta a fost respinsă.') });
+      await Promise.all([loadStaging(), loadDashboard(), loadRunsAndErrors()]);
+      if (onRefreshAll) onRefreshAll();
+    } catch (error: any) {
+      setActionMessage({ type: 'error', text: error.message || 'Eroare la actualizarea ofertei.' });
+    } finally {
+      setReviewingOfferIds(previous => {
+        const next = new Set(previous);
+        next.delete(offerId);
+        return next;
+      });
+    }
   };
 
   // Filtered staging items
@@ -1397,6 +1421,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     <th className="p-3 font-bold">Preț Efectiv</th>
                     <th className="p-3 font-bold">Potrivire Canonică</th>
                     <th className="p-3 font-bold">Status Staging</th>
+                    <th className="p-3 font-bold text-right">Acțiuni</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1444,6 +1469,30 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                         >
                           {off.stagingStatus}
                         </span>
+                      </td>
+                      <td className="p-3 text-right whitespace-nowrap">
+                        {off.stagingStatus === 'NEEDS_REVIEW' ? (
+                          <div className="inline-flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleReviewOffer(off.id, 'approve')}
+                              disabled={reviewingOfferIds.has(off.id)}
+                              className="rounded-lg bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                            >
+                              {reviewingOfferIds.has(off.id) ? '...' : 'Validează'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleReviewOffer(off.id, 'reject')}
+                              disabled={reviewingOfferIds.has(off.id)}
+                              className="rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                            >
+                              Respinge
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-slate-400">Fără acțiuni</span>
+                        )}
                       </td>
                     </tr>
                   ))}
