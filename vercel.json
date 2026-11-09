@@ -10,7 +10,7 @@
   "crons": [
     {
       "path": "/api/cron/catalog-publish",
-      "schedule": "* * * * *"
+      "schedule": "0 2 * * *"
     }
   ]
 }

@@ -81,7 +81,7 @@ export default function AdminPublishScheduler({ adminToken }: Props) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2"><CalendarClock className="h-5 w-5 text-emerald-600" /><h2 className="text-xl font-extrabold text-slate-900">Scheduler publicare catalog</h2></div>
-          <p className="mt-1 text-xs text-slate-500">Configurează retailerii, data, ora și alerta pentru rulări eșuate.</p>
+          <p className="mt-1 text-xs text-slate-500">Configurează retailerii, data, ora și alerta pentru rulări eșuate. Pe Vercel Hobby, automatizarea rulează o singură dată pe zi la 02:00 UTC; pentru o rulare imediată folosește „Rulează acum”.</p>
         </div>
         <button type="button" onClick={() => load()} className="rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-50" aria-label="Reîncarcă schedulerii"><RefreshCw className="h-4 w-4" /></button>
       </div>
