@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar.js';
 import { MobileNav } from './components/MobileNav.js';
-import { DemoNoticeBanner } from './components/DemoNoticeBanner.js';
 import { DashboardView } from './components/DashboardView.js';
 import { ShoppingListView } from './components/ShoppingListView.js';
 import { PriceComparisonView } from './components/PriceComparisonView.js';
@@ -316,9 +315,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans selection:bg-emerald-100 selection:text-emerald-900">
-      {/* Demo notice banner */}
-      <DemoNoticeBanner />
-
       {/* Top Navbar */}
       <Navbar
         currentTab={currentTab}

@@ -656,7 +656,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </div>
             <h3 className="text-base font-bold text-slate-900">Confirmare resetare</h3>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              Toate listele demonstrative și cache-ul local vor fi resetate la valorile inițiale. Această acțiune nu poate fi anulată.
+              Toate listele salvate și datele locale vor fi resetate. Această acțiune nu poate fi anulată.
             </p>
             <div className="mt-5 flex items-center justify-end gap-2">
               <button

@@ -663,7 +663,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               title="Click pentru diagnosticare completă bază de date"
             >
               <Database className={`w-4 h-4 ${dbStatus?.connected ? 'text-emerald-400' : 'text-amber-400'}`} />
-              <span>{dbStatus?.statusLabel || (dbStatus?.connected ? 'PostgreSQL Conectat' : 'Mod Demonstrativ (Memorie)')}</span>
+              <span>{dbStatus?.statusLabel || (dbStatus?.connected ? 'PostgreSQL Conectat' : 'Stocare Locală')}</span>
               <span className="w-2 h-2 rounded-full animate-pulse bg-current" />
             </div>
 
@@ -685,7 +685,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div className="flex-1">
               <strong className="font-semibold text-amber-300">
-                {dbStatus?.configured ? 'Conexiunea PostgreSQL necesită atenție: ' : 'Mod Demonstrativ Activ (Date Nepersistente): '}
+                {dbStatus?.configured ? 'Conexiunea PostgreSQL necesită atenție: ' : 'Stocare Locală Activă (Date Nepersistente): '}
               </strong>
               {dbStatus?.configured
                 ? `${dbStatus.message || 'Conexiunea la PostgreSQL nu a putut fi verificată.'} Datele noi rămân temporar în fallback până la remedierea conexiunii.`
@@ -1889,7 +1889,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                 Persistență Duală
               </div>
               <p className="text-slate-600 leading-relaxed">
-                Dacă variabila <code>DATABASE_URL</code> este prezentă, toate operațiunile scriu tranzacțional în PostgreSQL. În caz contrar, se folosește fallback-ul în memorie (StorageService), marcat ca mod demonstrativ.
+                Dacă variabila <code>DATABASE_URL</code> este prezentă, toate operațiunile scriu tranzacțional în PostgreSQL. În caz contrar, se folosește stocarea locală de rezervă (StorageService).
               </p>
             </div>
           </div>

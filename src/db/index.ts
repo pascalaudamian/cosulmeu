@@ -181,7 +181,7 @@ export async function checkDbHealth(): Promise<{
     return {
       connected: false,
       persistenceMode: 'demo_memory',
-      message: 'PostgreSQL nu este configurat în variabilele de mediu. Se utilizează modul demonstrativ.',
+      message: 'PostgreSQL nu este configurat în variabilele de mediu. Se utilizează stocarea locală în memorie.',
       type: 'none'
     };
   }
@@ -213,7 +213,7 @@ export async function checkDbHealth(): Promise<{
     return {
       connected: false,
       persistenceMode: 'demo_memory',
-      message: `Eroare conexiune PostgreSQL: ${err.message || 'Host indisponibil'}. Sistemul continuă în mod demonstrativ izolat.`,
+      message: `Eroare conexiune PostgreSQL: ${err.message || 'Host indisponibil'}. Sistemul continuă pe stocarea locală.`,
       type: config.type
     };
   }
