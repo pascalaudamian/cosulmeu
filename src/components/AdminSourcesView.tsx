@@ -30,6 +30,7 @@ import {
   Play,
   Pause,
   Calendar,
+  CalendarClock,
   Zap,
   BarChart3,
   Sliders,
@@ -863,6 +864,102 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     </div>
                   </div>
                 ))}
+            </div>
+          </div>
+
+          {/* SCHEDULER & AUTOMATED PUBLISHING KPIS (Audit Requirement 2) */}
+          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                  <CalendarClock className="w-4 h-4 text-emerald-600" />
+                  Scheduler Automat & Sincronizare Programată (PostgreSQL Live)
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Monitorizare execuții cron, claim atomic, idempotență și separare publicare manuală vs. automată.
+                </p>
+              </div>
+              <button
+                onClick={() => setActiveTab('settings')}
+                className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
+              >
+                <span>Configurează Scheduler →</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 text-xs">
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Programări Active</span>
+                <span className="text-lg font-extrabold text-slate-900 mt-1 block">
+                  {operationalData?.scheduler?.activeSchedulesCount ?? 0}
+                </span>
+                <span className="text-[9px] text-slate-500">din {operationalData?.scheduler?.totalSchedulesCount ?? 0} total</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">În Desfășurare</span>
+                <span className={`text-lg font-extrabold mt-1 block ${
+                  (operationalData?.scheduler?.runningSchedulesCount ?? 0) > 0 ? 'text-blue-600 animate-pulse' : 'text-slate-900'
+                }`}>
+                  {operationalData?.scheduler?.runningSchedulesCount ?? 0}
+                </span>
+                <span className="text-[9px] text-slate-500">execuții concurente</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-200/60">
+                <span className="text-[10px] font-bold text-emerald-800 uppercase block">Publicări Reușite</span>
+                <span className="text-lg font-extrabold text-emerald-700 mt-1 block">
+                  {operationalData?.scheduler?.successfulSchedulesCount ?? 0}
+                </span>
+                <span className="text-[9px] text-emerald-600">status SUCCESS</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-amber-50/60 border border-amber-200/60">
+                <span className="text-[10px] font-bold text-amber-800 uppercase block">Publicări Parțiale</span>
+                <span className="text-lg font-extrabold text-amber-700 mt-1 block">
+                  {operationalData?.scheduler?.partialSchedulesCount ?? 0}
+                </span>
+                <span className="text-[9px] text-amber-600">cu avertismente per-retailer</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-rose-50/60 border border-rose-200/60">
+                <span className="text-[10px] font-bold text-rose-800 uppercase block">Execuții Eșuate</span>
+                <span className="text-lg font-extrabold text-rose-700 mt-1 block">
+                  {operationalData?.scheduler?.failedSchedulesCount ?? 0}
+                </span>
+                <span className="text-[9px] text-rose-600">necesită investigare</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 col-span-2 sm:col-span-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Publicări Manuale</span>
+                <span className="text-lg font-extrabold text-slate-900 mt-1 block">
+                  {operationalData?.scheduler?.manualPublishCount ?? 0}
+                </span>
+                <span className="text-[9px] text-slate-500">acțiuni admin</span>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 col-span-2 sm:col-span-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">Publicări Automate</span>
+                <span className="text-lg font-extrabold text-emerald-700 mt-1 block">
+                  {operationalData?.scheduler?.automatedPublishCount ?? 0}
+                </span>
+                <span className="text-[9px] text-slate-500">cron / scheduler</span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500 gap-2">
+              <div>
+                <strong>Următoarea execuție:</strong>{' '}
+                {operationalData?.scheduler?.nextScheduledRunAt
+                  ? new Date(operationalData.scheduler.nextScheduledRunAt).toLocaleString('ro-RO') + ' (Europe/Bucharest)'
+                  : 'Nicio programare automată viitoare'}
+              </div>
+              <div>
+                <strong>Ultima execuție:</strong>{' '}
+                {operationalData?.scheduler?.lastScheduledRunAt
+                  ? new Date(operationalData.scheduler.lastScheduledRunAt).toLocaleString('ro-RO')
+                  : 'Nicio execuție anterioară'}
+              </div>
             </div>
           </div>
 

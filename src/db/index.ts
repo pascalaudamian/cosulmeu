@@ -1880,7 +1880,17 @@ export class DatabaseService {
           (SELECT count(*) FROM catalog_extracted_offers WHERE staging_status = 'NEEDS_REVIEW') AS needs_review_offers,
           (SELECT count(*) FROM catalog_extracted_offers WHERE staging_status = 'PUBLISHED') AS published_staging_offers,
           (SELECT count(*) FROM catalog_import_errors) AS processing_errors,
-          (SELECT count(*) FROM catalog_import_runs WHERE status = 'running' AND started_at > NOW() - interval '15 minutes') AS running_imports
+          (SELECT count(*) FROM catalog_import_runs WHERE status = 'running' AND started_at > NOW() - interval '15 minutes') AS running_imports,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE enabled = true) AS active_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE last_status = 'running' AND updated_at > NOW() - interval '15 minutes') AS running_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE last_status = 'success') AS successful_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE last_status = 'partial') AS partial_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE last_status = 'failed') AS failed_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules) AS total_schedules,
+          (SELECT min(next_run_at) FROM catalog_publish_schedules WHERE enabled = true AND next_run_at IS NOT NULL) AS next_scheduled_run,
+          (SELECT max(last_run_at) FROM catalog_publish_schedules WHERE last_run_at IS NOT NULL) AS last_scheduled_run,
+          (SELECT count(*) FROM admin_audit_logs WHERE action IN ('publish_validated_offers', 'scheduler_publish_completed') AND details->>'source' = 'automated_scheduler') AS automated_publishes,
+          (SELECT count(*) FROM admin_audit_logs WHERE action = 'publish_validated_offers' AND (details->>'source' IS NULL OR details->>'source' != 'automated_scheduler')) AS manual_publishes
       `);
 
       latencyMs = Date.now() - startTime;
@@ -1942,6 +1952,18 @@ export class DatabaseService {
       const publishedStagingOffers = parseInt(counts.published_staging_offers || '0', 10);
       const processingErrors = parseInt(counts.processing_errors || '0', 10);
       const runningImports = parseInt(counts.running_imports || '0', 10);
+
+      // Metrici Scheduler de Publicare din PostgreSQL
+      const activeSchedulesCount = parseInt(counts.active_schedules || '0', 10);
+      const runningSchedulesCount = parseInt(counts.running_schedules || '0', 10);
+      const successfulSchedulesCount = parseInt(counts.successful_schedules || '0', 10);
+      const partialSchedulesCount = parseInt(counts.partial_schedules || '0', 10);
+      const failedSchedulesCount = parseInt(counts.failed_schedules || '0', 10);
+      const totalSchedulesCount = parseInt(counts.total_schedules || '0', 10);
+      const nextScheduledRunAt = counts.next_scheduled_run ? new Date(counts.next_scheduled_run).toISOString() : undefined;
+      const lastScheduledRunAt = counts.last_scheduled_run ? new Date(counts.last_scheduled_run).toISOString() : undefined;
+      const automatedPublishCount = parseInt(counts.automated_publishes || '0', 10);
+      const manualPublishCount = parseInt(counts.manual_publishes || '0', 10);
 
       // Determinare status general
       let overallStatus: OperationalDashboardData['overallStatus'] = 'TOTUL FUNCȚIONEAZĂ';
@@ -2205,7 +2227,19 @@ export class DatabaseService {
             lastExecutedAt: lastRunAt
           }
         ],
-        activeAlerts
+        activeAlerts,
+        scheduler: {
+          activeSchedulesCount,
+          runningSchedulesCount,
+          successfulSchedulesCount,
+          partialSchedulesCount,
+          failedSchedulesCount,
+          totalSchedulesCount,
+          nextScheduledRunAt,
+          lastScheduledRunAt,
+          manualPublishCount,
+          automatedPublishCount
+        }
       };
     } catch (err: any) {
       console.error('Eroare getOperationalMetrics:', err);

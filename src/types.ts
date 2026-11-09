@@ -418,5 +418,19 @@ export interface OperationalDashboardData {
     targetTab: string;
     linkActionLabel?: string;
   }[];
+  scheduler?: SchedulerMetrics;
+}
+
+export interface SchedulerMetrics {
+  activeSchedulesCount: number;
+  runningSchedulesCount: number;
+  successfulSchedulesCount: number;
+  partialSchedulesCount: number;
+  failedSchedulesCount: number;
+  totalSchedulesCount: number;
+  nextScheduledRunAt?: string;
+  lastScheduledRunAt?: string;
+  manualPublishCount: number;
+  automatedPublishCount: number;
 }
 
