@@ -261,16 +261,16 @@ export const AdminIndexQualityTab: React.FC<AdminIndexQualityTabProps> = ({ admi
               MONITORIZARE CONTINUĂ
             </span>
           </div>
-          <p className="text-xs text-slate-400 max-w-2xl">
-            Sistem automat de audit și evaluare a prospețimii prețurilor (0–24h foarte recent, 24–48h recent, 48–72h vechi, &gt;72h expirat) și a scorului de calitate (0–100) pe cei 8 retaileri din România.
+          <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
+            Sistem automat de audit și evaluare a prospețimii prețurilor (0–24h foarte recent, 24–48h recent, 48–72h vechi, &gt;72h expirat) și a scorului de calitate pentru retailerii configurați.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full lg:w-auto flex-wrap items-center gap-2">
           <button
             onClick={handleGenerateReport}
             disabled={isGeneratingReport}
-            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
+            className="flex-1 lg:flex-none px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60"
           >
             {isGeneratingReport ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5 text-emerald-400" />}
             <span>Raport Zilnic</span>
@@ -278,7 +278,7 @@ export const AdminIndexQualityTab: React.FC<AdminIndexQualityTabProps> = ({ admi
 
           <button
             onClick={() => setShowConfigModal(!showConfigModal)}
-            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+            className="flex-1 lg:flex-none px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
           >
             <Sliders className="w-3.5 h-3.5 text-amber-400" />
             <span>Ponderi & Praguri</span>
@@ -295,8 +295,8 @@ export const AdminIndexQualityTab: React.FC<AdminIndexQualityTabProps> = ({ admi
       </div>
 
       {/* KPI CARDS: Calitatea & Prospețimea Indexului */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-2xs">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-3 sm:p-4 shadow-2xs">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
             Produse Monitorizate
           </span>
