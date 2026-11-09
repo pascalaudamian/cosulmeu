@@ -50,11 +50,19 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/80 shadow-xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      <div className="hidden md:block border-b border-slate-100 bg-slate-50/70">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-8 flex items-center justify-between text-[11px] font-semibold text-slate-500">
+          <span>Prețuri actualizate pentru cumpărături mai inteligente</span>
+          <span className="flex items-center gap-1.5"><MapPin className="w-3 h-3 text-emerald-600" />{userProfile.city}</span>
+        </div>
+      </div>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 min-h-16 py-2 flex items-center justify-between gap-3">
         {/* Brand Logo */}
-        <div
+        <button
+          type="button"
           onClick={() => onSelectTab('dashboard')}
-          className="flex items-center gap-2.5 cursor-pointer group shrink-0"
+          aria-label="Mergi la pagina principală Coșul Meu"
+          className="flex items-center gap-2.5 cursor-pointer group shrink-0 text-left"
         >
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 group-hover:scale-105 transition-transform">
             <ShoppingBasket className="w-5 h-5" />
@@ -69,10 +77,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               Economisește la supermarket
             </p>
           </div>
-        </div>
+        </button>
 
         {/* Desktop Nav Links */}
-        <nav className="hidden md:flex items-center gap-1 lg:gap-2">
+        <nav aria-label="Navigație principală" className="hidden md:flex min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto lg:gap-2">
           <button
             onClick={() => onSelectTab('dashboard')}
             className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
@@ -155,10 +163,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           {(userRole === 'admin' || isAdmin) && (
             <button
               onClick={() => onSelectTab('admin-sources')}
-              className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-colors flex items-center gap-1.5 ${
+              className={`px-3 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
                 currentTab === 'admin-sources' || currentTab === 'admin-quality'
-                  ? 'bg-purple-100 text-purple-800'
-                  : 'text-purple-700 hover:bg-purple-50'
+                  ? 'bg-slate-100 text-slate-900'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
