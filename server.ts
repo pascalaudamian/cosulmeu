@@ -1883,7 +1883,7 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, (re
 });
 
 // 10b. Aprobare sau respingere în masă
-app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, (req, res) => {
+  app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, async (req, res) => {
   try {
     const { offerIds, action } = req.body;
     if (!Array.isArray(offerIds) || !['approve', 'reject'].includes(action)) {
