@@ -53,7 +53,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             Monitorizare prețuri active în {userProfile.city}
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-            Bună, {userProfile.name.split(' ')[0]}! 👋
+            {userProfile.name && userProfile.name !== 'Utilizator'
+              ? `Bună, ${userProfile.name.split(' ')[0]}! 👋`
+              : 'Bună! 👋'}
           </h1>
           <p className="text-slate-600 text-sm mt-0.5">
             Iată estimările de preț și economiile pentru coșul tău de cumpărături.

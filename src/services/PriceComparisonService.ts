@@ -121,12 +121,14 @@ export class PriceComparisonService {
    */
   static compareBasketAcrossStores(
     items: ShoppingListItem[],
-    options?: { useLoyaltyCards?: boolean }
+    options?: { useLoyaltyCards?: boolean },
+    customProducts?: Product[],
+    customOffers?: ProductOffer[]
   ): BasketStoreComparison[] {
     if (!items || items.length === 0) return [];
 
-    const allProducts = StorageService.getAllProducts();
-    const allOffers = StorageService.getProductOffers();
+    const allProducts = customProducts && customProducts.length > 0 ? customProducts : StorageService.getAllProducts();
+    const allOffers = customOffers && customOffers.length > 0 ? customOffers : StorageService.getProductOffers();
     const userProfile = StorageService.getUserProfile();
 
     const useLoyaltyCards =
@@ -304,7 +306,12 @@ export class PriceComparisonService {
   /**
    * Preluare comparație multi-retailer detaliată pentru un singur produs
    */
-  static getProductComparisonDetails(productId: string): {
+  static getProductComparisonDetails(
+    productId: string,
+    providedProduct?: Product,
+    providedOffers?: ProductOffer[],
+    providedStores?: Store[]
+  ): {
     product: Product;
     offers: Array<{
       store: Store;
@@ -334,14 +341,20 @@ export class PriceComparisonService {
     lastCheckedDate: string;
     overallFreshnessStatus: 'very_recent' | 'recent' | 'stale' | 'expired';
   } | null {
-    const product = StorageService.getAllProducts().find(p => p.id === productId);
+    const product = providedProduct || StorageService.getAllProducts().find(p => p.id === productId);
     if (!product) return null;
 
-    const allStores: Store[] = STORES;
-    const storeMap = new Map<string, Store>(allStores.map(s => [s.id, s]));
+    const allStores: Store[] = providedStores && providedStores.length > 0 ? providedStores : STORES;
+    const storeMap = new Map<string, Store>();
+    for (const s of allStores) {
+      storeMap.set(s.id, s);
+      storeMap.set(`store-${s.id}`, s);
+    }
 
     // Oferte valide neexpirate
-    const rawOffers = this.getOffersForProduct(productId, false);
+    const rawOffers = providedOffers
+      ? providedOffers.filter(o => o.productId === productId && this.isOfferValid(o))
+      : this.getOffersForProduct(productId, false);
 
     if (rawOffers.length === 0) {
       return {

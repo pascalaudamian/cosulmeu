@@ -456,10 +456,13 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
 });
 
 // Server-side Basket Comparison endpoint
-app.post('/api/catalog/compare', (req, res) => {
+app.post('/api/catalog/compare', async (req, res) => {
   try {
     const { items = [], options = {} } = req.body;
-    const comparisons = PriceComparisonService.compareBasketAcrossStores(items, options);
+    const [allProducts, allOffers] = isPostgresConfigured()
+      ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers()])
+      : [StorageService.getAllProducts(), StorageService.getProductOffers()];
+    const comparisons = PriceComparisonService.compareBasketAcrossStores(items, options, allProducts, allOffers);
     res.json({ success: true, comparisons });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la calculul comparativ al coșului.' });
@@ -467,10 +470,11 @@ app.post('/api/catalog/compare', (req, res) => {
 });
 
 // GET /api/categories - Taxonomie completă categorii și subcategorii
-app.get('/api/categories', (req, res) => {
+app.get('/api/categories', async (req, res) => {
   try {
-    const allProducts = StorageService.getAllProducts();
-    const offers = StorageService.getProductOffers();
+    const [allProducts, offers] = isPostgresConfigured()
+      ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers()])
+      : [StorageService.getAllProducts(), StorageService.getProductOffers()];
     const validOfferProductIds = new Set(offers.filter(o => o.verificationStatus !== 'expired').map(o => o.productId));
 
     const enriched = CATEGORIES_TAXONOMY.map(cat => {
@@ -669,15 +673,36 @@ app.get('/api/products', async (req, res) => {
 });
 
 // GET /api/products/:id - Detaliu produs & comparație multi-retailer completă
-app.get('/api/products/:id', (req, res) => {
+app.get('/api/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const comparison = PriceComparisonService.getProductComparisonDetails(id);
+
+    // 1. Încercare din baza de date persistentă (PostgreSQL / Supabase)
+    const dbDetail = await DatabaseService.getProductDetailById(id);
+    let comparison = null;
+    let observations: any[] = [];
+
+    if (dbDetail && dbDetail.product) {
+      comparison = PriceComparisonService.getProductComparisonDetails(
+        id,
+        dbDetail.product,
+        dbDetail.offers,
+        STORES
+      );
+      observations = dbDetail.priceHistory || [];
+    }
+
+    // 2. Fallback la memorie locală dacă produsul nu este în DB
+    if (!comparison) {
+      comparison = PriceComparisonService.getProductComparisonDetails(id);
+      if (comparison) {
+        observations = StorageService.getPriceObservations().filter(obs => obs.productId === id);
+      }
+    }
+
     if (!comparison) {
       return res.status(404).json({ error: 'Produsul nu a fost găsit în catalog.' });
     }
-
-    const observations = StorageService.getPriceObservations().filter(obs => obs.productId === id);
 
     res.json({
       success: true,
@@ -688,6 +713,7 @@ app.get('/api/products/:id', (req, res) => {
       observations: observations.slice(0, 50)
     });
   } catch (err: any) {
+    console.error('Eroare GET /api/products/:id:', err);
     res.status(500).json({ error: 'Eroare la preluarea detaliilor produsului.' });
   }
 });

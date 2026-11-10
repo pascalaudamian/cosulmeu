@@ -29,6 +29,7 @@ import {
 } from '../data/mockData.ts';
 import { ProductMatcher } from '../services/ProductMatcher.ts';
 import { mapRetailerCategoryToStandard } from '../data/categories.ts';
+import { supabase } from '../lib/supabase.ts';
 
 const { Pool } = pg;
 
@@ -68,10 +69,11 @@ export function getDbConfig(): DbConfig {
 
   // Option 2: Supabase or Vercel Postgres connection string
   const connectionString =
-    process.env.SUPABASE_DB_URL ||
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_URL_NON_POOLING ||
-    process.env.POSTGRES_URL;
+  process.env.SUPABASE_DB_URL ||
+  process.env.POSTGRES_PRISMA_URL ||
+  process.env.POSTGRES_URL ||
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL_NON_POOLING;
   if (connectionString) {
     const rawUrl = connectionString || '';
     const isLocal = rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1') || process.env.PGSSLMODE === 'disable';
@@ -95,6 +97,15 @@ export function getDbConfig(): DbConfig {
     };
   }
 
+  // Option 4: Supabase client is available (persistent storage via Supabase API)
+  if (typeof supabase !== 'undefined' && supabase) {
+    return {
+      configured: true,
+      type: 'supabase',
+      host: 'supabase-api'
+    };
+  }
+
   return {
     configured: false,
     type: 'none'
@@ -115,18 +126,31 @@ export function getPool(): pg.Pool | null {
     return null;
   }
 
+  const hasConnectionString = Boolean(
+    process.env.SUPABASE_DB_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL_NON_POOLING
+  );
+  const hasHostConfig = Boolean(
+    (process.env.SQL_HOST && process.env.SQL_USER) ||
+    (process.env.PGHOST && process.env.PGUSER)
+  );
+
+  if (!hasConnectionString && !hasHostConfig) {
+    // Running in direct Supabase client mode without TCP PG connection string
+    return null;
+  }
+
   if (!global._postgresPool) {
-    if (
-      process.env.SUPABASE_DB_URL ||
-      process.env.DATABASE_URL ||
-      process.env.POSTGRES_URL_NON_POOLING ||
-      process.env.POSTGRES_URL
-    ) {
+    if (hasConnectionString) {
       const connectionString =
         process.env.SUPABASE_DB_URL ||
+        process.env.POSTGRES_PRISMA_URL ||
+        process.env.POSTGRES_URL ||
         process.env.DATABASE_URL ||
-        process.env.POSTGRES_URL_NON_POOLING ||
-        process.env.POSTGRES_URL;
+        process.env.POSTGRES_URL_NON_POOLING;
       const sanitizedConnectionString = connectionString?.replace(/([?&])ssl(mode|cert|key|rootcert)=[^&]*/gi, '$1').replace(/[?&]$/, '');
       global._postgresPool = new Pool({
         connectionString: sanitizedConnectionString,
@@ -492,90 +516,249 @@ export class DatabaseService {
   // --- PRODUCTS ---
   static async getProducts(): Promise<Product[]> {
     const pool = getPool();
-    if (!pool) return PRODUCTS;
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM products ORDER BY name ASC');
+        if (res.rows.length > 0) {
+          return res.rows.map(r => ({
+            id: r.id,
+            name: r.name,
+            brand: r.brand,
+            category: r.category,
+            defaultUnit: r.default_unit || 'buc',
+            packageWeightOrVolume: parseFloat(r.package_weight_or_volume) || 1,
+            packageUnit: r.package_unit || 'buc',
+            normalizedUnit: r.normalized_unit || 'buc',
+            barcode: r.barcode || undefined,
+            imageUrl: r.image_url || undefined,
+            isBio: Boolean(r.is_bio),
+            isRomanianProduct: Boolean(r.is_romanian_product),
+            baseReferencePrice: parseFloat(r.base_reference_price) || 0
+          }));
+        }
+      } catch (err: any) {
+        console.warn('Postgres pool getProducts failed, falling back to Supabase:', err.message);
+      }
+    }
 
     try {
-      const res = await pool.query('SELECT * FROM products ORDER BY name ASC');
-      if (res.rows.length === 0) return PRODUCTS;
-      return res.rows.map(r => ({
-        id: r.id,
-        name: r.name,
-        brand: r.brand,
-        category: r.category,
-        defaultUnit: r.default_unit,
-        packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
-        packageUnit: r.package_unit,
-        normalizedUnit: r.normalized_unit,
-        barcode: r.barcode || undefined,
-        imageUrl: r.image_url || undefined,
-        isBio: r.is_bio,
-        isRomanianProduct: r.is_romanian_product,
-        baseReferencePrice: parseFloat(r.base_reference_price)
-      }));
-    } catch {
-      return PRODUCTS;
+      const { data, error } = await supabase.from('products').select('*').order('name', { ascending: true });
+      if (!error && data && data.length > 0) {
+        return data.map(r => ({
+          id: r.id,
+          name: r.name,
+          brand: r.brand,
+          category: r.category,
+          defaultUnit: r.default_unit || 'buc',
+          packageWeightOrVolume: parseFloat(r.package_weight_or_volume) || 1,
+          packageUnit: r.package_unit || 'buc',
+          normalizedUnit: r.normalized_unit || 'buc',
+          barcode: r.barcode || undefined,
+          imageUrl: r.image_url || undefined,
+          isBio: Boolean(r.is_bio),
+          isRomanianProduct: Boolean(r.is_romanian_product),
+          baseReferencePrice: parseFloat(r.base_reference_price) || 0
+        }));
+      }
+    } catch (err: any) {
+      console.warn('Supabase getProducts failed:', err.message);
+    }
+
+    return PRODUCTS;
+  }
+
+  static async insertProduct(product: Product): Promise<boolean> {
+    const pool = getPool();
+    if (pool) {
+      try {
+        await pool.query(
+          `INSERT INTO products (
+            id, name, brand, category, default_unit, package_weight_or_volume,
+            package_unit, normalized_unit, barcode, image_url, is_bio,
+            is_romanian_product, base_reference_price, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            brand = EXCLUDED.brand,
+            category = EXCLUDED.category,
+            default_unit = EXCLUDED.default_unit,
+            package_weight_or_volume = EXCLUDED.package_weight_or_volume,
+            package_unit = EXCLUDED.package_unit,
+            normalized_unit = EXCLUDED.normalized_unit,
+            barcode = EXCLUDED.barcode,
+            image_url = EXCLUDED.image_url,
+            is_bio = EXCLUDED.is_bio,
+            is_romanian_product = EXCLUDED.is_romanian_product,
+            base_reference_price = EXCLUDED.base_reference_price,
+            updated_at = NOW()`,
+          [
+            product.id,
+            product.name,
+            product.brand,
+            product.category,
+            product.defaultUnit || 'buc',
+            product.packageWeightOrVolume || 1,
+            product.packageUnit || 'buc',
+            product.normalizedUnit || 'buc',
+            product.barcode || null,
+            product.imageUrl || null,
+            Boolean(product.isBio),
+            Boolean(product.isRomanianProduct),
+            product.baseReferencePrice || 0
+          ]
+        );
+        return true;
+      } catch (err: any) {
+        console.warn('Postgres pool insertProduct failed, falling back to Supabase:', err.message);
+      }
+    }
+
+    try {
+      const { error } = await supabase.from('products').upsert({
+        id: product.id,
+        name: product.name,
+        brand: product.brand,
+        category: product.category,
+        default_unit: product.defaultUnit || 'buc',
+        package_weight_or_volume: product.packageWeightOrVolume || 1,
+        package_unit: product.packageUnit || 'buc',
+        normalized_unit: product.normalizedUnit || 'buc',
+        barcode: product.barcode || null,
+        image_url: product.imageUrl || null,
+        is_bio: Boolean(product.isBio),
+        is_romanian_product: Boolean(product.isRomanianProduct),
+        base_reference_price: product.baseReferencePrice || 0,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+
+      return !error;
+    } catch (err: any) {
+      console.error('Supabase insertProduct failed:', err.message);
+      return false;
     }
   }
 
   // --- STORES ---
   static async getStores(): Promise<Store[]> {
     const pool = getPool();
-    if (!pool) return STORES;
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT * FROM stores ORDER BY rating DESC');
+        if (res.rows.length > 0) {
+          return res.rows.map(r => ({
+            id: r.id,
+            name: r.name,
+            slug: r.slug,
+            chain: r.chain,
+            brandColor: r.brand_color,
+            accentColor: r.accent_color,
+            logoUrl: r.logo_url || undefined,
+            type: r.store_type,
+            rating: parseFloat(r.rating) || 4.0,
+            locationsCount: r.locations_count || 100,
+            sampleAddress: r.sample_address,
+            isPartner: Boolean(r.is_partner)
+          }));
+        }
+      } catch (err: any) {
+        console.warn('Postgres pool getStores failed, falling back to Supabase:', err.message);
+      }
+    }
 
     try {
-      const res = await pool.query('SELECT * FROM stores ORDER BY rating DESC');
-      if (res.rows.length === 0) return STORES;
-      return res.rows.map(r => ({
-        id: r.id,
-        name: r.name,
-        slug: r.slug,
-        chain: r.chain,
-        brandColor: r.brand_color,
-        accentColor: r.accent_color,
-        logoUrl: r.logo_url || undefined,
-        type: r.store_type,
-        rating: parseFloat(r.rating),
-        locationsCount: r.locations_count,
-        sampleAddress: r.sample_address,
-        isPartner: r.is_partner
-      }));
-    } catch {
-      return STORES;
-    }
+      const { data, error } = await supabase.from('stores').select('*').order('rating', { ascending: false });
+      if (!error && data && data.length > 0) {
+        return data.map(r => ({
+          id: r.id,
+          name: r.name,
+          slug: r.slug,
+          chain: r.chain,
+          brandColor: r.brand_color,
+          accentColor: r.accent_color,
+          logoUrl: r.logo_url || undefined,
+          type: r.store_type,
+          rating: parseFloat(r.rating) || 4.0,
+          locationsCount: r.locations_count || 100,
+          sampleAddress: r.sample_address,
+          isPartner: Boolean(r.is_partner)
+        }));
+      }
+    } catch {}
+
+    return STORES;
   }
 
   // --- PRODUCT OFFERS (CURRENT STATE) ---
   static async getOffers(): Promise<ProductOffer[]> {
     const pool = getPool();
-    if (!pool) return PRODUCT_OFFERS;
+    if (pool) {
+      try {
+        const res = await pool.query(
+          "SELECT * FROM product_offers WHERE source != 'demo' AND verification_status != 'demo'"
+        );
+        if (res.rows.length > 0) {
+          return res.rows.map(r => ({
+            id: r.id,
+            productId: r.product_id,
+            storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+            sourceId: r.source_id || undefined,
+            price: parseFloat(r.price),
+            originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+            unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
+            unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+            isPromo: Boolean(r.is_promo),
+            promoDetails: r.promo_details || undefined,
+            loyaltyCardRequired: Boolean(r.loyalty_card_required),
+            loyaltyCardName: r.loyalty_card_name || undefined,
+            validUntil: r.valid_until ? (r.valid_until.toISOString?.().split('T')[0] || String(r.valid_until).slice(0, 10)) : undefined,
+            observationDate: r.observation_date ? (r.observation_date.toISOString?.().split('T')[0] || String(r.observation_date).slice(0, 10)) : new Date().toISOString().split('T')[0],
+            source: r.source,
+            confidenceLevel: r.confidence_level || 'high',
+            verificationStatus: r.verification_status || 'verified',
+            lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+            isSponsored: Boolean(r.is_sponsored)
+          }));
+        }
+      } catch (err: any) {
+        console.warn('Postgres pool getOffers failed, falling back to Supabase:', err.message);
+      }
+    }
 
     try {
-      const res = await pool.query('SELECT * FROM product_offers');
-      if (res.rows.length === 0) return PRODUCT_OFFERS;
-      return res.rows.map(r => ({
-        id: r.id,
-        productId: r.product_id,
-        storeId: r.store_id,
-        sourceId: r.source_id || undefined,
-        price: parseFloat(r.price),
-        originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
-        unitPrice: parseFloat(r.unit_price),
-        unitPriceMeasure: r.unit_price_measure,
-        isPromo: r.is_promo,
-        promoDetails: r.promo_details || undefined,
-        loyaltyCardRequired: r.loyalty_card_required,
-        loyaltyCardName: r.loyalty_card_name || undefined,
-        validUntil: r.valid_until ? r.valid_until.toISOString?.().split('T')[0] || String(r.valid_until).slice(0, 10) : undefined,
-        observationDate: r.observation_date ? r.observation_date.toISOString?.().split('T')[0] || String(r.observation_date).slice(0, 10) : new Date().toISOString().split('T')[0],
-        source: r.source,
-        confidenceLevel: r.confidence_level,
-        verificationStatus: r.verification_status,
-        lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
-        isSponsored: r.is_sponsored
-      }));
-    } catch {
-      return PRODUCT_OFFERS;
+      const { data, error } = await supabase
+        .from('product_offers')
+        .select('*')
+        .neq('source', 'demo')
+        .neq('verification_status', 'demo');
+
+      if (!error && data && data.length > 0) {
+        return data.map(r => ({
+          id: r.id,
+          productId: r.product_id,
+          storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+          sourceId: r.source_id || undefined,
+          price: parseFloat(r.price),
+          originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+          unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
+          unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+          isPromo: Boolean(r.is_promo),
+          promoDetails: r.promo_details || undefined,
+          loyaltyCardRequired: Boolean(r.loyalty_card_required),
+          loyaltyCardName: r.loyalty_card_name || undefined,
+          validUntil: r.valid_until ? String(r.valid_until).slice(0, 10) : undefined,
+          observationDate: r.observation_date ? String(r.observation_date).slice(0, 10) : new Date().toISOString().split('T')[0],
+          source: r.source || 'verified',
+          confidenceLevel: r.confidence_level || 'high',
+          verificationStatus: r.verification_status || 'verified',
+          lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+          isSponsored: Boolean(r.is_sponsored)
+        }));
+      }
+    } catch (err: any) {
+      console.warn('Supabase getOffers failed:', err.message);
     }
+
+    return [];
   }
 
   /**
@@ -584,162 +767,242 @@ export class DatabaseService {
    */
   static async upsertOffers(offers: ProductOffer[]): Promise<{ added: number; updated: number; persisted: boolean }> {
     const pool = getPool();
-    if (!pool) {
-      return { added: 0, updated: 0, persisted: false };
+    if (pool) {
+      let added = 0;
+      let updated = 0;
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        for (const off of offers) {
+          const query = `
+            INSERT INTO product_offers (
+              id, product_id, store_id, source_id, price, original_price,
+              unit_price, unit_price_measure, is_promo, promo_details,
+              loyalty_card_required, loyalty_card_name, valid_until,
+              observation_date, source, confidence_level, verification_status,
+              last_checked, is_sponsored, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), $18, NOW())
+            ON CONFLICT (product_id, store_id) DO UPDATE SET
+              price = EXCLUDED.price,
+              original_price = EXCLUDED.original_price,
+              unit_price = EXCLUDED.unit_price,
+              unit_price_measure = EXCLUDED.unit_price_measure,
+              is_promo = EXCLUDED.is_promo,
+              promo_details = EXCLUDED.promo_details,
+              loyalty_card_required = EXCLUDED.loyalty_card_required,
+              loyalty_card_name = EXCLUDED.loyalty_card_name,
+              valid_until = EXCLUDED.valid_until,
+              observation_date = EXCLUDED.observation_date,
+              source = EXCLUDED.source,
+              confidence_level = EXCLUDED.confidence_level,
+              verification_status = EXCLUDED.verification_status,
+              last_checked = NOW(),
+              updated_at = NOW()
+            RETURNING (xmax = 0) AS is_inserted;
+          `;
+
+          const res = await client.query(query, [
+            off.id,
+            off.productId,
+            off.storeId,
+            off.sourceId || null,
+            off.price,
+            off.originalPrice || null,
+            off.unitPrice,
+            off.unitPriceMeasure,
+            off.isPromo,
+            off.promoDetails || null,
+            off.loyaltyCardRequired || false,
+            off.loyaltyCardName || null,
+            off.validUntil || null,
+            off.observationDate,
+            off.source,
+            off.confidenceLevel,
+            off.verificationStatus,
+            off.isSponsored || false
+          ]);
+
+          if (res.rows[0]?.is_inserted) {
+            added++;
+          } else {
+            updated++;
+          }
+        }
+
+        await client.query('COMMIT');
+        return { added, updated, persisted: true };
+      } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Eroare tranzacție upsert oferte în PostgreSQL:', err);
+        throw err;
+      } finally {
+        client.release();
+      }
     }
 
-    let added = 0;
-    let updated = 0;
-    const client = await pool.connect();
-
+    // Supabase fallback upsert
     try {
-      await client.query('BEGIN');
+      const records = offers.map(off => ({
+        id: off.id,
+        product_id: off.productId,
+        store_id: off.storeId,
+        source_id: off.sourceId || null,
+        price: off.price,
+        original_price: off.originalPrice || null,
+        unit_price: off.unitPrice,
+        unit_price_measure: off.unitPriceMeasure,
+        is_promo: off.isPromo,
+        promo_details: off.promoDetails || null,
+        loyalty_card_required: off.loyaltyCardRequired || false,
+        loyalty_card_name: off.loyaltyCardName || null,
+        valid_until: off.validUntil || null,
+        observation_date: off.observationDate,
+        source: off.source,
+        confidence_level: off.confidenceLevel,
+        verification_status: off.verificationStatus,
+        last_checked: new Date().toISOString(),
+        is_sponsored: off.isSponsored || false,
+        updated_at: new Date().toISOString()
+      }));
 
-      for (const off of offers) {
-        const query = `
-          INSERT INTO product_offers (
-            id, product_id, store_id, source_id, price, original_price,
-            unit_price, unit_price_measure, is_promo, promo_details,
-            loyalty_card_required, loyalty_card_name, valid_until,
-            observation_date, source, confidence_level, verification_status,
-            last_checked, is_sponsored, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), $18, NOW())
-          ON CONFLICT (product_id, store_id) DO UPDATE SET
-            price = EXCLUDED.price,
-            original_price = EXCLUDED.original_price,
-            unit_price = EXCLUDED.unit_price,
-            unit_price_measure = EXCLUDED.unit_price_measure,
-            is_promo = EXCLUDED.is_promo,
-            promo_details = EXCLUDED.promo_details,
-            loyalty_card_required = EXCLUDED.loyalty_card_required,
-            loyalty_card_name = EXCLUDED.loyalty_card_name,
-            valid_until = EXCLUDED.valid_until,
-            observation_date = EXCLUDED.observation_date,
-            source = EXCLUDED.source,
-            confidence_level = EXCLUDED.confidence_level,
-            verification_status = EXCLUDED.verification_status,
-            last_checked = NOW(),
-            updated_at = NOW()
-          RETURNING (xmax = 0) AS is_inserted;
-        `;
-
-        const res = await client.query(query, [
-          off.id,
-          off.productId,
-          off.storeId,
-          off.sourceId || null,
-          off.price,
-          off.originalPrice || null,
-          off.unitPrice,
-          off.unitPriceMeasure,
-          off.isPromo,
-          off.promoDetails || null,
-          off.loyaltyCardRequired || false,
-          off.loyaltyCardName || null,
-          off.validUntil || null,
-          off.observationDate,
-          off.source,
-          off.confidenceLevel,
-          off.verificationStatus,
-          off.isSponsored || false
-        ]);
-
-        if (res.rows[0]?.is_inserted) {
-          added++;
-        } else {
-          updated++;
-        }
+      const { error } = await supabase.from('product_offers').upsert(records, { onConflict: 'product_id,store_id' });
+      if (error) {
+        console.error('Supabase upsertOffers error:', error);
+        return { added: 0, updated: 0, persisted: false };
       }
-
-      await client.query('COMMIT');
-      return { added, updated, persisted: true };
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('Eroare tranzacție upsert oferte în PostgreSQL:', err);
-      throw err;
-    } finally {
-      client.release();
+      return { added: offers.length, updated: 0, persisted: true };
+    } catch (e: any) {
+      console.error('Supabase upsertOffers exception:', e.message);
+      return { added: 0, updated: 0, persisted: false };
     }
   }
 
   // --- PRICE OBSERVATIONS (APPEND-ONLY AUDIT TIMELINE) ---
-  /**
-   * Appends new price observations.
-   * Guarantees that historical entries are strictly preserved and never mutated or deleted.
-   */
   static async appendPriceObservations(observations: PriceObservation[]): Promise<{ inserted: number; persisted: boolean }> {
     const pool = getPool();
-    if (!pool) {
-      return { inserted: 0, persisted: false };
+    if (pool) {
+      let inserted = 0;
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        for (const obs of observations) {
+          const res = await client.query(
+            `INSERT INTO price_observations (id, product_id, store_id, source_id, price, date, receipt_id, loyalty_card_used, source)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (product_id, store_id, date, price) DO NOTHING
+             RETURNING id`,
+            [
+              obs.id,
+              obs.productId,
+              obs.storeId,
+              obs.sourceId || null,
+              obs.price,
+              obs.date,
+              obs.receiptId || null,
+              obs.loyaltyCardUsed || false,
+              obs.source
+            ]
+          );
+
+          if (res.rowCount && res.rowCount > 0) {
+            inserted++;
+          }
+        }
+
+        await client.query('COMMIT');
+        return { inserted, persisted: true };
+      } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Eroare append istoric observații în PostgreSQL:', err);
+        throw err;
+      } finally {
+        client.release();
+      }
     }
 
-    let inserted = 0;
-    const client = await pool.connect();
-
     try {
-      await client.query('BEGIN');
+      const records = observations.map(obs => ({
+        id: obs.id,
+        product_id: obs.productId,
+        store_id: obs.storeId,
+        source_id: obs.sourceId || null,
+        price: obs.price,
+        date: obs.date,
+        receipt_id: obs.receiptId || null,
+        loyalty_card_used: obs.loyaltyCardUsed || false,
+        source: obs.source
+      }));
 
-      for (const obs of observations) {
-        const res = await client.query(
-          `INSERT INTO price_observations (id, product_id, store_id, source_id, price, date, receipt_id, loyalty_card_used, source)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (product_id, store_id, date, price) DO NOTHING
-           RETURNING id`,
-          [
-            obs.id,
-            obs.productId,
-            obs.storeId,
-            obs.sourceId || null,
-            obs.price,
-            obs.date,
-            obs.receiptId || null,
-            obs.loyaltyCardUsed || false,
-            obs.source
-          ]
-        );
-
-        if (res.rowCount && res.rowCount > 0) {
-          inserted++;
-        }
+      const { error } = await supabase.from('price_observations').insert(records);
+      if (error) {
+        console.error('Supabase appendPriceObservations error:', error);
+        return { inserted: 0, persisted: false };
       }
-
-      await client.query('COMMIT');
-      return { inserted, persisted: true };
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('Eroare append istoric observații în PostgreSQL:', err);
-      throw err;
-    } finally {
-      client.release();
+      return { inserted: observations.length, persisted: true };
+    } catch (e: any) {
+      console.error('Supabase appendPriceObservations exception:', e.message);
+      return { inserted: 0, persisted: false };
     }
   }
 
   static async getPriceObservations(productId?: string): Promise<PriceObservation[]> {
     const pool = getPool();
-    if (!pool) return PRICE_OBSERVATIONS;
+    if (pool) {
+      try {
+        const query = productId
+          ? 'SELECT * FROM price_observations WHERE product_id = $1 ORDER BY date ASC'
+          : 'SELECT * FROM price_observations ORDER BY date DESC LIMIT 200';
+        const params = productId ? [productId] : [];
+        const res = await pool.query(query, params);
+
+        if (res.rows.length > 0) {
+          return res.rows.map(r => ({
+            id: r.id,
+            productId: r.product_id,
+            storeId: r.store_id,
+            sourceId: r.source_id || undefined,
+            price: parseFloat(r.price),
+            date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
+            receiptId: r.receipt_id || undefined,
+            loyaltyCardUsed: r.loyalty_card_used,
+            source: r.source
+          }));
+        }
+      } catch (err: any) {
+        console.warn('Postgres pool getPriceObservations failed, falling back to Supabase:', err.message);
+      }
+    }
 
     try {
-      const query = productId
-        ? 'SELECT * FROM price_observations WHERE product_id = $1 ORDER BY date ASC'
-        : 'SELECT * FROM price_observations ORDER BY date DESC LIMIT 200';
-      const params = productId ? [productId] : [];
-      const res = await pool.query(query, params);
-
-      if (res.rows.length === 0) return PRICE_OBSERVATIONS;
-      return res.rows.map(r => ({
-        id: r.id,
-        productId: r.product_id,
-        storeId: r.store_id,
-        sourceId: r.source_id || undefined,
-        price: parseFloat(r.price),
-        date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
-        receiptId: r.receipt_id || undefined,
-        loyaltyCardUsed: r.loyalty_card_used,
-        source: r.source
-      }));
-    } catch {
-      return PRICE_OBSERVATIONS;
+      let query = supabase.from('price_observations').select('*');
+      if (productId) {
+        query = query.eq('product_id', productId).order('date', { ascending: true });
+      } else {
+        query = query.order('date', { ascending: false }).limit(200);
+      }
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        return data.map(r => ({
+          id: r.id,
+          productId: r.product_id,
+          storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+          sourceId: r.source_id || undefined,
+          price: parseFloat(r.price),
+          date: r.date ? String(r.date).slice(0, 10) : '',
+          receiptId: r.receipt_id || undefined,
+          loyaltyCardUsed: Boolean(r.loyalty_card_used),
+          source: r.source || 'verified'
+        }));
+      }
+    } catch (err: any) {
+      console.warn('Supabase getPriceObservations failed:', err.message);
     }
+
+    return [];
   }
 
   // --- MATCH CANDIDATES ---
@@ -1236,6 +1499,16 @@ export class DatabaseService {
       await client.query('BEGIN');
 
       const todayStr = new Date().toISOString().split('T')[0];
+      const sourceRes = await client.query(
+        `SELECT ds.id
+           FROM data_sources ds
+           LEFT JOIN stores s ON s.id = ds.store_id
+          WHERE ds.id = $1 OR ds.store_id = $1 OR s.slug = $1
+          ORDER BY ds.created_at ASC
+          LIMIT 1`,
+        [params.retailerId]
+      );
+      const dbSourceId = sourceRes.rows[0]?.id || null;
 
       // Preluăm toate produsele existente pentru potrivire fuzzy de rezervă
       const existingProductsRes = await client.query('SELECT * FROM products');
@@ -1316,7 +1589,7 @@ export class DatabaseService {
           });
 
           if (matchResult.matchedProduct && matchResult.confidence >= 0.75) {
-            canonicalProduct = matchResult.matchedProduct;
+            canonicalProduct = dbProducts.find(p => p.id === matchResult.matchedProduct!.id);
           }
         }
 
@@ -1468,7 +1741,7 @@ export class DatabaseService {
               offerId,
               canonicalId,
               params.retailerId,
-              params.sourceId,
+              dbSourceId,
               item.effectivePrice,
               item.normalPrice !== item.effectivePrice ? item.normalPrice : null,
               item.normalPrice || null,
@@ -1497,7 +1770,7 @@ export class DatabaseService {
               obsId,
               canonicalId,
               params.retailerId,
-              params.sourceId,
+              dbSourceId,
               item.effectivePrice,
               item.normalPrice || null,
               item.promoPrice || null,
@@ -1597,7 +1870,7 @@ export class DatabaseService {
                 obsId,
                 canonicalId,
                 params.retailerId,
-                params.sourceId,
+                dbSourceId,
                 item.effectivePrice,
                 item.normalPrice || null,
                 item.promoPrice || null,
@@ -2342,48 +2615,176 @@ export class DatabaseService {
    */
   static async getProductDetailById(productId: string): Promise<any> {
     const pool = getPool();
-    if (!pool) return null;
+    if (pool) {
+      try {
+        const prodRes = await pool.query(`SELECT * FROM products WHERE id = $1`, [productId]);
+        if (prodRes.rows.length > 0) {
+          const product = prodRes.rows[0];
+
+          const offersRes = await pool.query(`
+            SELECT po.*, s.name AS store_name, s.brand_color AS store_brand_color, s.logo_url AS store_logo_url
+            FROM product_offers po
+            LEFT JOIN stores s ON s.id = po.store_id
+            WHERE po.product_id = $1
+            ORDER BY po.price ASC
+          `, [productId]);
+
+          const historyRes = await pool.query(`
+            SELECT * FROM price_observations
+            WHERE product_id = $1
+            ORDER BY date DESC, created_at DESC
+            LIMIT 50
+          `, [productId]);
+
+          const retailerMappingRes = await pool.query(`
+            SELECT * FROM retailer_products
+            WHERE product_id = $1
+          `, [productId]);
+
+          const promosRes = await pool.query(`
+            SELECT * FROM promotions
+            WHERE product_id = $1
+            ORDER BY ends_at DESC NULLS LAST
+          `, [productId]);
+
+          return {
+            product: {
+              id: product.id,
+              name: product.name,
+              brand: product.brand,
+              category: product.category,
+              defaultUnit: product.default_unit || 'buc',
+              packageWeightOrVolume: parseFloat(product.package_weight_or_volume) || 1,
+              packageUnit: product.package_unit || 'buc',
+              normalizedUnit: product.normalized_unit || 'buc',
+              barcode: product.barcode || undefined,
+              imageUrl: product.image_url || undefined,
+              isBio: Boolean(product.is_bio),
+              isRomanianProduct: Boolean(product.is_romanian_product),
+              baseReferencePrice: parseFloat(product.base_reference_price) || 0
+            },
+            offers: offersRes.rows.map(r => ({
+              id: r.id,
+              productId: r.product_id,
+              storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+              price: parseFloat(r.price),
+              originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+              unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
+              unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+              isPromo: Boolean(r.is_promo),
+              promoDetails: r.promo_details || undefined,
+              loyaltyCardRequired: Boolean(r.loyalty_card_required),
+              loyaltyCardName: r.loyalty_card_name || undefined,
+              validUntil: r.valid_until ? (r.valid_until.toISOString?.().split('T')[0] || String(r.valid_until).slice(0, 10)) : undefined,
+              observationDate: r.observation_date ? (r.observation_date.toISOString?.().split('T')[0] || String(r.observation_date).slice(0, 10)) : new Date().toISOString().split('T')[0],
+              source: r.source || 'verified',
+              confidenceLevel: r.confidence_level || 'high',
+              verificationStatus: r.verification_status || 'verified',
+              lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+              isSponsored: Boolean(r.is_sponsored)
+            })),
+            priceHistory: historyRes.rows.map(h => ({
+              id: h.id,
+              productId: h.product_id,
+              storeId: h.store_id ? h.store_id.replace(/^store-/, '') : '',
+              price: parseFloat(h.price),
+              date: h.date ? (h.date.toISOString?.().split('T')[0] || String(h.date).slice(0, 10)) : '',
+              source: h.source || 'verified'
+            })),
+            retailerMappings: retailerMappingRes.rows,
+            promotions: promosRes.rows
+          };
+        }
+      } catch (err: any) {
+        console.warn('Postgres pool getProductDetailById failed, falling back to Supabase:', err.message);
+      }
+    }
 
     try {
-      const prodRes = await pool.query(`SELECT * FROM products WHERE id = $1`, [productId]);
-      if (prodRes.rows.length === 0) return null;
-      const product = prodRes.rows[0];
+      const { data: prodData, error: prodErr } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', productId)
+        .maybeSingle();
 
-      const offersRes = await pool.query(`
-        SELECT po.*, s.name AS store_name, s.brand_color AS store_brand_color, s.logo_url AS store_logo_url
-        FROM product_offers po
-        LEFT JOIN stores s ON s.id = po.store_id
-        WHERE po.product_id = $1
-        ORDER BY po.price ASC
-      `, [productId]);
+      if (prodErr || !prodData) {
+        return null;
+      }
 
-      const historyRes = await pool.query(`
-        SELECT * FROM price_observations
-        WHERE product_id = $1
-        ORDER BY date DESC, created_at DESC
-        LIMIT 50
-      `, [productId]);
+      const product: Product = {
+        id: prodData.id,
+        name: prodData.name,
+        brand: prodData.brand,
+        category: prodData.category,
+        defaultUnit: prodData.default_unit || 'buc',
+        packageWeightOrVolume: parseFloat(prodData.package_weight_or_volume) || 1,
+        packageUnit: prodData.package_unit || 'buc',
+        normalizedUnit: prodData.normalized_unit || 'buc',
+        barcode: prodData.barcode || undefined,
+        imageUrl: prodData.image_url || undefined,
+        isBio: Boolean(prodData.is_bio),
+        isRomanianProduct: Boolean(prodData.is_romanian_product),
+        baseReferencePrice: parseFloat(prodData.base_reference_price) || 0
+      };
 
-      const retailerMappingRes = await pool.query(`
-        SELECT * FROM retailer_products
-        WHERE product_id = $1
-      `, [productId]);
+      const { data: offersData } = await supabase
+        .from('product_offers')
+        .select('*')
+        .eq('product_id', productId)
+        .neq('source', 'demo')
+        .neq('verification_status', 'demo')
+        .order('price', { ascending: true });
 
-      const promosRes = await pool.query(`
-        SELECT * FROM promotions
-        WHERE product_id = $1
-        ORDER BY ends_at DESC NULLS LAST
-      `, [productId]);
+      const { data: historyData } = await supabase
+        .from('price_observations')
+        .select('*')
+        .eq('product_id', productId)
+        .order('date', { ascending: false })
+        .limit(50);
+
+      const offers: ProductOffer[] = (offersData || []).map(r => ({
+        id: r.id,
+        productId: r.product_id,
+        storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+        sourceId: r.source_id || undefined,
+        price: parseFloat(r.price),
+        originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+        unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
+        unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+        isPromo: Boolean(r.is_promo),
+        promoDetails: r.promo_details || undefined,
+        loyaltyCardRequired: Boolean(r.loyalty_card_required),
+        loyaltyCardName: r.loyalty_card_name || undefined,
+        validUntil: r.valid_until ? String(r.valid_until).slice(0, 10) : undefined,
+        observationDate: r.observation_date ? String(r.observation_date).slice(0, 10) : new Date().toISOString().split('T')[0],
+        source: r.source || 'verified',
+        confidenceLevel: r.confidence_level || 'high',
+        verificationStatus: r.verification_status || 'verified',
+        lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+        isSponsored: Boolean(r.is_sponsored)
+      }));
+
+      const priceHistory: PriceObservation[] = (historyData || []).map(h => ({
+        id: h.id,
+        productId: h.product_id,
+        storeId: h.store_id ? h.store_id.replace(/^store-/, '') : '',
+        sourceId: h.source_id || undefined,
+        price: parseFloat(h.price),
+        date: h.date ? String(h.date).slice(0, 10) : '',
+        receiptId: h.receipt_id || undefined,
+        loyaltyCardUsed: Boolean(h.loyalty_card_used),
+        source: h.source || 'verified'
+      }));
 
       return {
         product,
-        offers: offersRes.rows,
-        priceHistory: historyRes.rows,
-        retailerMappings: retailerMappingRes.rows,
-        promotions: promosRes.rows
+        offers,
+        priceHistory,
+        retailerMappings: [],
+        promotions: []
       };
     } catch (err: any) {
-      console.error('Eroare getProductDetailById:', err.message);
+      console.error('Eroare Supabase getProductDetailById:', err.message);
       return null;
     }
   }
