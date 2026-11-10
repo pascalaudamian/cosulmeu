@@ -2206,10 +2206,13 @@ app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, a
 });
 
 // 9. Coadă de Staging & Validare
-app.get('/api/admin/catalog-importer/staging', requireAdminAuth, (req, res) => {
+app.get('/api/admin/catalog-importer/staging', requireAdminAuth, async (req, res) => {
   try {
-    const { status, retailerId, search } = req.query;
-    let offers = StorageService.getCatalogExtractedOffers();
+  const { status, retailerId, search } = req.query;
+  const pool = getPool();
+  let offers = pool
+    ? await DatabaseService.getCatalogExtractedOffers()
+    : StorageService.getCatalogExtractedOffers();
 
     if (status && typeof status === 'string' && status !== 'toate') {
       offers = offers.filter(o => o.stagingStatus === status);
