@@ -1519,7 +1519,7 @@ app.get('/api/admin/catalog-importer/stats', requireAdminAuth, async (req, res) 
 const persistCatalogOfferReview = async (offerId: string, updates: Record<string, any>) => {
   const pool = getPool();
   if (!pool) return;
-  await pool.query(`UPDATE catalog_extracted_offers SET staging_status = COALESCE($2, staging_status), matched_product_id = COALESCE($3, matched_product_id), matched_product_name = COALESCE($4, matched_product_name), match_method = COALESCE($5, match_method), match_confidence = COALESCE($6, match_confidence), reviewed_by = COALESCE($7, reviewed_by), reviewed_at = COALESCE($8, reviewed_at), rejection_reason = COALESCE($9, rejection_reason), updated_at = NOW() WHERE id = $1`, [offerId, updates.stagingStatus || null, updates.matchedProductId || null, updates.matchedProductName || null, updates.matchMethod || null, updates.matchConfidence ?? null, updates.reviewedBy || null, updates.reviewedAt || null, updates.rejectionReason || null]);
+  await pool.query(`UPDATE catalog_extracted_offers SET staging_status = COALESCE($2, staging_status), matched_product_id = COALESCE($3, matched_product_id), match_method = COALESCE($4, match_method), match_confidence = COALESCE($5, match_confidence), reviewed_by = COALESCE($6, reviewed_by), reviewed_at = COALESCE($7, reviewed_at), rejection_reason = COALESCE($8, rejection_reason), updated_at = NOW() WHERE id = $1`, [offerId, updates.stagingStatus || null, updates.matchedProductId || null, updates.matchMethod || null, updates.matchConfidence ?? null, updates.reviewedBy || null, updates.reviewedAt || null, updates.rejectionReason || null]);
 };
 
 // Helper pentru alerte email scheduler (Resend / SMTP configurabil prin env)
@@ -2296,10 +2296,10 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, asy
       }
 
       const updated = StorageService.updateCatalogExtractedOffer(id, updateData);
-      if (!updated) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
       await persistCatalogOfferReview(id, updateData);
+      if (!updated && !getPool()) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
 
-      res.json({ success: true, offer: updated, message: 'Oferta a fost validată și este pregătită pentru publicare.' });
+      res.json({ success: true, offer: updated || { id, ...updateData }, message: 'Oferta a fost validată și este pregătită pentru publicare.' });
     } else {
       const rejectionUpdates = {
         stagingStatus: 'REJECTED',
@@ -2308,10 +2308,10 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, asy
         reviewedAt: new Date().toISOString()
       };
       const updated = StorageService.updateCatalogExtractedOffer(id, rejectionUpdates as any);
-      if (!updated) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
       await persistCatalogOfferReview(id, rejectionUpdates);
+      if (!updated && !getPool()) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
 
-      res.json({ success: true, offer: updated, message: 'Oferta a fost respinsă.' });
+      res.json({ success: true, offer: updated || { id, ...rejectionUpdates }, message: 'Oferta a fost respinsă.' });
     }
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la revizuirea ofertei.' });

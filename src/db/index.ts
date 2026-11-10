@@ -131,9 +131,9 @@ export function getPool(): pg.Pool | null {
       global._postgresPool = new Pool({
         connectionString: sanitizedConnectionString,
         ssl: config.ssl,
-        max: 10,
+        max: Number(process.env.PG_POOL_MAX || 3),
         connectionTimeoutMillis: 5000,
-        idleTimeoutMillis: 30000
+        idleTimeoutMillis: 10000
       });
     } else {
       global._postgresPool = new Pool({
@@ -143,9 +143,9 @@ export function getPool(): pg.Pool | null {
         database: process.env.SQL_DB_NAME || process.env.PGDATABASE,
         port: process.env.PGPORT ? parseInt(process.env.PGPORT, 10) : 5432,
         ssl: config.ssl,
-        max: 10,
+        max: Number(process.env.PG_POOL_MAX || 3),
         connectionTimeoutMillis: 5000,
-        idleTimeoutMillis: 30000
+        idleTimeoutMillis: 10000
       });
     }
 
@@ -1138,7 +1138,7 @@ export class DatabaseService {
         matchedProductId: r.matched_product_id || undefined,
         matchConfidence: parseFloat(r.match_confidence || '0'),
         matchMethod: r.match_method || 'unmatched',
-        stagingStatus: r.staging_status,
+        stagingStatus: String(r.staging_status || 'NEEDS_REVIEW').toUpperCase() as CatalogExtractedOffer['stagingStatus'],
         validationErrors: Array.isArray(r.validation_errors) ? r.validation_errors : undefined,
         reviewedBy: r.reviewed_by || undefined,
         reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : undefined,
