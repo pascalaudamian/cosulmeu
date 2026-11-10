@@ -68,10 +68,11 @@ export function getDbConfig(): DbConfig {
 
   // Option 2: Supabase or Vercel Postgres connection string
   const connectionString =
-    process.env.SUPABASE_DB_URL ||
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_URL_NON_POOLING ||
-    process.env.POSTGRES_URL;
+  process.env.SUPABASE_DB_URL ||
+  process.env.POSTGRES_PRISMA_URL ||
+  process.env.POSTGRES_URL ||
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL_NON_POOLING;
   if (connectionString) {
     const rawUrl = connectionString || '';
     const isLocal = rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1') || process.env.PGSSLMODE === 'disable';
