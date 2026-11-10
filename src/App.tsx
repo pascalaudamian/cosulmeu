@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar.js';
 import { MobileNav } from './components/MobileNav.js';
-import { DemoNoticeBanner } from './components/DemoNoticeBanner.js';
 import { DashboardView } from './components/DashboardView.js';
 import { ShoppingListView } from './components/ShoppingListView.js';
 import { PriceComparisonView } from './components/PriceComparisonView.js';
@@ -17,8 +16,12 @@ import { ProductDetailView } from './components/ProductDetailView.js';
 import { StorageService } from './services/StorageService.js';
 import { ShoppingList, Receipt, UserProfile, PriceAlert } from './types.js';
 import { ShieldCheck, Heart } from 'lucide-react';
+import { useAuth } from './auth/AuthProvider.js';
+import { AuthScreen } from './components/AuthScreen.js';
+import { supabase } from './lib/supabase.js';
 
 export default function App() {
+  const { user, loading, signOut } = useAuth();
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [productFilterCategory, setProductFilterCategory] = useState<string>('toate');
@@ -42,6 +45,160 @@ export default function App() {
     StorageService.getTrackedProducts()
   );
 
+  const isAdmin = Boolean(
+    userProfile.role === 'admin' ||
+    user?.user_metadata?.is_admin === true ||
+    user?.email === 'pascalau.stefan@gmail.com'
+  );
+
+  useEffect(() => {
+    if (!user) {
+      setUserProfile(StorageService.getUserProfile());
+      return;
+    }
+    const userId = user.id;
+    const userEmail = user.email;
+
+    supabase
+      .from('profiles')
+      .select('id, first_name, last_name, display_name, username, avatar_url, phone, phone_number, city, preferred_store_id, preferred_language, role, preferences, created_at')
+      .eq('id', userId)
+      .maybeSingle()
+      .then(async ({ data }) => {
+        if (data) {
+          const preferences = (data.preferences || {}) as Record<string, unknown>;
+          const loadedProfile: UserProfile = {
+            id: data.id,
+            name: data.display_name || [data.first_name, data.last_name].filter(Boolean).join(' ') || user.user_metadata?.display_name || (userEmail ? userEmail.split('@')[0] : 'Utilizator'),
+            email: userEmail || '',
+            username: data.username || user.user_metadata?.username || undefined,
+            avatarUrl: data.avatar_url || undefined,
+            avatar_url: data.avatar_url || undefined,
+            phone: data.phone_number || data.phone || undefined,
+            phoneNumber: data.phone_number || data.phone || undefined,
+            city: data.city || 'București',
+            preferredLanguage: data.preferred_language || 'ro',
+            preferredStoreId: data.preferred_store_id || undefined,
+            role: (data.role as 'user' | 'admin') || (userEmail === 'pascalau.stefan@gmail.com' ? 'admin' : 'user'),
+            monthlySavingsGoal: typeof preferences.monthlySavingsGoal === 'number' ? preferences.monthlySavingsGoal : 350,
+            notificationsEnabled: typeof preferences.notificationsEnabled === 'boolean' ? preferences.notificationsEnabled : true,
+            preferredStores: Array.isArray(preferences.preferredStores) ? preferences.preferredStores : ['lidl', 'kaufland', 'carrefour', 'auchan'],
+            defaultTransportCostEstimate: typeof preferences.defaultTransportCostEstimate === 'number' ? preferences.defaultTransportCostEstimate : 12,
+            useLoyaltyCards: typeof preferences.useLoyaltyCards === 'boolean' ? preferences.useLoyaltyCards : true,
+            createdAt: data.created_at || user.created_at,
+            created_at: data.created_at || user.created_at,
+          };
+          setUserProfile(loadedProfile);
+          StorageService.saveUserProfile(loadedProfile);
+        } else {
+          const defaultName = user.user_metadata?.display_name || (userEmail ? userEmail.split('@')[0] : 'Utilizator');
+          const defaultUsername = user.user_metadata?.username || undefined;
+          const defaultRole: 'user' | 'admin' = (userEmail === 'pascalau.stefan@gmail.com' || user.user_metadata?.is_admin) ? 'admin' : 'user';
+
+          const newProfileRow = {
+            id: userId,
+            display_name: defaultName,
+            username: defaultUsername,
+            city: 'București',
+            role: defaultRole,
+            preferred_language: 'ro',
+            preferences: {
+              monthlySavingsGoal: 350,
+              notificationsEnabled: true,
+              preferredStores: ['lidl', 'kaufland', 'carrefour', 'auchan'],
+              defaultTransportCostEstimate: 12,
+              useLoyaltyCards: true
+            }
+          };
+
+          await supabase.from('profiles').upsert(newProfileRow);
+
+          const initialProfile: UserProfile = {
+            id: userId,
+            name: defaultName,
+            email: userEmail || '',
+            username: defaultUsername,
+            city: 'București',
+            role: defaultRole,
+            preferredLanguage: 'ro',
+            monthlySavingsGoal: 350,
+            notificationsEnabled: true,
+            preferredStores: ['lidl', 'kaufland', 'carrefour', 'auchan'],
+            defaultTransportCostEstimate: 12,
+            useLoyaltyCards: true,
+            createdAt: user.created_at,
+            created_at: user.created_at,
+          };
+          setUserProfile(initialProfile);
+          StorageService.saveUserProfile(initialProfile);
+        }
+      });
+  }, [user]);
+
+  const handleProfileUpdate = (profile: UserProfile) => {
+    setUserProfile(profile);
+    StorageService.saveUserProfile(profile);
+
+    if (user) {
+      void supabase.from('profiles').upsert({
+        id: user.id,
+        display_name: profile.name,
+        username: profile.username || null,
+        city: profile.city,
+        phone_number: profile.phoneNumber || profile.phone || null,
+        preferred_language: profile.preferredLanguage || 'ro',
+        preferred_store_id: profile.preferredStoreId || null,
+        avatar_url: profile.avatarUrl || profile.avatar_url || null,
+        preferences: {
+          monthlySavingsGoal: profile.monthlySavingsGoal,
+          notificationsEnabled: profile.notificationsEnabled,
+          preferredStores: profile.preferredStores,
+          defaultTransportCostEstimate: profile.defaultTransportCostEstimate,
+          useLoyaltyCards: profile.useLoyaltyCards,
+        },
+        updated_at: new Date().toISOString(),
+      });
+      void supabase.from('user_preferences').upsert({
+        user_id: user.id,
+        notifications_enabled: profile.notificationsEnabled,
+        price_alerts_enabled: profile.notificationsEnabled,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  };
+
+  // Keep every hook before conditional loading/auth returns.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab');
+    const productParam = params.get('product');
+    const categoryParam = params.get('category');
+
+    if (categoryParam) setProductFilterCategory(categoryParam);
+
+    if (productParam) {
+      setSelectedProductId(productParam);
+      setCurrentTab('product-detail');
+    } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile', 'auth'].includes(tabParam)) {
+      if (tabParam === 'admin-sources' && !isAdmin) {
+        setCurrentTab(user ? 'profile' : 'auth');
+      } else {
+        setCurrentTab(tabParam);
+      }
+    }
+  }, [user, isAdmin]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen grid place-items-center bg-slate-50 text-sm font-bold text-slate-500">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+          <span>Se verifică sesiunea securizată…</span>
+        </div>
+      </div>
+    );
+  }
+
   // Sync active list
   const activeList =
     shoppingLists.find(l => l.id === activeListId) ||
@@ -53,26 +210,11 @@ export default function App() {
       updatedAt: new Date().toISOString()
     };
 
-  // Sync tab and product with URL if provided
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tabParam = params.get('tab');
-    const productParam = params.get('product');
-    const categoryParam = params.get('category');
-
-    if (categoryParam) {
-      setProductFilterCategory(categoryParam);
-    }
-
-    if (productParam) {
-      setSelectedProductId(productParam);
-      setCurrentTab('product-detail');
-    } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile'].includes(tabParam)) {
-      setCurrentTab(tabParam);
-    }
-  }, []);
-
   const handleSelectTab = (tab: string) => {
+    if (tab === 'admin-sources' && !isAdmin) {
+      setCurrentTab(user ? 'profile' : 'auth');
+      return;
+    }
     setCurrentTab(tab);
     if (tab !== 'product-detail') {
       setSelectedProductId(null);
@@ -173,21 +315,28 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans selection:bg-emerald-100 selection:text-emerald-900">
-      {/* Demo notice banner */}
-      <DemoNoticeBanner />
-
       {/* Top Navbar */}
       <Navbar
         currentTab={currentTab}
         onSelectTab={handleSelectTab}
         userProfile={userProfile}
-        onUpdateProfile={setUserProfile}
+        onUpdateProfile={handleProfileUpdate}
+        onSignOut={signOut}
+        isAuthenticated={Boolean(user)}
+        isAdmin={isAdmin}
         alerts={priceAlerts}
         itemsCount={activeList.items.length}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8">
+        {currentTab === 'auth' && (
+          <AuthScreen
+            onSuccess={() => setCurrentTab('profile')}
+            onCancel={() => setCurrentTab('dashboard')}
+          />
+        )}
+
         {currentTab === 'dashboard' && (
           <DashboardView
             userProfile={userProfile}
@@ -270,8 +419,10 @@ export default function App() {
         {currentTab === 'profile' && (
           <ProfileView
             userProfile={userProfile}
-            onUpdateProfile={setUserProfile}
+            onUpdateProfile={handleProfileUpdate}
             onResetAllData={handleResetAllData}
+            onSignOut={signOut}
+            onNavigateToAuth={() => setCurrentTab('auth')}
           />
         )}
       </main>

@@ -11,7 +11,8 @@ import {
   Clock,
   ShieldCheck,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  ShoppingBag
 } from 'lucide-react';
 import { UserProfile, ShoppingList, Receipt as ReceiptType } from '../types.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
@@ -101,9 +102,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 Economiile mele
               </span>
             </div>
-            <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-white/10 text-slate-300 border border-white/10">
-              Date demonstrative
-            </span>
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mt-5">
@@ -112,7 +110,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span className="text-xs text-slate-300 block mb-1">Economii realizate</span>
               <div className="flex items-baseline gap-1.5">
                 <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                  {PriceComparisonService.formatRon(totalSavedFromDiscounts + 82.50)}
+                  {PriceComparisonService.formatRon(totalSavedFromDiscounts)}
                 </span>
               </div>
               <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1 mt-1">
@@ -125,7 +123,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span className="text-xs text-slate-300 block mb-1">Economie potențială listă</span>
               <div className="flex items-baseline gap-1.5">
                 <span className="text-2xl sm:text-3xl font-extrabold text-emerald-400 tracking-tight">
-                  {PriceComparisonService.formatRon(savingsSummary.maxSavings)}
+                  {PriceComparisonService.formatRon(activeList.items.length === 0 ? 0 : savingsSummary.maxSavings)}
                 </span>
               </div>
               <span className="text-[11px] text-slate-300 font-medium block mt-1">
@@ -248,61 +246,79 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {storeComparisons.slice(0, 4).map(comp => (
-              <div
-                key={comp.store.id}
-                onClick={() => onNavigate('compare')}
-                className={`p-3.5 rounded-xl border transition-all cursor-pointer relative hover:shadow-md ${
-                  comp.isWinner
-                    ? 'border-emerald-500 bg-emerald-50/40'
-                    : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
-                }`}
+          {storeComparisons.length === 0 ? (
+            <div className="py-10 text-center">
+              <ShoppingBag className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-semibold text-slate-700">Nu ai produse în lista activă</p>
+              <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                Adaugă produse în lista ta de cumpărături pentru a compara automat prețurile și disponibilitatea la supermarketuri.
+              </p>
+              <button
+                onClick={() => onNavigate('products')}
+                className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 cursor-pointer"
               >
-                {comp.isWinner && (
-                  <span className="absolute -top-2.5 right-3 bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs">
-                    Cel mai ieftin
-                  </span>
-                )}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={`w-7 h-7 rounded-lg text-white font-black text-xs flex items-center justify-center ${comp.store.brandColor}`}
-                    >
-                      {comp.store.name.charAt(0)}
-                    </div>
-                    <div>
-                      <span className="font-bold text-sm text-slate-900">{comp.store.name}</span>
-                      <span className="text-[11px] text-slate-500 block">
-                        {comp.availableItems.length} din {activeList.items.length} produse găsite
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="font-extrabold text-base text-slate-900 block">
-                      {PriceComparisonService.formatRon(comp.grandTotal)}
-                    </span>
-                    {comp.isWinner ? (
-                      <span className="text-[11px] text-emerald-700 font-bold">
-                        Opțiunea #1
-                      </span>
-                    ) : (
-                      <span className="text-[11px] text-amber-700 font-medium">
-                        + {PriceComparisonService.formatRon(comp.grandTotal - (storeComparisons[0]?.grandTotal || 0))}
+                <Eye className="w-3.5 h-3.5" /> Deschide Catalog Produse
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {storeComparisons.slice(0, 4).map(comp => (
+                  <div
+                    key={comp.store.id}
+                    onClick={() => onNavigate('compare')}
+                    className={`p-3.5 rounded-xl border transition-all cursor-pointer relative hover:shadow-md ${
+                      comp.isWinner
+                        ? 'border-emerald-500 bg-emerald-50/40'
+                        : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
+                    }`}
+                  >
+                    {comp.isWinner && (
+                      <span className="absolute -top-2.5 right-3 bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs">
+                        Cel mai ieftin
                       </span>
                     )}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={`w-7 h-7 rounded-lg text-white font-black text-xs flex items-center justify-center ${comp.store.brandColor}`}
+                        >
+                          {comp.store.name.charAt(0)}
+                        </div>
+                        <div>
+                          <span className="font-bold text-sm text-slate-900">{comp.store.name}</span>
+                          <span className="text-[11px] text-slate-500 block">
+                            {comp.availableItems.length} din {activeList.items.length} produse găsite
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-extrabold text-base text-slate-900 block">
+                          {PriceComparisonService.formatRon(comp.grandTotal)}
+                        </span>
+                        {comp.isWinner ? (
+                          <span className="text-[11px] text-emerald-700 font-bold">
+                            Opțiunea #1
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-amber-700 font-medium">
+                            + {PriceComparisonService.formatRon(comp.grandTotal - (storeComparisons[0]?.grandTotal || 0))}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ))}
               </div>
-            ))}
-          </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <span className="flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Date actualizate azi
-            </span>
-            <span>Prețurile sunt estimate conform ofertelor din {userProfile.city}</span>
-          </div>
+              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                <span className="flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Prețuri validate din oferte active
+                </span>
+                <span>Prețurile sunt calculate conform ofertelor din {userProfile.city}</span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

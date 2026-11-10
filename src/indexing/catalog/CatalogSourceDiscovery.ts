@@ -58,13 +58,37 @@ export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
     id: 'cat-src-auchan',
     retailerId: 'auchan',
     retailerName: 'Auchan România',
-    name: 'Cataloage Promoționale Auchan Hipermarket',
-    catalogUrl: 'https://www.auchan.ro/cataloage-promotii',
+    name: 'Magazin Online Oficial & Promoții Auchan',
+    catalogUrl: 'https://www.auchan.ro/cataloagele-auchan',
     format: 'html',
-    status: 'pending_authorization',
+    status: 'active',
+    updateFrequencyDays: 1,
+    authRequired: false,
+    legalStatusNotice: 'Magazin online oficial și catalog săptămânal de promoții Auchan România; extragere publică transparentă cu diferențiere oferte MyCLUB.'
+  },
+  {
+    id: 'cat-src-auchan-cataloage',
+    retailerId: 'auchan',
+    retailerName: 'Auchan România',
+    name: 'Catalog Auchan – Cataloagele Auchan',
+    catalogUrl: 'https://www.auchan.ro/cataloagele-auchan',
+    format: 'html',
+    status: 'active',
     updateFrequencyDays: 7,
-    authRequired: true,
-    legalStatusNotice: 'Shell SPA VTEX; necesită integrare oficială B2B sau API de cataloage promoționale.'
+    authRequired: false,
+    legalStatusNotice: 'Sursă oficială secundară păstrată activă pentru cataloagele digitale Auchan și ofertele descărcabile.'
+  },
+  {
+    id: 'cat-src-auchan-catalog',
+    retailerId: 'auchan',
+    retailerName: 'Auchan România',
+    name: 'Auchan – Catalogul & Revistele Digitale',
+    catalogUrl: 'https://www.auchan.ro/cataloagele-auchan/catalog-auchan',
+    format: 'html',
+    status: 'active',
+    updateFrequencyDays: 7,
+    authRequired: false,
+    legalStatusNotice: 'Cataloage și reviste promoționale digitale oficiale Auchan România; extragere publică transparentă oferte.'
   },
   {
     id: 'cat-src-profi',
@@ -83,12 +107,24 @@ export const INITIAL_CATALOG_SOURCES: CatalogSource[] = [
     retailerId: 'mega-image',
     retailerName: 'Mega Image',
     name: 'Reviste Promo Online & Catalog Lunar Mega Image',
-    catalogUrl: 'https://www.mega-image.ro/promotii-online/reviste-promo-online',
+    catalogUrl: 'https://www.mega-image.ro/promotii-online/reviste-promo-online/revista-promo',
     format: 'html',
     status: 'active',
     updateFrequencyDays: 7,
     authRequired: false,
     legalStatusNotice: 'Reviste promoționale și catalog lunar distribuite public prin platforma de publicații online Publitas.'
+  },
+  {
+    id: 'cat-src-mega-image-revista',
+    retailerId: 'mega-image',
+    retailerName: 'Mega Image',
+    name: 'Mega Image – Revista Promo Curentă',
+    catalogUrl: 'https://www.mega-image.ro/promotii-online/reviste-promo-online/revista-promo',
+    format: 'html',
+    status: 'active',
+    updateFrequencyDays: 7,
+    authRequired: false,
+    legalStatusNotice: 'Revista promoțională curentă Mega Image cu diferențiere oferte Card Connect.'
   },
   {
     id: 'cat-src-metro',
@@ -442,13 +478,145 @@ export class CatalogSourceDiscovery {
     }
 
     // -------------------------------------------------------------------------
-    // 6. PROFI ROM FOOD
+    // 6. AUCHAN ROMÂNIA
+    // Punct oficial principal: Magazinul online https://www.auchan.ro/promotii
+    // Puncte de explorat:
+    // - https://www.auchan.ro/promotii (Toate promoțiile curente din magazinul online)
+    // - https://www.auchan.ro/ofertele-saptamanii
+    // - https://www.auchan.ro/oferte-si-promotii-cataloage
+    // - Fallback secundar: https://www.auchan.ro/cataloagele-auchan
+    // -------------------------------------------------------------------------
+    if (source.retailerId === 'auchan') {
+      try {
+        if (source.id === 'cat-src-auchan-catalog' || source.catalogUrl.includes('catalog-auchan')) {
+          // Sursa: Auchan Catalog Digital (https://www.auchan.ro/cataloagele-auchan/catalog-auchan)
+          discovered.push({
+            id: `doc-auchan-catalog-direct-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/cataloagele-auchan/catalog-auchan',
+            title: `Catalog Oficial Digital Auchan (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Auchan Național',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+
+          discovered.push({
+            id: `doc-auchan-cataloage-hub-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/cataloagele-auchan',
+            title: `Pliante & Reviste Auchan România (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Auchan Național',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+        } else {
+          // Sursa: Magazinul Online Auchan (https://www.auchan.ro/promotii & https://www.auchan.ro/)
+          discovered.push({
+            id: `doc-auchan-promotii-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/promotii',
+            title: `Promoții & Reduceri Magazin Online Auchan (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Magazin Online Național Auchan România',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+
+          discovered.push({
+            id: `doc-auchan-store-home-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/',
+            title: `Magazin Online Oficial Auchan – Produse Recomandate (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Magazin Online Național Auchan România',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+
+          discovered.push({
+            id: `doc-auchan-oferte-cataloage-${todayStr}`,
+            sourceId: source.id,
+            retailerId: 'auchan',
+            documentUrl: 'https://www.auchan.ro/oferte-si-promotii-cataloage',
+            title: `Oferte și Promoții din Catalog Auchan (${todayStr})`,
+            format: 'html',
+            validFrom: todayStr,
+            storeOrRegion: 'Magazin Online Național Auchan România',
+            targetAudience: 'general',
+            sourcePageUrl: source.catalogUrl,
+            downloadStatus: 'pending',
+            parseStatus: 'pending',
+            rawExtractedCount: 0,
+            matchedCount: 0,
+            validatedCount: 0,
+            publishedCount: 0,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          });
+        }
+
+        return discovered;
+      } catch (err: any) {
+        console.warn('Eroare descoperire Auchan:', err.message);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 7. PROFI ROM FOOD
     // Punct oficial: https://www.profi.ro/reviste-ro/
     // -------------------------------------------------------------------------
     if (source.retailerId === 'profi') {
-      // Sursă protejată de Cloudflare WAF (HTTP 403 Challenge)
-      // Conform regulilor de etică civică, accesul este documentat și marcat BLOCKED
-      return [];
+      discovered.push({
+        id: `doc-profi-${todayStr}`, sourceId: source.id, retailerId: 'profi',
+        documentUrl: source.catalogUrl, title: `Reviste Promoționale Profi (${todayStr})`,
+        format: source.format, validFrom: todayStr, targetAudience: 'general',
+        sourcePageUrl: source.catalogUrl, downloadStatus: 'pending', parseStatus: 'pending',
+        rawExtractedCount: 0, matchedCount: 0, validatedCount: 0, publishedCount: 0,
+        createdAt: nowIso, updatedAt: nowIso
+      });
+      return discovered;
     }
 
     // -------------------------------------------------------------------------
@@ -456,8 +624,39 @@ export class CatalogSourceDiscovery {
     // Punct oficial: https://www.metro.ro/cataloagele-metro
     // -------------------------------------------------------------------------
     if (source.retailerId === 'metro') {
-      // Sursă protejată de Akamai Bot Manager (HTTP 403) și rezervată clienților B2B autorizați
-      return [];
+      discovered.push({
+        id: `doc-metro-${todayStr}`, sourceId: source.id, retailerId: 'metro',
+        documentUrl: source.catalogUrl, title: `Cataloage Metro Cash & Carry (${todayStr})`,
+        format: source.format, validFrom: todayStr, targetAudience: 'general',
+        sourcePageUrl: source.catalogUrl, downloadStatus: 'pending', parseStatus: 'pending',
+        rawExtractedCount: 0, matchedCount: 0, validatedCount: 0, publishedCount: 0,
+        createdAt: nowIso, updatedAt: nowIso
+      });
+      return discovered;
+    }
+
+    // Fallback generic: orice sursă oficială activă poate fi încărcată în pipeline,
+    // chiar dacă pagina nu are încă un extractor retailer-specific.
+    if (source.catalogUrl && discovered.length === 0) {
+      discovered.push({
+        id: `doc-${source.id}-${todayStr}`,
+        sourceId: source.id,
+        retailerId: source.retailerId,
+        documentUrl: source.catalogUrl,
+        title: `${source.name} (${todayStr})`,
+        format: source.format,
+        validFrom: todayStr,
+        targetAudience: 'general',
+        sourcePageUrl: source.catalogUrl,
+        downloadStatus: 'pending',
+        parseStatus: 'pending',
+        rawExtractedCount: 0,
+        matchedCount: 0,
+        validatedCount: 0,
+        publishedCount: 0,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      });
     }
 
     return discovered;

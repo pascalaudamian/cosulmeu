@@ -6,7 +6,9 @@ import {
   PriceObservation,
   DataSource,
   SourceSyncRun,
-  ProductMatchCandidate
+  ProductMatchCandidate,
+  AdminAuditLog,
+  OperationalDashboardData
 } from '../types.ts';
 import {
   CatalogSource,
@@ -25,6 +27,8 @@ import {
   INITIAL_SYNC_RUNS,
   INITIAL_MATCH_CANDIDATES
 } from '../data/mockData.ts';
+import { ProductMatcher } from '../services/ProductMatcher.ts';
+import { mapRetailerCategoryToStandard } from '../data/categories.ts';
 
 const { Pool } = pg;
 
@@ -127,9 +131,9 @@ export function getPool(): pg.Pool | null {
       global._postgresPool = new Pool({
         connectionString: sanitizedConnectionString,
         ssl: config.ssl,
-        max: 10,
+        max: Number(process.env.PG_POOL_MAX || 3),
         connectionTimeoutMillis: 5000,
-        idleTimeoutMillis: 30000
+        idleTimeoutMillis: 10000
       });
     } else {
       global._postgresPool = new Pool({
@@ -139,9 +143,9 @@ export function getPool(): pg.Pool | null {
         database: process.env.SQL_DB_NAME || process.env.PGDATABASE,
         port: process.env.PGPORT ? parseInt(process.env.PGPORT, 10) : 5432,
         ssl: config.ssl,
-        max: 10,
+        max: Number(process.env.PG_POOL_MAX || 3),
         connectionTimeoutMillis: 5000,
-        idleTimeoutMillis: 30000
+        idleTimeoutMillis: 10000
       });
     }
 
@@ -177,7 +181,7 @@ export async function checkDbHealth(): Promise<{
     return {
       connected: false,
       persistenceMode: 'demo_memory',
-      message: 'PostgreSQL nu este configurat în variabilele de mediu. Se utilizează modul demonstrativ.',
+      message: 'PostgreSQL nu este configurat în variabilele de mediu. Se utilizează stocarea locală în memorie.',
       type: 'none'
     };
   }
@@ -209,7 +213,7 @@ export async function checkDbHealth(): Promise<{
     return {
       connected: false,
       persistenceMode: 'demo_memory',
-      message: `Eroare conexiune PostgreSQL: ${err.message || 'Host indisponibil'}. Sistemul continuă în mod demonstrativ izolat.`,
+      message: `Eroare conexiune PostgreSQL: ${err.message || 'Host indisponibil'}. Sistemul continuă pe stocarea locală.`,
       type: config.type
     };
   }
@@ -416,21 +420,17 @@ export class DatabaseService {
           );
         `);
 
-        // Check if products exist; seed if empty
-        const countRes = await client.query('SELECT COUNT(*) FROM products');
-        if (parseInt(countRes.rows[0].count, 10) === 0) {
-          // Seed stores
-          for (const s of STORES) {
-            await client.query(
-              `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, logo_url, store_type, rating, locations_count, sample_address, is_partner)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-               ON CONFLICT (id) DO NOTHING`,
-              [s.id, s.name, s.slug, s.chain, s.brandColor, s.accentColor, s.logoUrl || null, s.type, s.rating, s.locationsCount, s.sampleAddress, s.isPartner || false]
-            );
-          }
+        // Seed baseline stores, products, and sources if not present (ON CONFLICT DO NOTHING)
+        for (const s of STORES) {
+          await client.query(
+            `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, logo_url, store_type, rating, locations_count, sample_address, is_partner)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             ON CONFLICT (id) DO NOTHING`,
+            [s.id, s.name, s.slug, s.chain, s.brandColor, s.accentColor, s.logoUrl || null, s.type, s.rating, s.locationsCount, s.sampleAddress, s.isPartner || false]
+          );
+        }
 
-          // Seed products
-          for (const p of PRODUCTS) {
+        for (const p of PRODUCTS) {
             await client.query(
               `INSERT INTO products (id, name, brand, category, default_unit, package_weight_or_volume, package_unit, normalized_unit, barcode, image_url, is_bio, is_romanian_product, base_reference_price)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
@@ -478,7 +478,6 @@ export class DatabaseService {
               [csrc.id, csrc.retailerId, csrc.name, csrc.catalogUrl, csrc.format, csrc.status, csrc.updateFrequencyDays, csrc.authRequired, csrc.legalStatusNotice]
             );
           }
-        }
 
         return true;
       } finally {
@@ -965,8 +964,12 @@ export class DatabaseService {
         `INSERT INTO catalog_import_runs (
           id, document_id, source_id, retailer_id, started_at, completed_at,
           status, total_raw_extracted, auto_matched_count, needs_review_count,
-          published_count, rejected_count, duration_ms, errors
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          published_count, rejected_count, duration_ms, errors,
+          new_products_count, updated_products_count, unchanged_products_count,
+          new_offers_count, updated_offers_count, expired_offers_count,
+          changed_prices_count, unchanged_prices_count, items_without_price_count,
+          items_without_offer_count, staging_count
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
         ON CONFLICT (id) DO UPDATE SET
           completed_at = EXCLUDED.completed_at,
           status = EXCLUDED.status,
@@ -976,7 +979,18 @@ export class DatabaseService {
           published_count = EXCLUDED.published_count,
           rejected_count = EXCLUDED.rejected_count,
           duration_ms = EXCLUDED.duration_ms,
-          errors = EXCLUDED.errors`,
+          errors = EXCLUDED.errors,
+          new_products_count = EXCLUDED.new_products_count,
+          updated_products_count = EXCLUDED.updated_products_count,
+          unchanged_products_count = EXCLUDED.unchanged_products_count,
+          new_offers_count = EXCLUDED.new_offers_count,
+          updated_offers_count = EXCLUDED.updated_offers_count,
+          expired_offers_count = EXCLUDED.expired_offers_count,
+          changed_prices_count = EXCLUDED.changed_prices_count,
+          unchanged_prices_count = EXCLUDED.unchanged_prices_count,
+          items_without_price_count = EXCLUDED.items_without_price_count,
+          items_without_offer_count = EXCLUDED.items_without_offer_count,
+          staging_count = EXCLUDED.staging_count`,
         [
           run.id,
           run.documentId || null,
@@ -991,7 +1005,18 @@ export class DatabaseService {
           run.publishedCount,
           run.rejectedCount,
           run.durationMs || null,
-          JSON.stringify(run.errors || [])
+          JSON.stringify(run.errors || []),
+          run.newProductsCount || 0,
+          run.updatedProductsCount || 0,
+          run.unchangedProductsCount || 0,
+          run.newOffersCount || 0,
+          run.updatedOffersCount || 0,
+          run.expiredOffersCount || 0,
+          run.changedPricesCount || 0,
+          run.unchangedPricesCount || 0,
+          run.itemsWithoutPriceCount || 0,
+          run.itemsWithoutOfferCount || 0,
+          run.stagingCount || 0
         ]
       );
       return true;
@@ -1084,7 +1109,8 @@ export class DatabaseService {
     const pool = getPool();
     if (!pool) return [];
     try {
-      const res = await pool.query('SELECT * FROM catalog_extracted_offers ORDER BY created_at DESC LIMIT 500');
+      const res = await pool.query('SELECT * FROM catalog_extracted_offers ORDER BY created_at DESC');
+      const toIso = (value: unknown) => value ? new Date(value as string | number | Date).toISOString() : undefined;
       return res.rows.map(r => ({
         id: r.id,
         runId: r.run_id || undefined,
@@ -1107,21 +1133,1260 @@ export class DatabaseService {
         promoDetails: r.promo_details || undefined,
         loyaltyCardRequired: r.loyalty_card_required,
         loyaltyCardName: r.loyalty_card_name || undefined,
-        validFrom: r.valid_from ? new Date(r.valid_from).toISOString().split('T')[0] : undefined,
-        validUntil: r.valid_until ? new Date(r.valid_until).toISOString().split('T')[0] : undefined,
+        validFrom: toIso(r.valid_from)?.split('T')[0],
+        validUntil: toIso(r.valid_until)?.split('T')[0],
         matchedProductId: r.matched_product_id || undefined,
         matchConfidence: parseFloat(r.match_confidence || '0'),
         matchMethod: r.match_method || 'unmatched',
-        stagingStatus: r.staging_status,
+        stagingStatus: String(r.staging_status || 'NEEDS_REVIEW').toUpperCase() as CatalogExtractedOffer['stagingStatus'],
         validationErrors: Array.isArray(r.validation_errors) ? r.validation_errors : undefined,
         reviewedBy: r.reviewed_by || undefined,
         reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : undefined,
         rejectionReason: r.rejection_reason || undefined,
-        createdAt: new Date(r.created_at).toISOString(),
-        updatedAt: new Date(r.updated_at).toISOString()
+        createdAt: toIso(r.created_at) || new Date(0).toISOString(),
+        updatedAt: toIso(r.updated_at) || toIso(r.created_at) || new Date(0).toISOString()
       }));
     } catch {
       return [];
     }
   }
+
+  // ==========================================================================
+  // SINCRONIZARE INCREMENTALĂ ROBUSTĂ (IDEMPOTENȚĂ, LOCK-URI & PERSISTENȚĂ REALĂ)
+  // ==========================================================================
+
+  /**
+   * Execută sincronizarea incrementală a ofertelor într-o tranzacție securizată cu advisory lock.
+   */
+  static async syncBatchIncremental(params: {
+    runId: string;
+    documentId?: string;
+    sourceId: string;
+    retailerId: string;
+    offers: CatalogExtractedOffer[];
+    autoPublish?: boolean;
+  }): Promise<{
+    stats: {
+      documentId?: string;
+      retailerId: string;
+      totalProcessed: number;
+      newProductsCount: number;
+      identifiedExistingCount: number;
+      updatedProductsCount: number;
+      unchangedProductsCount: number;
+      newOffersCount: number;
+      updatedOffersCount: number;
+      expiredOffersCount: number;
+      changedPricesCount: number;
+      unchangedPricesCount: number;
+      itemsWithoutPriceCount: number;
+      itemsWithoutOfferCount: number;
+      stagingCount: number;
+      publishedCount: number;
+      durationMs: number;
+      errors: string[];
+    };
+    success: boolean;
+  }> {
+    const startTime = Date.now();
+    const stats = {
+      documentId: params.documentId,
+      retailerId: params.retailerId,
+      totalProcessed: params.offers.length,
+      newProductsCount: 0,
+      identifiedExistingCount: 0,
+      updatedProductsCount: 0,
+      unchangedProductsCount: 0,
+      newOffersCount: 0,
+      updatedOffersCount: 0,
+      expiredOffersCount: 0,
+      changedPricesCount: 0,
+      unchangedPricesCount: 0,
+      itemsWithoutPriceCount: 0,
+      itemsWithoutOfferCount: 0,
+      stagingCount: params.offers.length,
+      publishedCount: 0,
+      durationMs: 0,
+      errors: [] as string[]
+    };
+
+    const pool = getPool();
+    if (!pool) {
+      stats.durationMs = Date.now() - startTime;
+      return { stats, success: true };
+    }
+
+    const client = await pool.connect();
+    let lockAcquired = false;
+
+    try {
+      // 1. Obținere advisory lock pentru prevenirea concurenței pe același retailer
+      const lockRes = await client.query(
+        "SELECT pg_try_advisory_lock(hashtext('catalog_sync_' || $1)) AS acquired",
+        [params.retailerId]
+      );
+      lockAcquired = Boolean(lockRes.rows[0]?.acquired);
+      if (!lockAcquired) {
+        const lockErr = `Sincronizare concurentă blocată: Retailerul "${params.retailerId}" rulează deja o operațiune de import.`;
+        stats.errors.push(lockErr);
+        stats.durationMs = Date.now() - startTime;
+        return { stats, success: false };
+      }
+
+      await client.query('BEGIN');
+
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      // Preluăm toate produsele existente pentru potrivire fuzzy de rezervă
+      const existingProductsRes = await client.query('SELECT * FROM products');
+      const dbProducts: Product[] = existingProductsRes.rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        brand: r.brand,
+        category: r.category as any,
+        defaultUnit: r.default_unit,
+        packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
+        packageUnit: r.package_unit,
+        normalizedUnit: r.normalized_unit,
+        barcode: r.barcode || undefined,
+        baseReferencePrice: parseFloat(r.base_reference_price),
+        isRomanianProduct: r.is_romanian_product
+      }));
+
+      for (const item of params.offers) {
+        // Validare preț
+        if (!item.effectivePrice || item.effectivePrice <= 0 || isNaN(item.effectivePrice)) {
+          stats.itemsWithoutPriceCount++;
+          continue;
+        }
+
+        let canonicalProduct: Product | undefined = undefined;
+        let isNewProduct = false;
+
+        // Pas 1: Căutare produs canonic
+        // 1.1 După matchedProductId dacă este specificat
+        if (item.matchedProductId) {
+          const directMatch = dbProducts.find(p => p.id === item.matchedProductId);
+          if (directMatch) canonicalProduct = directMatch;
+        }
+
+        // 1.2 După cod de bare (GTIN / EAN)
+        if (!canonicalProduct && item.rawBarcode && item.rawBarcode.trim().length >= 8) {
+          const barcodeMatch = dbProducts.find(p => p.barcode && p.barcode.trim() === item.rawBarcode?.trim());
+          if (barcodeMatch) canonicalProduct = barcodeMatch;
+        }
+
+        // 1.3 După retailer_products mapping
+        if (!canonicalProduct) {
+          const sku = item.rawBarcode || item.id;
+          const mapRes = await client.query(
+            `SELECT p.* FROM retailer_products rp 
+             JOIN products p ON p.id = rp.product_id 
+             WHERE rp.retailer_id = $1 AND (rp.external_sku = $2 OR (rp.barcode = $3 AND $3 IS NOT NULL)) 
+             LIMIT 1`,
+            [params.retailerId, sku, item.rawBarcode || null]
+          );
+          if (mapRes.rows.length > 0) {
+            const r = mapRes.rows[0];
+            canonicalProduct = {
+              id: r.id,
+              name: r.name,
+              brand: r.brand,
+              category: r.category,
+              defaultUnit: r.default_unit,
+              packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
+              packageUnit: r.package_unit,
+              normalizedUnit: r.normalized_unit,
+              barcode: r.barcode || undefined,
+              baseReferencePrice: parseFloat(r.base_reference_price),
+              isRomanianProduct: r.is_romanian_product
+            };
+          }
+        }
+
+        // 1.4 După similaritate text & atribute prin ProductMatcher
+        if (!canonicalProduct) {
+          const matchResult = ProductMatcher.matchProduct({
+            rawName: item.rawTitle,
+            barcode: item.rawBarcode,
+            brand: item.rawBrand,
+            packageWeightOrVolume: item.packageQuantity,
+            packageUnit: item.packageUnit as any,
+            category: item.rawCategory
+          });
+
+          if (matchResult.matchedProduct && matchResult.confidence >= 0.75) {
+            canonicalProduct = matchResult.matchedProduct;
+          }
+        }
+
+        // Rezolvare inserare sau asociere produs
+        if (canonicalProduct) {
+          stats.identifiedExistingCount++;
+          // Actualizăm dacă avem informații suplimentare sigure
+          let updated = false;
+          if (!canonicalProduct.barcode && item.rawBarcode && item.rawBarcode.trim().length >= 8) {
+            canonicalProduct.barcode = item.rawBarcode.trim();
+            await client.query('UPDATE products SET barcode = $1, updated_at = NOW() WHERE id = $2', [
+              canonicalProduct.barcode,
+              canonicalProduct.id
+            ]);
+            updated = true;
+          }
+          if (updated) {
+            stats.updatedProductsCount++;
+          } else {
+            stats.unchangedProductsCount++;
+          }
+        } else {
+          // Creare produs canonic nou
+          isNewProduct = true;
+          stats.newProductsCount++;
+          const { category, subcategory } = mapRetailerCategoryToStandard(item.rawCategory || item.rawTitle);
+          const normUnit: 'kg' | 'l' | 'buc' = ['kg', 'g'].includes(item.packageUnit || '')
+            ? 'kg'
+            : ['l', 'ml'].includes(item.packageUnit || '')
+            ? 'l'
+            : 'buc';
+
+          const newId = `prod-${params.retailerId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          const safeProdTitle = (item.rawTitle || 'Produs fără nume').trim().slice(0, 250);
+          const safeBrand = (item.rawBrand || 'Marcă Magazin').trim().slice(0, 120);
+          const safeCategory = String(category).slice(0, 60);
+          const safeUnit = item.packageUnit ? String(item.packageUnit).slice(0, 16) : 'buc';
+          const safeNormUnit = String(normUnit).slice(0, 16);
+          const safeBarcode = item.rawBarcode ? item.rawBarcode.trim().slice(0, 60) : null;
+
+          const newProd: Product = {
+            id: newId,
+            name: safeProdTitle,
+            brand: safeBrand,
+            category: category as any,
+            subcategory,
+            defaultUnit: safeUnit as any,
+            packageWeightOrVolume: item.packageQuantity || 1,
+            packageUnit: safeUnit as any,
+            normalizedUnit: safeNormUnit as any,
+            barcode: safeBarcode || undefined,
+            baseReferencePrice: item.normalPrice || item.effectivePrice,
+            isRomanianProduct: true
+          };
+
+          await client.query(
+            `INSERT INTO products (
+              id, name, brand, category, default_unit, package_weight_or_volume,
+              package_unit, normalized_unit, barcode, is_romanian_product, base_reference_price
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (id) DO NOTHING`,
+            [
+              newProd.id,
+              safeProdTitle,
+              safeBrand,
+              safeCategory,
+              safeUnit,
+              newProd.packageWeightOrVolume,
+              safeUnit,
+              safeNormUnit,
+              safeBarcode,
+              newProd.isRomanianProduct,
+              newProd.baseReferencePrice
+            ]
+          );
+
+          canonicalProduct = newProd;
+          dbProducts.push(newProd);
+        }
+
+        const canonicalId = canonicalProduct.id;
+        item.matchedProductId = canonicalId;
+        item.matchedProductName = canonicalProduct.name;
+
+        // Pas 2: Asociere în retailer_products
+        const rawSku = (item.rawBarcode || item.id || `sku-${Date.now()}`).trim();
+        const externalSku = rawSku.slice(0, 100);
+        const skuSlug = externalSku.replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 40) || 'item';
+        const retProdId = `rp-${params.retailerId}-${skuSlug}`.slice(0, 60);
+
+        const safeScrapedName = (item.rawTitle || 'Produs fără nume').trim().slice(0, 250);
+        const safeScrapedBrand = item.rawBrand ? item.rawBrand.trim().slice(0, 120) : null;
+        const safeScrapedUnit = item.packageUnit ? String(item.packageUnit).slice(0, 16) : null;
+        const safeScrapedBarcode = item.rawBarcode ? item.rawBarcode.trim().slice(0, 60) : null;
+
+        await client.query(
+          `INSERT INTO retailer_products (
+            id, retailer_id, product_id, external_sku, scraped_name,
+            scraped_brand, scraped_package_weight_or_volume, scraped_package_unit,
+            barcode, last_scraped_at, status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), 'active')
+          ON CONFLICT (id) DO UPDATE SET
+            product_id = EXCLUDED.product_id,
+            scraped_name = EXCLUDED.scraped_name,
+            barcode = COALESCE(EXCLUDED.barcode, retailer_products.barcode),
+            last_scraped_at = NOW(),
+            updated_at = NOW()`,
+          [
+            retProdId,
+            params.retailerId,
+            canonicalId,
+            externalSku,
+            safeScrapedName,
+            safeScrapedBrand,
+            item.packageQuantity || null,
+            safeScrapedUnit,
+            safeScrapedBarcode
+          ]
+        );
+
+        // Pas 3: Verificare ofertă curentă în product_offers
+        const curOfferRes = await client.query(
+          'SELECT id, price, normal_price, promo_price, loyalty_price, is_promo, valid_until FROM product_offers WHERE product_id = $1 AND store_id = $2',
+          [canonicalId, params.retailerId]
+        );
+
+        const offerId = curOfferRes.rows[0]?.id || `off-${params.retailerId}-${canonicalId}`;
+        const existingOffer = curOfferRes.rows[0];
+
+        if (!existingOffer) {
+          // Ofertă nouă
+          stats.newOffersCount++;
+          stats.changedPricesCount++;
+
+          const safeOfferMeasure = (item.unitPriceMeasure || 'lei/buc').slice(0, 30);
+          const safeLoyaltyCardName = item.loyaltyCardName ? item.loyaltyCardName.slice(0, 60) : null;
+          const guaranteedPromoPrice = item.promoPrice ?? item.loyaltyPrice ?? item.effectivePrice;
+          const safePromoTitle = (item.rawTitle || 'Promoție').trim().slice(0, 250);
+
+          await client.query(
+            `INSERT INTO product_offers (
+              id, product_id, store_id, source_id, price, original_price,
+              normal_price, promo_price, loyalty_price, unit_price, unit_price_measure,
+              is_promo, promo_details, loyalty_card_required, loyalty_card_name,
+              valid_until, observation_date, source, confidence_level, verification_status,
+              last_checked, last_verified_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'verified', 'high', 'verified', NOW(), NOW(), NOW())`,
+            [
+              offerId,
+              canonicalId,
+              params.retailerId,
+              params.sourceId,
+              item.effectivePrice,
+              item.normalPrice !== item.effectivePrice ? item.normalPrice : null,
+              item.normalPrice || null,
+              item.promoPrice || null,
+              item.loyaltyPrice || null,
+              item.unitPrice || item.effectivePrice,
+              safeOfferMeasure,
+              Boolean(item.isPromo),
+              item.promoDetails || null,
+              Boolean(item.loyaltyCardRequired || item.loyaltyPrice),
+              safeLoyaltyCardName,
+              item.validUntil || null,
+              todayStr
+            ]
+          );
+
+          // Inserare observație nouă în istoricul append-only
+          const obsId = `obs-${params.retailerId}-${canonicalId}-${Date.now()}`;
+          await client.query(
+            `INSERT INTO price_observations (
+              id, product_id, store_id, source_id, price, normal_price,
+              promo_price, loyalty_price, date, loyalty_card_used, source
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'official_feed')
+            ON CONFLICT (product_id, store_id, date, price) DO NOTHING`,
+            [
+              obsId,
+              canonicalId,
+              params.retailerId,
+              params.sourceId,
+              item.effectivePrice,
+              item.normalPrice || null,
+              item.promoPrice || null,
+              item.loyaltyPrice || null,
+              todayStr,
+              Boolean(item.loyaltyCardRequired || item.loyaltyPrice)
+            ]
+          );
+
+          // Înregistrare promoție
+          if (item.isPromo) {
+            const promoId = `prm-${params.retailerId}-${canonicalId}`;
+            await client.query(
+              `INSERT INTO promotions (
+                id, retailer_id, product_id, title, normal_price, promo_price,
+                loyalty_price, loyalty_card_name, ends_at, conditions, discovered_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+              ON CONFLICT (id) DO UPDATE SET
+                normal_price = EXCLUDED.normal_price,
+                promo_price = EXCLUDED.promo_price,
+                loyalty_price = EXCLUDED.loyalty_price,
+                ends_at = EXCLUDED.ends_at`,
+              [
+                promoId,
+                params.retailerId,
+                canonicalId,
+                safePromoTitle,
+                item.normalPrice || null,
+                guaranteedPromoPrice,
+                item.loyaltyPrice || null,
+                safeLoyaltyCardName,
+                item.validUntil || null,
+                item.promoDetails || null
+              ]
+            );
+          }
+        } else {
+          // Ofertă existentă
+          stats.updatedOffersCount++;
+          const oldPrice = parseFloat(existingOffer.price);
+          const priceChanged = Math.abs(oldPrice - item.effectivePrice) > 0.001;
+
+          if (priceChanged) {
+            stats.changedPricesCount++;
+
+            const safeOfferMeasure = (item.unitPriceMeasure || 'lei/buc').slice(0, 30);
+            const safeLoyaltyCardName = item.loyaltyCardName ? item.loyaltyCardName.slice(0, 60) : null;
+            const guaranteedPromoPrice = item.promoPrice ?? item.loyaltyPrice ?? item.effectivePrice;
+            const safePromoTitle = (item.rawTitle || 'Promoție').trim().slice(0, 250);
+
+            await client.query(
+              `UPDATE product_offers SET
+                price = $1,
+                original_price = $2,
+                normal_price = $3,
+                promo_price = $4,
+                loyalty_price = $5,
+                unit_price = $6,
+                unit_price_measure = $7,
+                is_promo = $8,
+                promo_details = $9,
+                loyalty_card_required = $10,
+                loyalty_card_name = $11,
+                valid_until = $12,
+                observation_date = $13,
+                last_checked = NOW(),
+                last_verified_at = NOW(),
+                updated_at = NOW()
+              WHERE id = $14`,
+              [
+                item.effectivePrice,
+                item.normalPrice !== item.effectivePrice ? item.normalPrice : null,
+                item.normalPrice || null,
+                item.promoPrice || null,
+                item.loyaltyPrice || null,
+                item.unitPrice || item.effectivePrice,
+                safeOfferMeasure,
+                Boolean(item.isPromo),
+                item.promoDetails || null,
+                Boolean(item.loyaltyCardRequired || item.loyaltyPrice),
+                safeLoyaltyCardName,
+                item.validUntil || null,
+                todayStr,
+                offerId
+              ]
+            );
+
+            // Istoric imutabil append-only: adăugare nouă observație
+            const obsId = `obs-${params.retailerId}-${canonicalId}-${Date.now()}`;
+            await client.query(
+              `INSERT INTO price_observations (
+                id, product_id, store_id, source_id, price, normal_price,
+                promo_price, loyalty_price, date, loyalty_card_used, source
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'official_feed')
+              ON CONFLICT (product_id, store_id, date, price) DO NOTHING`,
+              [
+                obsId,
+                canonicalId,
+                params.retailerId,
+                params.sourceId,
+                item.effectivePrice,
+                item.normalPrice || null,
+                item.promoPrice || null,
+                item.loyaltyPrice || null,
+                todayStr,
+                Boolean(item.loyaltyCardRequired || item.loyaltyPrice)
+              ]
+            );
+
+            if (item.isPromo) {
+              const promoId = `prm-${params.retailerId}-${canonicalId}`;
+              await client.query(
+                `INSERT INTO promotions (
+                  id, retailer_id, product_id, title, normal_price, promo_price,
+                  loyalty_price, loyalty_card_name, ends_at, conditions, discovered_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                  normal_price = EXCLUDED.normal_price,
+                  promo_price = EXCLUDED.promo_price,
+                  loyalty_price = EXCLUDED.loyalty_price,
+                  ends_at = EXCLUDED.ends_at`,
+                [
+                  promoId,
+                  params.retailerId,
+                  canonicalId,
+                  safePromoTitle,
+                  item.normalPrice || null,
+                  guaranteedPromoPrice,
+                  item.loyaltyPrice || null,
+                  safeLoyaltyCardName,
+                  item.validUntil || null,
+                  item.promoDetails || null
+                ]
+              );
+            } else if (existingOffer.is_promo) {
+              // Promoția a expirat
+              stats.expiredOffersCount++;
+              await client.query(
+                `UPDATE promotions SET ends_at = CURRENT_DATE 
+                 WHERE retailer_id = $1 AND product_id = $2 AND (ends_at IS NULL OR ends_at >= CURRENT_DATE)`,
+                [params.retailerId, canonicalId]
+              );
+            }
+          } else {
+            // Prețul nu s-a schimbat: actualizare verificare fără inserare în istoric (idempotență)
+            stats.unchangedPricesCount++;
+            await client.query(
+              'UPDATE product_offers SET last_checked = NOW(), last_verified_at = NOW(), updated_at = NOW() WHERE id = $1',
+              [offerId]
+            );
+          }
+        }
+
+        // Marcare ca publicat în catalog_extracted_offers
+        stats.publishedCount++;
+        item.stagingStatus = 'PUBLISHED';
+        await client.query(
+          `UPDATE catalog_extracted_offers SET
+            staging_status = 'PUBLISHED',
+            matched_product_id = $1,
+            updated_at = NOW()
+          WHERE id = $2`,
+          [canonicalId, item.id]
+        );
+      }
+
+      stats.durationMs = Date.now() - startTime;
+
+      // 4. Salvare raport complet de sincronizare în catalog_import_runs
+      await client.query(
+        `UPDATE catalog_import_runs SET
+          status = 'completed',
+          completed_at = NOW(),
+          duration_ms = $1,
+          total_raw_extracted = $2,
+          published_count = $3,
+          new_products_count = $4,
+          updated_products_count = $5,
+          unchanged_products_count = $6,
+          new_offers_count = $7,
+          updated_offers_count = $8,
+          expired_offers_count = $9,
+          changed_prices_count = $10,
+          unchanged_prices_count = $11,
+          items_without_price_count = $12,
+          items_without_offer_count = $13,
+          staging_count = $14
+        WHERE id = $15`,
+        [
+          stats.durationMs,
+          stats.totalProcessed,
+          stats.publishedCount,
+          stats.newProductsCount,
+          stats.updatedProductsCount,
+          stats.unchangedProductsCount,
+          stats.newOffersCount,
+          stats.updatedOffersCount,
+          stats.expiredOffersCount,
+          stats.changedPricesCount,
+          stats.unchangedPricesCount,
+          stats.itemsWithoutPriceCount,
+          stats.itemsWithoutOfferCount,
+          stats.stagingCount,
+          params.runId
+        ]
+      );
+
+      await client.query('COMMIT');
+      return { stats, success: true };
+    } catch (err: any) {
+      await client.query('ROLLBACK');
+      stats.errors.push(err.message || 'Eroare necunoscută la sincronizare incrementală');
+      stats.durationMs = Date.now() - startTime;
+      return { stats, success: false };
+    } finally {
+      if (lockAcquired) {
+        try {
+          await client.query("SELECT pg_advisory_unlock(hashtext('catalog_sync_' || $1))", [params.retailerId]);
+        } catch {}
+      }
+      client.release();
+    }
+  }
+
+  /**
+   * Înregistrează o acțiune administrativă în tabela admin_audit_logs
+   */
+  static async logAdminActivity(entry: {
+    userEmail: string;
+    userId?: string;
+    action: string;
+    targetType: string;
+    targetId?: string;
+    details?: Record<string, any>;
+    ipAddress?: string;
+  }): Promise<AdminAuditLog> {
+    const id = `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const logItem: AdminAuditLog = {
+      id,
+      userEmail: entry.userEmail,
+      userId: entry.userId,
+      action: entry.action,
+      targetType: entry.targetType,
+      targetId: entry.targetId,
+      details: entry.details || {},
+      ipAddress: entry.ipAddress,
+      createdAt: new Date().toISOString()
+    };
+
+    const pool = getPool();
+    if (!pool) return logItem;
+
+    try {
+      await pool.query(
+        `INSERT INTO admin_audit_logs (id, user_email, user_id, action, target_type, target_id, details, ip_address, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+        [
+          logItem.id,
+          logItem.userEmail,
+          logItem.userId || null,
+          logItem.action,
+          logItem.targetType,
+          logItem.targetId || null,
+          JSON.stringify(logItem.details || {}),
+          logItem.ipAddress || null
+        ]
+      );
+    } catch (err: any) {
+      console.error('Eroare la scrierea logului administrativ:', err.message);
+    }
+
+    return logItem;
+  }
+
+  /**
+   * Returnează istoricul acțiunilor administrative
+   */
+  static async getAdminAuditLogs(limit = 50, offset = 0): Promise<AdminAuditLog[]> {
+    const pool = getPool();
+    if (!pool) return [];
+
+    try {
+      const res = await pool.query(
+        `SELECT id, user_email AS "userEmail", user_id AS "userId", action, target_type AS "targetType",
+                target_id AS "targetId", details, ip_address AS "ipAddress", created_at AS "createdAt"
+         FROM admin_audit_logs
+         ORDER BY created_at DESC
+         LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      );
+      return res.rows.map(r => ({
+        ...r,
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString()
+      }));
+    } catch (err) {
+      return [];
+    }
+  }
+
+  /**
+   * Returnează datele și indicatorii compleți pentru noul Overview & Operational Dashboard
+   */
+  static async getOperationalMetrics(): Promise<OperationalDashboardData> {
+    const pool = getPool();
+    const startTime = Date.now();
+    let latencyMs = 0;
+
+    // Surse predefinite
+    const sources = INITIAL_CATALOG_SOURCES;
+    let configuredSourcesCount = sources.length;
+    let activeSourcesCount = sources.filter(s => s.status === 'active').length;
+    let blockedSourcesCount = sources.filter(s => s.retailerId === 'profi' || s.retailerId === 'metro').length;
+    let configuredRetailersCount = 8;
+    let activeRetailersCount = 6; // Lidl, Kaufland, Carrefour, PENNY, Auchan, Mega Image
+
+    const fallbackNow = new Date().toISOString();
+
+    if (!pool) {
+      return {
+        overallStatus: 'EROARE CRITICĂ',
+        statusMessage: 'PostgreSQL nu este configurat sau pool-ul nu este disponibil.',
+        activeRetailersCount,
+        configuredRetailersCount,
+        activeSourcesCount,
+        configuredSourcesCount,
+        blockedSourcesCount,
+        runningImportsCount: 0,
+        dbStatus: {
+          connected: false,
+          configured: false,
+          persistenceMode: 'demo_memory',
+          dbType: 'none',
+          message: 'Baza de date PostgreSQL este deconectată.'
+        },
+        kpis: {
+          configuredRetailers: { key: 'configuredRetailers', label: 'Retaileri Configurați', value: 8, period: 'Permanent', updatedAt: fallbackNow, status: 'positive' },
+          configuredSources: { key: 'configuredSources', label: 'Surse Configurate', value: configuredSourcesCount, period: 'Permanent', updatedAt: fallbackNow, status: 'positive' },
+          activeSources: { key: 'activeSources', label: 'Surse Funcționale', value: activeSourcesCount, period: 'Permanent', updatedAt: fallbackNow, status: 'positive' },
+          discoveredDocuments: { key: 'discoveredDocuments', label: 'Documente Descoperite', value: 0, period: 'Total', updatedAt: fallbackNow, status: 'neutral' },
+          downloadedDocuments: { key: 'downloadedDocuments', label: 'Documente Descărcate', value: 0, period: 'Total', updatedAt: fallbackNow, status: 'neutral' },
+          extractedProducts: { key: 'extractedProducts', label: 'Produse Extrase', value: 0, period: 'Total', updatedAt: fallbackNow, status: 'neutral' },
+          distinctProducts: { key: 'distinctProducts', label: 'Produse Distincte', value: 0, period: 'Catalog Public', updatedAt: fallbackNow, status: 'neutral' },
+          newProducts: { key: 'newProducts', label: 'Produse Noi', value: 0, period: 'Ultima rulare', updatedAt: fallbackNow, status: 'neutral' },
+          updatedProducts: { key: 'updatedProducts', label: 'Produse Actualizate', value: 0, period: 'Ultima rulare', updatedAt: fallbackNow, status: 'neutral' },
+          extractedOffers: { key: 'extractedOffers', label: 'Oferte Extrase', value: 0, period: 'Staging', updatedAt: fallbackNow, status: 'neutral' },
+          validatedOffers: { key: 'validatedOffers', label: 'Oferte Validate', value: 0, period: 'Staging', updatedAt: fallbackNow, status: 'neutral' },
+          approvedOffers: { key: 'approvedOffers', label: 'Oferte Aprobate', value: 0, period: 'Staging', updatedAt: fallbackNow, status: 'neutral' },
+          publishedOffers: { key: 'publishedOffers', label: 'Oferte Publicate', value: 0, period: 'Catalog Public', updatedAt: fallbackNow, status: 'neutral' },
+          changedPrices: { key: 'changedPrices', label: 'Prețuri Modificate', value: 0, period: 'Istoric', updatedAt: fallbackNow, status: 'neutral' },
+          itemsWithoutPrice: { key: 'itemsWithoutPrice', label: 'Produse Fără Preț', value: 0, period: 'Protecție', updatedAt: fallbackNow, status: 'neutral' },
+          processingErrors: { key: 'processingErrors', label: 'Erori de Procesare', value: 0, period: 'Total', updatedAt: fallbackNow, status: 'critical' }
+        },
+        pipelineStages: [
+          { stage: 'discovery', name: 'Descoperire', status: 'PARTIAL', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'download', name: 'Descărcare', status: 'PENDING', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'parse', name: 'Parsare', status: 'PENDING', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'validation', name: 'Validare', status: 'PENDING', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'approval', name: 'Aprobare', status: 'PENDING', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'publishing', name: 'Publicare', status: 'PENDING', processedCount: 0, pendingCount: 0, errorCount: 0 }
+        ],
+        activeAlerts: [
+          { id: 'alt-db-down', severity: 'critical', title: 'Conexiune PostgreSQL indisponibilă', message: 'Aplicația rulează în mod limitat în memorie.', targetTab: 'settings', linkActionLabel: 'Verifică Setări Bază Date' }
+        ]
+      };
+    }
+
+    try {
+      const countsQuery = await pool.query(`
+        SELECT 
+          (SELECT count(*) FROM products) AS distinct_products,
+          (SELECT count(*) FROM product_offers) AS published_offers,
+          (SELECT count(*) FROM price_observations) AS price_observations,
+          (SELECT count(*) FROM promotions WHERE ends_at IS NULL OR ends_at >= CURRENT_DATE) AS active_promotions,
+          (SELECT count(*) FROM catalog_sources) AS configured_sources,
+          (SELECT count(*) FROM catalog_sources WHERE status = 'active') AS active_sources,
+          (SELECT count(DISTINCT retailer_id) FROM catalog_sources) AS configured_retailers_count,
+          (SELECT count(*) FROM catalog_documents) AS total_documents,
+          (SELECT count(*) FROM catalog_documents WHERE download_status = 'downloaded') AS downloaded_documents,
+          (SELECT count(*) FROM catalog_extracted_offers) AS total_extracted_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE staging_status = 'VALIDATED') AS validated_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE staging_status = 'NEEDS_REVIEW') AS needs_review_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE staging_status = 'PUBLISHED') AS published_staging_offers,
+          (SELECT count(*) FROM catalog_import_errors) AS processing_errors,
+          (SELECT count(*) FROM catalog_import_runs WHERE status = 'running' AND started_at > NOW() - interval '15 minutes') AS running_imports,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE enabled = true) AS active_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE last_status = 'running' AND updated_at > NOW() - interval '15 minutes') AS running_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE last_status = 'success') AS successful_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE last_status = 'partial') AS partial_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules WHERE last_status = 'failed') AS failed_schedules,
+          (SELECT count(*) FROM catalog_publish_schedules) AS total_schedules,
+          (SELECT min(next_run_at) FROM catalog_publish_schedules WHERE enabled = true AND next_run_at IS NOT NULL) AS next_scheduled_run,
+          (SELECT max(last_run_at) FROM catalog_publish_schedules WHERE last_run_at IS NOT NULL) AS last_scheduled_run,
+          (SELECT count(*) FROM admin_audit_logs WHERE action IN ('publish_validated_offers', 'scheduler_publish_completed') AND details->>'source' = 'automated_scheduler') AS automated_publishes,
+          (SELECT count(*) FROM admin_audit_logs WHERE action = 'publish_validated_offers' AND (details->>'source' IS NULL OR details->>'source' != 'automated_scheduler')) AS manual_publishes
+      `);
+
+      latencyMs = Date.now() - startTime;
+      const counts = countsQuery.rows[0] || {};
+
+      if (counts.configured_sources) {
+        configuredSourcesCount = parseInt(counts.configured_sources, 10);
+      }
+      if (counts.active_sources) {
+        activeSourcesCount = parseInt(counts.active_sources, 10);
+      }
+      if (counts.configured_retailers_count) {
+        configuredRetailersCount = parseInt(counts.configured_retailers_count, 10);
+      }
+
+      const runsQuery = await pool.query(`
+        SELECT id, retailer_id AS "retailerId", status, started_at AS "startedAt", completed_at AS "completedAt",
+               duration_ms AS "durationMs", total_raw_extracted AS "totalRawExtracted",
+               published_count AS "publishedCount", new_products_count AS "newProductsCount",
+               updated_products_count AS "updatedProductsCount", unchanged_products_count AS "unchangedProductsCount",
+               new_offers_count AS "newOffersCount", updated_offers_count AS "updatedOffersCount",
+               changed_prices_count AS "changedPricesCount", items_without_price_count AS "itemsWithoutPriceCount",
+               errors
+        FROM catalog_import_runs
+        ORDER BY started_at DESC
+        LIMIT 2
+      `);
+
+      const lastRun = runsQuery.rows[0] || null;
+      const previousRun = runsQuery.rows[1] || null;
+
+      const auditQuery = await pool.query(`
+        SELECT id, user_email AS "userEmail", user_id AS "userId", action, target_type AS "targetType",
+               target_id AS "targetId", details, ip_address AS "ipAddress", created_at AS "createdAt"
+        FROM admin_audit_logs
+        ORDER BY created_at DESC
+        LIMIT 1
+      `);
+      const lastAdminActivity = auditQuery.rows[0] ? {
+        id: auditQuery.rows[0].id,
+        userEmail: auditQuery.rows[0].userEmail,
+        userId: auditQuery.rows[0].userId,
+        action: auditQuery.rows[0].action,
+        targetType: auditQuery.rows[0].targetType,
+        targetId: auditQuery.rows[0].targetId,
+        details: auditQuery.rows[0].details,
+        ipAddress: auditQuery.rows[0].ipAddress,
+        createdAt: new Date(auditQuery.rows[0].createdAt).toISOString()
+      } : undefined;
+
+      const distinctProducts = parseInt(counts.distinct_products || '0', 10);
+      const publishedOffers = parseInt(counts.published_offers || '0', 10);
+      const priceObservations = parseInt(counts.price_observations || '0', 10);
+      const totalDocuments = parseInt(counts.total_documents || '0', 10);
+      const downloadedDocuments = parseInt(counts.downloaded_documents || '0', 10);
+      const totalExtractedOffers = parseInt(counts.total_extracted_offers || '0', 10);
+      const validatedOffers = parseInt(counts.validated_offers || '0', 10);
+      const needsReviewOffers = parseInt(counts.needs_review_offers || '0', 10);
+      const publishedStagingOffers = parseInt(counts.published_staging_offers || '0', 10);
+      const processingErrors = parseInt(counts.processing_errors || '0', 10);
+      const runningImports = parseInt(counts.running_imports || '0', 10);
+
+      // Metrici Scheduler de Publicare din PostgreSQL
+      const activeSchedulesCount = parseInt(counts.active_schedules || '0', 10);
+      const runningSchedulesCount = parseInt(counts.running_schedules || '0', 10);
+      const successfulSchedulesCount = parseInt(counts.successful_schedules || '0', 10);
+      const partialSchedulesCount = parseInt(counts.partial_schedules || '0', 10);
+      const failedSchedulesCount = parseInt(counts.failed_schedules || '0', 10);
+      const totalSchedulesCount = parseInt(counts.total_schedules || '0', 10);
+      const nextScheduledRunAt = counts.next_scheduled_run ? new Date(counts.next_scheduled_run).toISOString() : undefined;
+      const lastScheduledRunAt = counts.last_scheduled_run ? new Date(counts.last_scheduled_run).toISOString() : undefined;
+      const automatedPublishCount = parseInt(counts.automated_publishes || '0', 10);
+      const manualPublishCount = parseInt(counts.manual_publishes || '0', 10);
+
+      // Determinare status general
+      let overallStatus: OperationalDashboardData['overallStatus'] = 'TOTUL FUNCȚIONEAZĂ';
+      let statusMessage = 'Toate serviciile și sursele prioritare de producție funcționează optim.';
+
+      if (runningImports > 0) {
+        overallStatus = 'IMPORT ÎN DESFĂȘURARE';
+        statusMessage = `Există ${runningImports} import(uri) active în procesare concurențială.`;
+      } else if (processingErrors > 0 && lastRun?.status === 'failed') {
+        overallStatus = 'NECESITĂ ATENȚIE';
+        statusMessage = `Au fost identificate ${processingErrors} erori de procesare ce necesită investigare.`;
+      } else if (blockedSourcesCount > 0) {
+        overallStatus = 'SISTEM PARȚIAL DISPONIBIL';
+        statusMessage = `${activeRetailersCount} din 8 retaileri sunt complet operaționali. Profi și Metro sunt marcate BLOCKED (protecții WAF/Bot).`;
+      }
+
+      const activeAlerts: OperationalDashboardData['activeAlerts'] = [];
+      if (needsReviewOffers > 0) {
+        activeAlerts.push({
+          id: 'alt-review',
+          severity: 'warning',
+          title: `${needsReviewOffers} oferte în așteptare de validare`,
+          message: 'Există oferte extrase în Staging Queue care necesită verificare înainte de publicare.',
+          targetTab: 'staging',
+          linkActionLabel: 'Vezi Staging Queue'
+        });
+      }
+      if (processingErrors > 0) {
+        activeAlerts.push({
+          id: 'alt-errors',
+          severity: 'warning',
+          title: `${processingErrors} erori înregistrate în jurnal`,
+          message: 'Verificați secțiunea Jurnal și Erori pentru detalii și opțiuni de retry.',
+          targetTab: 'logs',
+          linkActionLabel: 'Vezi Jurnal Erori'
+        });
+      }
+      if (blockedSourcesCount > 0) {
+        activeAlerts.push({
+          id: 'alt-blocked',
+          severity: 'info',
+          title: 'Surse externe cu acces restricționat',
+          message: 'Profi (Cloudflare WAF 403) și METRO (Akamai Bot Sensor) sunt izolate conform eticii civice.',
+          targetTab: 'retailers',
+          linkActionLabel: 'Vezi Retaileri & Surse'
+        });
+      }
+
+      const lastRunAt = lastRun?.startedAt ? new Date(lastRun.startedAt).toISOString() : fallbackNow;
+
+      return {
+        overallStatus,
+        statusMessage,
+        activeRetailersCount,
+        configuredRetailersCount,
+        activeSourcesCount,
+        configuredSourcesCount,
+        blockedSourcesCount,
+        runningImportsCount: runningImports,
+        lastSuccessfulSync: lastRun?.completedAt ? new Date(lastRun.completedAt).toISOString() : undefined,
+        nextScheduledSync: 'Zilnic la 04:00 (Europe/Bucharest)',
+        dbStatus: {
+          connected: true,
+          configured: true,
+          persistenceMode: 'postgresql',
+          dbType: 'supabase',
+          message: `Conectat cu succes la PostgreSQL Supabase (${latencyMs}ms)`,
+          latencyMs
+        },
+        lastAdminActivity,
+        kpis: {
+          configuredRetailers: {
+            key: 'configuredRetailers',
+            label: 'Retaileri Configurați',
+            value: 8,
+            period: 'Permanent',
+            updatedAt: lastRunAt,
+            status: 'positive',
+            details: 'Lidl, Kaufland, Carrefour, PENNY, Auchan, Profi, Mega Image, METRO'
+          },
+          configuredSources: {
+            key: 'configuredSources',
+            label: 'Surse Configurate',
+            value: configuredSourcesCount,
+            period: 'Permanent',
+            updatedAt: lastRunAt,
+            status: 'positive',
+            details: 'Surse oficiale HTML, PDF, Publitas și VTEX'
+          },
+          activeSources: {
+            key: 'activeSources',
+            label: 'Surse Funcționale',
+            value: activeSourcesCount,
+            period: 'Permanent',
+            updatedAt: lastRunAt,
+            status: 'positive',
+            details: `${activeSourcesCount} din ${configuredSourcesCount} surse sunt active`
+          },
+          discoveredDocuments: {
+            key: 'discoveredDocuments',
+            label: 'Documente Descoperite',
+            value: totalDocuments,
+            period: 'Total indexat',
+            updatedAt: lastRunAt,
+            status: 'neutral'
+          },
+          downloadedDocuments: {
+            key: 'downloadedDocuments',
+            label: 'Documente Descărcate',
+            value: downloadedDocuments,
+            period: 'Total indexat',
+            updatedAt: lastRunAt,
+            status: 'positive'
+          },
+          extractedProducts: {
+            key: 'extractedProducts',
+            label: 'Produse Extrase',
+            value: totalExtractedOffers,
+            period: 'Pipeline & Staging',
+            updatedAt: lastRunAt,
+            status: 'neutral'
+          },
+          distinctProducts: {
+            key: 'distinctProducts',
+            label: 'Produse Distincte',
+            value: distinctProducts,
+            period: 'Tabelă canonicală products',
+            updatedAt: lastRunAt,
+            previousValue: previousRun?.newProductsCount ? distinctProducts - (lastRun?.newProductsCount || 0) : undefined,
+            delta: lastRun?.newProductsCount || 0,
+            status: 'positive',
+            details: 'Produse unificate cu EAN sau identificator canonic'
+          },
+          newProducts: {
+            key: 'newProducts',
+            label: 'Produse Noi',
+            value: lastRun?.newProductsCount || 0,
+            period: 'Ultima rulare de import',
+            updatedAt: lastRunAt,
+            status: (lastRun?.newProductsCount || 0) > 0 ? 'positive' : 'neutral'
+          },
+          updatedProducts: {
+            key: 'updatedProducts',
+            label: 'Produse Actualizate',
+            value: lastRun?.updatedProductsCount || 0,
+            period: 'Ultima rulare de import',
+            updatedAt: lastRunAt,
+            status: 'neutral'
+          },
+          extractedOffers: {
+            key: 'extractedOffers',
+            label: 'Oferte Extrase',
+            value: totalExtractedOffers,
+            period: 'Staging catalog_extracted_offers',
+            updatedAt: lastRunAt,
+            status: 'neutral'
+          },
+          validatedOffers: {
+            key: 'validatedOffers',
+            label: 'Oferte Validate',
+            value: validatedOffers,
+            period: 'Gata de publicare în staging',
+            updatedAt: lastRunAt,
+            status: validatedOffers > 0 ? 'positive' : 'neutral'
+          },
+          approvedOffers: {
+            key: 'approvedOffers',
+            label: 'Oferte Aprobate',
+            value: validatedOffers + publishedStagingOffers,
+            period: 'Staging Queue',
+            updatedAt: lastRunAt,
+            status: 'positive'
+          },
+          publishedOffers: {
+            key: 'publishedOffers',
+            label: 'Oferte Publicate',
+            value: publishedOffers,
+            period: 'Catalog public (product_offers)',
+            updatedAt: lastRunAt,
+            status: 'positive',
+            details: 'Oferte active vizibile în comparație prețuri'
+          },
+          changedPrices: {
+            key: 'changedPrices',
+            label: 'Prețuri Modificate',
+            value: lastRun?.changedPricesCount || priceObservations,
+            period: 'price_observations',
+            updatedAt: lastRunAt,
+            status: 'neutral'
+          },
+          itemsWithoutPrice: {
+            key: 'itemsWithoutPrice',
+            label: 'Produse Fără Preț',
+            value: lastRun?.itemsWithoutPriceCount || 0,
+            period: 'Izolate la import (preț 0/nul)',
+            updatedAt: lastRunAt,
+            status: (lastRun?.itemsWithoutPriceCount || 0) > 0 ? 'warning' : 'positive'
+          },
+          processingErrors: {
+            key: 'processingErrors',
+            label: 'Erori de Procesare',
+            value: processingErrors,
+            period: 'Tabelă catalog_import_errors',
+            updatedAt: lastRunAt,
+            status: processingErrors > 0 ? 'warning' : 'positive'
+          }
+        },
+        pipelineStages: [
+          {
+            stage: 'discovery',
+            name: '1. Descoperire',
+            status: totalDocuments > 0 ? 'PASS' : 'PENDING',
+            processedCount: totalDocuments,
+            pendingCount: 0,
+            errorCount: 0,
+            lastExecutedAt: lastRunAt
+          },
+          {
+            stage: 'download',
+            name: '2. Descărcare',
+            status: downloadedDocuments > 0 ? 'PASS' : 'PENDING',
+            processedCount: downloadedDocuments,
+            pendingCount: Math.max(0, totalDocuments - downloadedDocuments),
+            errorCount: 0,
+            lastExecutedAt: lastRunAt
+          },
+          {
+            stage: 'parse',
+            name: '3. Parsare',
+            status: totalExtractedOffers > 0 ? 'PASS' : 'PENDING',
+            processedCount: totalExtractedOffers,
+            pendingCount: 0,
+            errorCount: 0,
+            lastExecutedAt: lastRunAt
+          },
+          {
+            stage: 'validation',
+            name: '4. Validare',
+            status: validatedOffers > 0 || needsReviewOffers > 0 ? 'PASS' : 'PENDING',
+            processedCount: validatedOffers,
+            pendingCount: needsReviewOffers,
+            errorCount: processingErrors,
+            lastExecutedAt: lastRunAt
+          },
+          {
+            stage: 'approval',
+            name: '5. Aprobare',
+            status: validatedOffers > 0 ? 'PASS' : 'PENDING',
+            processedCount: validatedOffers,
+            pendingCount: needsReviewOffers,
+            errorCount: 0,
+            lastExecutedAt: lastRunAt
+          },
+          {
+            stage: 'publishing',
+            name: '6. Publicare',
+            status: publishedOffers > 0 ? 'PASS' : 'PENDING',
+            processedCount: publishedOffers,
+            pendingCount: validatedOffers,
+            errorCount: 0,
+            lastExecutedAt: lastRunAt
+          }
+        ],
+        activeAlerts,
+        scheduler: {
+          activeSchedulesCount,
+          runningSchedulesCount,
+          successfulSchedulesCount,
+          partialSchedulesCount,
+          failedSchedulesCount,
+          totalSchedulesCount,
+          nextScheduledRunAt,
+          lastScheduledRunAt,
+          manualPublishCount,
+          automatedPublishCount
+        }
+      };
+    } catch (err: any) {
+      console.error('Eroare getOperationalMetrics:', err);
+      return {
+        overallStatus: 'EROARE CRITICĂ',
+        statusMessage: `Eroare interogare metrici: ${err.message}`,
+        activeRetailersCount: 6,
+        configuredRetailersCount: 8,
+        activeSourcesCount: 9,
+        configuredSourcesCount: 11,
+        blockedSourcesCount: 2,
+        runningImportsCount: 0,
+        dbStatus: {
+          connected: false,
+          configured: true,
+          persistenceMode: 'postgresql',
+          dbType: 'supabase',
+          message: err.message
+        },
+        kpis: {} as any,
+        pipelineStages: [],
+        activeAlerts: [
+          { id: 'err-query', severity: 'critical', title: 'Eroare interogare PostgreSQL', message: err.message, targetTab: 'logs' }
+        ]
+      };
+    }
+  }
+
+  /**
+   * Returnează produsele canonice cu detalii de agregare (paginare, căutare, categorii)
+   */
+  static async getProductsDetailed(params: {
+    limit: number;
+    offset: number;
+    search?: string;
+    category?: string;
+  }): Promise<{ products: any[]; total: number }> {
+    const pool = getPool();
+    if (!pool) {
+      const all = await this.getProducts();
+      return { products: all.slice(params.offset, params.offset + params.limit), total: all.length };
+    }
+
+    try {
+      const conditions: string[] = ['1=1'];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (params.search && params.search.trim()) {
+        conditions.push(`(p.name ILIKE $${idx} OR p.brand ILIKE $${idx} OR p.barcode ILIKE $${idx})`);
+        values.push(`%${params.search.trim()}%`);
+        idx++;
+      }
+
+      if (params.category && params.category !== 'toate') {
+        conditions.push(`p.category = $${idx}`);
+        values.push(params.category);
+        idx++;
+      }
+
+      const whereClause = conditions.join(' AND ');
+
+      const countRes = await pool.query(`SELECT count(*) FROM products p WHERE ${whereClause}`, values);
+      const total = parseInt(countRes.rows[0]?.count || '0', 10);
+
+      const limitIdx = idx;
+      values.push(params.limit);
+      const offsetIdx = idx + 1;
+      values.push(params.offset);
+
+      const query = `
+        SELECT 
+          p.id, p.name, p.brand, p.category, p.default_unit AS "defaultUnit",
+          p.package_weight_or_volume AS "packageWeightOrVolume", p.package_unit AS "packageUnit",
+          p.normalized_unit AS "normalizedUnit", p.barcode, p.image_url AS "imageUrl",
+          p.is_bio AS "isBio", p.is_romanian_product AS "isRomanianProduct",
+          p.base_reference_price AS "baseReferencePrice",
+          p.created_at AS "createdAt", p.updated_at AS "updatedAt",
+          (SELECT count(*) FROM product_offers po WHERE po.product_id = p.id) AS "offersCount",
+          (SELECT min(price) FROM product_offers po WHERE po.product_id = p.id) AS "minPrice",
+          (SELECT max(price) FROM product_offers po WHERE po.product_id = p.id) AS "maxPrice",
+          (SELECT json_agg(json_build_object('storeId', po.store_id, 'price', po.price, 'isPromo', po.is_promo, 'normalPrice', po.normal_price, 'promoPrice', po.promo_price, 'loyaltyPrice', po.loyalty_price)) FROM product_offers po WHERE po.product_id = p.id) AS "offers"
+        FROM products p
+        WHERE ${whereClause}
+        ORDER BY p.updated_at DESC
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      `;
+
+      const res = await pool.query(query, values);
+      return { products: res.rows, total };
+    } catch (err: any) {
+      console.error('Eroare getProductsDetailed:', err.message);
+      return { products: [], total: 0 };
+    }
+  }
+
+  /**
+   * Returnează datele complete pentru un produs canonic (istoric, oferte, mapări retailer)
+   */
+  static async getProductDetailById(productId: string): Promise<any> {
+    const pool = getPool();
+    if (!pool) return null;
+
+    try {
+      const prodRes = await pool.query(`SELECT * FROM products WHERE id = $1`, [productId]);
+      if (prodRes.rows.length === 0) return null;
+      const product = prodRes.rows[0];
+
+      const offersRes = await pool.query(`
+        SELECT po.*, s.name AS store_name, s.brand_color AS store_brand_color, s.logo_url AS store_logo_url
+        FROM product_offers po
+        LEFT JOIN stores s ON s.id = po.store_id
+        WHERE po.product_id = $1
+        ORDER BY po.price ASC
+      `, [productId]);
+
+      const historyRes = await pool.query(`
+        SELECT * FROM price_observations
+        WHERE product_id = $1
+        ORDER BY date DESC, created_at DESC
+        LIMIT 50
+      `, [productId]);
+
+      const retailerMappingRes = await pool.query(`
+        SELECT * FROM retailer_products
+        WHERE product_id = $1
+      `, [productId]);
+
+      const promosRes = await pool.query(`
+        SELECT * FROM promotions
+        WHERE product_id = $1
+        ORDER BY ends_at DESC NULLS LAST
+      `, [productId]);
+
+      return {
+        product,
+        offers: offersRes.rows,
+        priceHistory: historyRes.rows,
+        retailerMappings: retailerMappingRes.rows,
+        promotions: promosRes.rows
+      };
+    } catch (err: any) {
+      console.error('Eroare getProductDetailById:', err.message);
+      return null;
+    }
+  }
 }
+
+

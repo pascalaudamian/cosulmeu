@@ -78,14 +78,14 @@ interface TimelineStep {
 }
 
 const ALL_8_RETAILERS = [
-  { id: 'lidl', name: 'Lidl România', format: 'HTML', defaultStatus: 'ACTIVE', color: 'blue' },
+  { id: 'lidl', name: 'Lidl România', format: 'HTML & PDF', defaultStatus: 'ACTIVE', color: 'blue' },
   { id: 'kaufland', name: 'Kaufland România', format: 'PDF', defaultStatus: 'ACTIVE', color: 'red' },
-  { id: 'carrefour', name: 'Carrefour România', format: 'HTML / SPA', defaultStatus: 'WAITING_FOR_AUTHORIZATION', color: 'sky' },
-  { id: 'penny', name: 'Penny România', format: 'HTML / Viewer', defaultStatus: 'WAITING_FOR_AUTHORIZATION', color: 'amber' },
-  { id: 'auchan', name: 'Auchan România', format: 'HTML / VTEX', defaultStatus: 'WAITING_FOR_AUTHORIZATION', color: 'rose' },
-  { id: 'profi', name: 'Profi Rom Food', format: 'PDF', defaultStatus: 'BLOCKED', color: 'emerald' },
-  { id: 'mega-image', name: 'Mega Image', format: 'HTML / Publitas', defaultStatus: 'WAITING_FOR_AUTHORIZATION', color: 'red' },
-  { id: 'metro', name: 'Metro Cash & Carry', format: 'PDF', defaultStatus: 'BLOCKED', color: 'yellow' }
+  { id: 'carrefour', name: 'Carrefour România', format: 'HTML', defaultStatus: 'ACTIVE', color: 'sky' },
+  { id: 'penny', name: 'Penny România', format: 'HTML', defaultStatus: 'ACTIVE', color: 'amber' },
+  { id: 'auchan', name: 'Auchan România', format: 'Magazin Online & VTEX', defaultStatus: 'ACTIVE', color: 'rose' },
+  { id: 'profi', name: 'Profi Rom Food', format: 'PDF / WAF', defaultStatus: 'BLOCKED', color: 'emerald' },
+  { id: 'mega-image', name: 'Mega Image', format: 'Publitas / HTML', defaultStatus: 'ACTIVE', color: 'red' },
+  { id: 'metro', name: 'Metro Cash & Carry', format: 'PDF / B2B', defaultStatus: 'BLOCKED', color: 'yellow' }
 ];
 
 export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = ({ adminToken }) => {
@@ -122,6 +122,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
   const [processingDocId, setProcessingDocId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [operationProgress, setOperationProgress] = useState<{ label: string; detail?: string } | null>(null);
 
   // Modals
   const [showAddSourceModal, setShowAddSourceModal] = useState<boolean>(false);
@@ -265,6 +266,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
   const handleRunActiveImports = async () => {
     setIsRunningActive(true);
     setActionMessage(null);
+    setOperationProgress({ label: 'Se pornesc importurile active', detail: 'Se verifică sursele configurate și se descarcă documentele disponibile.' });
     try {
       const res = await fetchWithAuth('/api/admin/catalog-importer/run-active', { method: 'POST' });
       const data = await res.json();
@@ -276,10 +278,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       } else {
         setActionMessage({ type: 'error', text: data.error || 'Importul activ a eșuat.' });
       }
+      setOperationProgress({ label: 'Se actualizează rezultatele', detail: 'Se încarcă statisticile, documentele și ofertele extrase.' });
       await loadAllData();
     } catch (err: any) {
       setActionMessage({ type: 'error', text: `Eroare de rețea: ${err.message}` });
     } finally {
+      setOperationProgress(null);
       setIsRunningActive(false);
     }
   };
@@ -419,8 +423,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
 
   // Publish all validated offers
   const handlePublishValidated = async () => {
+    const validatedCount = stats?.stagedValidated ?? stagingOffers.filter(offer => offer.stagingStatus === 'VALIDATED').length;
+    if (validatedCount === 0) {
+      setActionMessage({ type: 'info', text: 'Nu există oferte validate pregătite pentru publicare.' });
+      return;
+    }
+    if (!window.confirm(`Publici ${validatedCount} oferte validate în catalogul public? Această acțiune va actualiza produsele vizibile.`)) return;
+
     setIsPublishing(true);
     setActionMessage(null);
+    setOperationProgress({ label: 'Se publică ofertele validate', detail: `${validatedCount} oferte sunt transferate în catalogul public.` });
     try {
       const res = await fetchWithAuth('/api/admin/catalog-importer/publish-validated', {
         method: 'POST',
@@ -435,10 +447,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       } else {
         setActionMessage({ type: 'error', text: data.error || 'Publicarea ofertelor a eșuat.' });
       }
+      setOperationProgress({ label: 'Se verifică persistența', detail: 'Se confirmă produsele și ofertele salvate în baza de date.' });
       await loadAllData();
     } catch (err: any) {
       setActionMessage({ type: 'error', text: `Eroare: ${err.message}` });
     } finally {
+      setOperationProgress(null);
       setIsPublishing(false);
     }
   };
@@ -649,7 +663,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               title="Click pentru diagnosticare completă bază de date"
             >
               <Database className={`w-4 h-4 ${dbStatus?.connected ? 'text-emerald-400' : 'text-amber-400'}`} />
-              <span>{dbStatus?.statusLabel || (dbStatus?.connected ? 'PostgreSQL Conectat' : 'Mod Demonstrativ (Memorie)')}</span>
+              <span>{dbStatus?.statusLabel || (dbStatus?.connected ? 'PostgreSQL Conectat' : 'Stocare Locală')}</span>
               <span className="w-2 h-2 rounded-full animate-pulse bg-current" />
             </div>
 
@@ -671,7 +685,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div className="flex-1">
               <strong className="font-semibold text-amber-300">
-                {dbStatus?.configured ? 'Conexiunea PostgreSQL necesită atenție: ' : 'Mod Demonstrativ Activ (Date Nepersistente): '}
+                {dbStatus?.configured ? 'Conexiunea PostgreSQL necesită atenție: ' : 'Stocare Locală Activă (Date Nepersistente): '}
               </strong>
               {dbStatus?.configured
                 ? `${dbStatus.message || 'Conexiunea la PostgreSQL nu a putut fi verificată.'} Datele noi rămân temporar în fallback până la remedierea conexiunii.`
@@ -680,8 +694,18 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           </div>
         )}
 
-        {/* Global Action Message Banner */}
-        {actionMessage && (
+  {operationProgress && (
+  <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3.5 text-xs text-blue-900" role="status" aria-live="polite">
+    <div className="flex items-center gap-2 font-semibold">
+      <RefreshCw className="h-4 w-4 animate-spin text-blue-600" />
+      <span>{operationProgress.label}</span>
+    </div>
+    {operationProgress.detail && <p className="mt-1 pl-6 text-blue-700">{operationProgress.detail}</p>}
+  </div>
+  )}
+
+  {/* Global Action Message Banner */}
+  {actionMessage && (
           <div
             className={`mt-4 p-3.5 rounded-xl text-xs flex items-start justify-between gap-3 ${
               actionMessage.type === 'success'
@@ -706,7 +730,32 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
         )}
       </div>
 
-      {/* 2. OPERATIONAL KPI BAR (Clickable cards that switch/filter views) */}
+      {/* 2. OPERATIONAL STATUS */}
+      <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs ${
+        importErrors.length > 0 || (stats?.stagedPendingReview || 0) > 0
+          ? 'border-amber-200 bg-amber-50 text-amber-900'
+          : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+      }`}>
+        <div className="flex items-center gap-2">
+          {importErrors.length > 0 || (stats?.stagedPendingReview || 0) > 0 ? (
+            <AlertCircle className="h-4 w-4 text-amber-600" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+          )}
+          <span className="font-semibold">
+            {importErrors.length > 0
+              ? `${importErrors.length} probleme necesită atenție`
+              : (stats?.stagedPendingReview || 0) > 0
+                ? `${stats?.stagedPendingReview} oferte așteaptă validarea`
+                : 'Sistem operațional — toate fluxurile sunt disponibile'}
+          </span>
+        </div>
+        <span className="text-slate-600">
+          Ultima actualizare: {formatTimeAgo(stats?.lastRunAt)}
+        </span>
+      </div>
+
+      {/* 3. OPERATIONAL KPI BAR (Clickable cards that switch/filter views) */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
         {/* KPI 1: Active Retailers */}
         <div
@@ -720,7 +769,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             <Server className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-500" />
           </div>
           <div className="text-xl font-bold text-slate-900 mt-1">
-            {stats?.activeSources || 2} <span className="text-xs text-slate-400 font-normal">/ 8</span>
+            {stats?.activeSources ?? sources.filter(source => source.status === 'active').length} <span className="text-xs text-slate-400 font-normal">active</span>
           </div>
           <div className="text-[10px] text-emerald-600 font-medium mt-0.5">Vezi lista retailerilor →</div>
         </div>
@@ -846,7 +895,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-semibold text-xs transition-all shadow-sm disabled:opacity-50 cursor-pointer"
             >
               {isRunningActive ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              <span>Rulează Importurile Active (Lidl & Kaufland)</span>
+              <span>Rulează importurile active</span>
             </button>
 
             {/* Primary Action 2: Run Test for Specific Retailer */}
@@ -1840,7 +1889,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                 Persistență Duală
               </div>
               <p className="text-slate-600 leading-relaxed">
-                Dacă variabila <code>DATABASE_URL</code> este prezentă, toate operațiunile scriu tranzacțional în PostgreSQL. În caz contrar, se folosește fallback-ul în memorie (StorageService), marcat ca mod demonstrativ.
+                Dacă variabila <code>DATABASE_URL</code> este prezentă, toate operațiunile scriu tranzacțional în PostgreSQL. În caz contrar, se folosește stocarea locală de rezervă (StorageService).
               </p>
             </div>
           </div>

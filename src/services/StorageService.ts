@@ -33,8 +33,6 @@ import {
 } from '../indexing/catalog/catalogTypes.js';
 import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/CatalogSourceDiscovery.js';
 import {
-  INITIAL_SHOPPING_LISTS,
-  SAMPLE_RECEIPTS,
   INITIAL_USER_PROFILE,
   PRODUCTS,
   PRODUCT_OFFERS,
@@ -124,14 +122,14 @@ export class StorageService {
   // Shopping Lists
   static getShoppingLists(): ShoppingList[] {
     try {
+      this.sanitizeDemoData();
       const data = safeGetItem(KEYS.SHOPPING_LISTS);
       if (!data) {
-        this.saveShoppingLists(INITIAL_SHOPPING_LISTS);
-        return INITIAL_SHOPPING_LISTS;
+        return [];
       }
       return JSON.parse(data);
     } catch {
-      return INITIAL_SHOPPING_LISTS;
+      return [];
     }
   }
 
@@ -148,9 +146,9 @@ export class StorageService {
       const id = safeGetItem(KEYS.ACTIVE_LIST_ID);
       if (id) return id;
       const lists = this.getShoppingLists();
-      return lists[0]?.id || 'list-default';
+      return lists[0]?.id || '';
     } catch {
-      return 'list-default';
+      return '';
     }
   }
 
@@ -165,14 +163,14 @@ export class StorageService {
   // Receipts
   static getReceipts(): Receipt[] {
     try {
+      this.sanitizeDemoData();
       const data = safeGetItem(KEYS.RECEIPTS);
       if (!data) {
-        this.saveReceipts(SAMPLE_RECEIPTS);
-        return SAMPLE_RECEIPTS;
+        return [];
       }
       return JSON.parse(data);
     } catch {
-      return SAMPLE_RECEIPTS;
+      return [];
     }
   }
 
@@ -217,14 +215,31 @@ export class StorageService {
     try {
       const data = safeGetItem(KEYS.USER_PROFILE);
       if (!data) {
-        this.saveUserProfile({ ...INITIAL_USER_PROFILE, useLoyaltyCards: true });
-        return { ...INITIAL_USER_PROFILE, useLoyaltyCards: true };
+        return {
+          name: 'Utilizator',
+          email: '',
+          city: 'București',
+          preferredStores: [],
+          monthlySavingsGoal: 0,
+          notificationsEnabled: false,
+          defaultTransportCostEstimate: 0,
+          useLoyaltyCards: true
+        };
       }
       const parsed = JSON.parse(data);
       if (parsed.useLoyaltyCards === undefined) parsed.useLoyaltyCards = true;
       return parsed;
     } catch {
-      return { ...INITIAL_USER_PROFILE, useLoyaltyCards: true };
+      return {
+        name: 'Utilizator',
+        email: '',
+        city: 'București',
+        preferredStores: [],
+        monthlySavingsGoal: 0,
+        notificationsEnabled: false,
+        defaultTransportCostEstimate: 0,
+        useLoyaltyCards: true
+      };
     }
   }
 
@@ -239,32 +254,10 @@ export class StorageService {
   // Price Alerts
   static getPriceAlerts(): PriceAlert[] {
     try {
+      this.sanitizeDemoData();
       const data = safeGetItem(KEYS.PRICE_ALERTS);
       if (!data) {
-        const initialAlerts: PriceAlert[] = [
-          {
-            id: 'alt-1',
-            productId: 'prod-lapte-1',
-            productName: 'Lapte proaspăt 1.5% grăsime 1L (Napolact)',
-            targetPrice: 6.00,
-            currentLowestPrice: 6.29,
-            lowestStoreId: 'kaufland',
-            createdAt: '2026-10-20',
-            isActive: true
-          },
-          {
-            id: 'alt-2',
-            productId: 'prod-piept-pui',
-            productName: 'Piept de pui dezosat fără piele 1kg',
-            targetPrice: 25.00,
-            currentLowestPrice: 26.49,
-            lowestStoreId: 'penny',
-            createdAt: '2026-10-22',
-            isActive: true
-          }
-        ];
-        this.savePriceAlerts(initialAlerts);
-        return initialAlerts;
+        return [];
       }
       return JSON.parse(data);
     } catch {
@@ -283,15 +276,14 @@ export class StorageService {
   // Tracked Products
   static getTrackedProducts(): string[] {
     try {
+      this.sanitizeDemoData();
       const data = safeGetItem(KEYS.TRACKED_PRODUCTS);
       if (!data) {
-        const initial = ['prod-lapte-1', 'prod-piept-pui', 'prod-oua-m10', 'prod-ulei-fl-soarelui'];
-        safeSetItem(KEYS.TRACKED_PRODUCTS, JSON.stringify(initial));
-        return initial;
+        return [];
       }
       return JSON.parse(data);
     } catch {
-      return ['prod-lapte-1', 'prod-piept-pui'];
+      return [];
     }
   }
 
@@ -870,8 +862,15 @@ export class StorageService {
       const storedSources = JSON.parse(data) as CatalogSource[];
       const storedById = new Map(storedSources.map(source => [source.id, source]));
 
-      // Keep user changes, but backfill newly registered retailers and their catalog URLs.
-      return INITIAL_CATALOG_SOURCES.map(source => storedById.get(source.id) || source);
+      // Keep user changes, but backfill newly registered retailers and sync updated official URLs.
+      return INITIAL_CATALOG_SOURCES.map(source => {
+        const stored = storedById.get(source.id);
+        if (!stored) return source;
+        if (stored.catalogUrl !== source.catalogUrl) {
+          return { ...stored, ...source };
+        }
+        return stored;
+      });
     } catch {
       return INITIAL_CATALOG_SOURCES;
     }
@@ -1017,12 +1016,65 @@ export class StorageService {
     };
   }
 
+  /**
+   * Curăță datele demonstrative istorice din stocarea locală/memorie pentru a asigura doar date reale
+   */
+  static sanitizeDemoData(): void {
+    try {
+      const receiptsData = safeGetItem(KEYS.RECEIPTS);
+      if (receiptsData) {
+        const parsed: Receipt[] = JSON.parse(receiptsData);
+        const cleaned = parsed.filter(r => r.id !== 'rec-kaufland-102' && r.id !== 'rec-lidl-089');
+        if (cleaned.length !== parsed.length) {
+          safeSetItem(KEYS.RECEIPTS, JSON.stringify(cleaned));
+        }
+      }
+
+      const listsData = safeGetItem(KEYS.SHOPPING_LISTS);
+      if (listsData) {
+        const parsed: ShoppingList[] = JSON.parse(listsData);
+        const cleaned = parsed.filter(l => l.id !== 'list-default' && l.id !== 'list-curatenie');
+        if (cleaned.length !== parsed.length) {
+          safeSetItem(KEYS.SHOPPING_LISTS, JSON.stringify(cleaned));
+        }
+      }
+
+      const alertsData = safeGetItem(KEYS.PRICE_ALERTS);
+      if (alertsData) {
+        const parsed: PriceAlert[] = JSON.parse(alertsData);
+        const cleaned = parsed.filter(a => a.id !== 'alt-1' && a.id !== 'alt-2');
+        if (cleaned.length !== parsed.length) {
+          safeSetItem(KEYS.PRICE_ALERTS, JSON.stringify(cleaned));
+        }
+      }
+
+      const trackedData = safeGetItem(KEYS.TRACKED_PRODUCTS);
+      if (trackedData) {
+        const parsed: string[] = JSON.parse(trackedData);
+        const demoTracked = ['prod-lapte-1', 'prod-piept-pui', 'prod-oua-m10', 'prod-ulei-fl-soarelui'];
+        const isExactDemo = parsed.length === demoTracked.length && parsed.every(p => demoTracked.includes(p));
+        if (isExactDemo) {
+          safeSetItem(KEYS.TRACKED_PRODUCTS, JSON.stringify([]));
+        }
+      }
+    } catch {}
+  }
+
   // Reset & Export
   static resetAllData(): void {
     safeClear();
-    this.saveShoppingLists(INITIAL_SHOPPING_LISTS);
-    this.saveReceipts(SAMPLE_RECEIPTS);
-    this.saveUserProfile({ ...INITIAL_USER_PROFILE, useLoyaltyCards: true });
+    this.saveShoppingLists([]);
+    this.saveReceipts([]);
+    this.saveUserProfile({
+      name: 'Utilizator',
+      email: '',
+      city: 'București',
+      preferredStores: [],
+      monthlySavingsGoal: 0,
+      notificationsEnabled: false,
+      defaultTransportCostEstimate: 0,
+      useLoyaltyCards: true
+    });
     this.saveProductOffers(PRODUCT_OFFERS);
     this.saveDataSources(DATA_SOURCES);
     this.saveSyncRuns(INITIAL_SYNC_RUNS);

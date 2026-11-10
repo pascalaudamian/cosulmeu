@@ -1,13 +1,15 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Store as StoreIcon, MapPin, Star, Tag, ExternalLink, ShieldCheck, ShoppingBag } from 'lucide-react';
 import { STORES } from '../data/mockData.js';
-import { PRODUCT_OFFERS } from '../data/mockData.js';
+import { StorageService } from '../services/StorageService.js';
 
 interface StoresViewProps {
   userCity: string;
 }
 
 export const StoresView: React.FC<StoresViewProps> = ({ userCity }) => {
+  const allOffers = useMemo(() => StorageService.getProductOffers(), []);
+
   return (
     <div className="space-y-6 pb-16">
       {/* Top Banner */}
@@ -22,8 +24,8 @@ export const StoresView: React.FC<StoresViewProps> = ({ userCity }) => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {STORES.map(store => {
-          const storeOffersCount = PRODUCT_OFFERS.filter(o => o.storeId === store.id).length;
-          const promoOffersCount = PRODUCT_OFFERS.filter(o => o.storeId === store.id && o.isPromo).length;
+          const storeOffersCount = allOffers.filter(o => o.storeId === store.id).length;
+          const promoOffersCount = allOffers.filter(o => o.storeId === store.id && o.isPromo).length;
 
           return (
             <div

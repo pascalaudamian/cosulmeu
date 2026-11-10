@@ -424,7 +424,7 @@ export const PRODUCTS: Product[] = [
 export const PRODUCT_OFFERS: ProductOffer[] = [
   // Lapte Napolact 1.5% 1L
   { id: 'off-1', productId: 'prod-lapte-1', storeId: 'lidl', price: 6.49, unitPrice: 6.49, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
-  { id: 'off-2', productId: 'prod-lapte-1', storeId: 'kaufland', price: 6.29, originalPrice: 6.99, unitPrice: 6.29, unitPriceMeasure: 'lei/l', isPromo: true, promoDetails: '-10% Kaufland Card', loyaltyCardRequired: true, loyaltyCardName: 'Kaufland Card', validUntil: '2026-11-05', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
+  { id: 'off-2', productId: 'prod-lapte-1', storeId: 'kaufland', price: 6.29, originalPrice: 6.99, unitPrice: 6.29, unitPriceMeasure: 'lei/l', isPromo: true, promoDetails: '-10% Kaufland Card', loyaltyCardRequired: true, loyaltyCardName: 'Kaufland Card', validUntil: '2027-12-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
   { id: 'off-3', productId: 'prod-lapte-1', storeId: 'carrefour', price: 6.89, unitPrice: 6.89, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
   { id: 'off-4', productId: 'prod-lapte-1', storeId: 'penny', price: 6.39, unitPrice: 6.39, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'medium', verificationStatus: 'demo', observationDate: '2026-10-23', lastChecked: '2026-10-23' },
   { id: 'off-5', productId: 'prod-lapte-1', storeId: 'auchan', price: 6.69, unitPrice: 6.69, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'medium', verificationStatus: 'demo', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
@@ -432,7 +432,7 @@ export const PRODUCT_OFFERS: ProductOffer[] = [
   { id: 'off-7', productId: 'prod-lapte-1', storeId: 'mega-image', price: 7.49, unitPrice: 7.49, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'demo', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
 
   // Ouă M 10 buc
-  { id: 'off-8', productId: 'prod-oua-m10', storeId: 'lidl', price: 9.99, unitPrice: 1.00, unitPriceMeasure: 'lei/buc', isPromo: true, promoDetails: 'Super Weekend', validUntil: '2026-11-01', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
+  { id: 'off-8', productId: 'prod-oua-m10', storeId: 'lidl', price: 9.99, unitPrice: 1.00, unitPriceMeasure: 'lei/buc', isPromo: true, promoDetails: 'Super Weekend', validUntil: '2027-12-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
   { id: 'off-9', productId: 'prod-oua-m10', storeId: 'kaufland', price: 10.49, unitPrice: 1.05, unitPriceMeasure: 'lei/buc', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
   { id: 'off-10', productId: 'prod-oua-m10', storeId: 'carrefour', price: 11.29, unitPrice: 1.13, unitPriceMeasure: 'lei/buc', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
   { id: 'off-11', productId: 'prod-oua-m10', storeId: 'penny', price: 10.19, unitPrice: 1.02, unitPriceMeasure: 'lei/buc', isPromo: false, source: 'demo', confidenceLevel: 'medium', verificationStatus: 'demo', observationDate: '2026-10-23', lastChecked: '2026-10-23' },
@@ -442,13 +442,13 @@ export const PRODUCT_OFFERS: ProductOffer[] = [
   // Pâine Vel Pitar Toast 500g
   { id: 'off-14', productId: 'prod-paine-toast', storeId: 'lidl', price: 4.49, unitPrice: 8.98, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
   { id: 'off-15', productId: 'prod-paine-toast', storeId: 'kaufland', price: 4.69, unitPrice: 9.38, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
-  { id: 'off-16', productId: 'prod-paine-toast', storeId: 'carrefour', price: 4.39, originalPrice: 4.89, unitPrice: 8.78, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: 'Top Oferte', validUntil: '2026-10-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
+  { id: 'off-16', productId: 'prod-paine-toast', storeId: 'carrefour', price: 4.39, originalPrice: 4.89, unitPrice: 8.78, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: 'Top Oferte', validUntil: '2027-12-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
   { id: 'off-17', productId: 'prod-paine-toast', storeId: 'penny', price: 4.59, unitPrice: 9.18, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'medium', verificationStatus: 'demo', observationDate: '2026-10-23', lastChecked: '2026-10-23' },
   { id: 'off-18', productId: 'prod-paine-toast', storeId: 'auchan', price: 4.79, unitPrice: 9.58, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'demo', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
   { id: 'off-19', productId: 'prod-paine-toast', storeId: 'profi', price: 5.19, unitPrice: 10.38, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'demo', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
 
   // Piept de pui dezosat 1kg
-  { id: 'off-20', productId: 'prod-piept-pui', storeId: 'lidl', price: 26.90, originalPrice: 29.90, unitPrice: 26.90, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: '-10% Lidl Plus', loyaltyCardRequired: true, loyaltyCardName: 'Lidl Plus', validUntil: '2026-11-05', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
+  { id: 'off-20', productId: 'prod-piept-pui', storeId: 'lidl', price: 26.90, originalPrice: 29.90, unitPrice: 26.90, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: '-10% Lidl Plus', loyaltyCardRequired: true, loyaltyCardName: 'Lidl Plus', validUntil: '2027-12-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
   { id: 'off-21', productId: 'prod-piept-pui', storeId: 'kaufland', price: 27.50, unitPrice: 27.50, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
   { id: 'off-22', productId: 'prod-piept-pui', storeId: 'carrefour', price: 28.90, unitPrice: 28.90, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
   { id: 'off-23', productId: 'prod-piept-pui', storeId: 'penny', price: 26.49, unitPrice: 26.49, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-23', lastChecked: '2026-10-23' },
@@ -457,7 +457,7 @@ export const PRODUCT_OFFERS: ProductOffer[] = [
 
   // Banane 1kg
   { id: 'off-26', productId: 'prod-banane', storeId: 'lidl', price: 6.49, unitPrice: 6.49, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
-  { id: 'off-27', productId: 'prod-banane', storeId: 'kaufland', price: 5.99, originalPrice: 6.99, unitPrice: 5.99, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: 'Săptămâna Fructelor', validUntil: '2026-11-02', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
+  { id: 'off-27', productId: 'prod-banane', storeId: 'kaufland', price: 5.99, originalPrice: 6.99, unitPrice: 5.99, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: 'Săptămâna Fructelor', validUntil: '2027-12-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
   { id: 'off-28', productId: 'prod-banane', storeId: 'carrefour', price: 6.79, unitPrice: 6.79, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
   { id: 'off-29', productId: 'prod-banane', storeId: 'penny', price: 6.29, unitPrice: 6.29, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'medium', verificationStatus: 'demo', observationDate: '2026-10-23', lastChecked: '2026-10-23' },
   { id: 'off-30', productId: 'prod-banane', storeId: 'auchan', price: 6.89, unitPrice: 6.89, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'demo', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
@@ -465,7 +465,7 @@ export const PRODUCT_OFFERS: ProductOffer[] = [
 
   // Ulei de floarea-soarelui 1L
   { id: 'off-32', productId: 'prod-ulei-fl-soarelui', storeId: 'lidl', price: 6.29, unitPrice: 6.29, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
-  { id: 'off-33', productId: 'prod-ulei-fl-soarelui', storeId: 'kaufland', price: 5.99, unitPrice: 5.99, unitPriceMeasure: 'lei/l', isPromo: true, promoDetails: 'Preț plafonat/promo', validUntil: '2026-11-15', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
+  { id: 'off-33', productId: 'prod-ulei-fl-soarelui', storeId: 'kaufland', price: 5.99, unitPrice: 5.99, unitPriceMeasure: 'lei/l', isPromo: true, promoDetails: 'Preț plafonat/promo', validUntil: '2027-12-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
   { id: 'off-34', productId: 'prod-ulei-fl-soarelui', storeId: 'carrefour', price: 6.59, unitPrice: 6.59, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
   { id: 'off-35', productId: 'prod-ulei-fl-soarelui', storeId: 'penny', price: 6.19, unitPrice: 6.19, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'medium', verificationStatus: 'demo', observationDate: '2026-10-23', lastChecked: '2026-10-23' },
   { id: 'off-36', productId: 'prod-ulei-fl-soarelui', storeId: 'auchan', price: 6.49, unitPrice: 6.49, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'demo', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
@@ -487,20 +487,20 @@ export const PRODUCT_OFFERS: ProductOffer[] = [
 
   // Detergent vase Fairy 800ml
   { id: 'off-48', productId: 'prod-detergent-fairy', storeId: 'lidl', price: 11.99, unitPrice: 14.99, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
-  { id: 'off-49', productId: 'prod-detergent-fairy', storeId: 'kaufland', price: 11.49, originalPrice: 13.99, unitPrice: 14.36, unitPriceMeasure: 'lei/l', isPromo: true, promoDetails: '-18% Promoție', validUntil: '2026-11-03', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
+  { id: 'off-49', productId: 'prod-detergent-fairy', storeId: 'kaufland', price: 11.49, originalPrice: 13.99, unitPrice: 14.36, unitPriceMeasure: 'lei/l', isPromo: true, promoDetails: '-18% Promoție', validUntil: '2027-12-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
   { id: 'off-50', productId: 'prod-detergent-fairy', storeId: 'carrefour', price: 12.89, unitPrice: 16.11, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
   { id: 'off-51', productId: 'prod-detergent-fairy', storeId: 'penny', price: 11.89, unitPrice: 14.86, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'medium', verificationStatus: 'demo', observationDate: '2026-10-23', lastChecked: '2026-10-23' },
   { id: 'off-52', productId: 'prod-detergent-fairy', storeId: 'auchan', price: 12.49, unitPrice: 15.61, unitPriceMeasure: 'lei/l', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'demo', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
 
   // Cafea Jacobs 500g
   { id: 'off-53', productId: 'prod-cafea-jacobs', storeId: 'lidl', price: 24.90, unitPrice: 49.80, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
-  { id: 'off-54', productId: 'prod-cafea-jacobs', storeId: 'kaufland', price: 23.90, originalPrice: 28.50, unitPrice: 47.80, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: 'Reducere cafea', validUntil: '2026-11-04', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
+  { id: 'off-54', productId: 'prod-cafea-jacobs', storeId: 'kaufland', price: 23.90, originalPrice: 28.50, unitPrice: 47.80, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: 'Reducere cafea', validUntil: '2027-12-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
   { id: 'off-55', productId: 'prod-cafea-jacobs', storeId: 'carrefour', price: 25.90, unitPrice: 51.80, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
   { id: 'off-56', productId: 'prod-cafea-jacobs', storeId: 'penny', price: 24.49, unitPrice: 48.98, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'medium', verificationStatus: 'demo', observationDate: '2026-10-23', lastChecked: '2026-10-23' },
   { id: 'off-57', productId: 'prod-cafea-jacobs', storeId: 'auchan', price: 26.20, unitPrice: 52.40, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'demo', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
 
   // Telemea Hochland 350g
-  { id: 'off-58', productId: 'prod-telemea-vaca', storeId: 'kaufland', price: 15.99, originalPrice: 17.50, unitPrice: 45.69, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: 'Ofertă săptămânală', validUntil: '2026-11-02', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
+  { id: 'off-58', productId: 'prod-telemea-vaca', storeId: 'kaufland', price: 15.99, originalPrice: 17.50, unitPrice: 45.69, unitPriceMeasure: 'lei/kg', isPromo: true, promoDetails: 'Ofertă săptămânală', validUntil: '2027-12-31', source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-26', lastChecked: '2026-10-26' },
   { id: 'off-59', productId: 'prod-telemea-vaca', storeId: 'carrefour', price: 16.49, unitPrice: 47.11, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'high', verificationStatus: 'verified', observationDate: '2026-10-24', lastChecked: '2026-10-24' },
   { id: 'off-60', productId: 'prod-telemea-vaca', storeId: 'auchan', price: 16.89, unitPrice: 48.26, unitPriceMeasure: 'lei/kg', isPromo: false, source: 'demo', confidenceLevel: 'medium', verificationStatus: 'demo', observationDate: '2026-10-25', lastChecked: '2026-10-25' },
 
@@ -663,270 +663,18 @@ export const PRICE_OBSERVATIONS: PriceObservation[] = [
   { id: 'obs-18', productId: 'prod-ulei-fl-soarelui', storeId: 'kaufland', price: 5.99, date: '2026-10-26', source: 'verified' }
 ];
 
-export const INITIAL_SHOPPING_LISTS: ShoppingList[] = [
-  {
-    id: 'list-default',
-    name: 'Cumpărături Săptămânale',
-    createdAt: '2026-10-24T10:00:00Z',
-    updatedAt: '2026-10-26T18:30:00Z',
-    items: [
-      {
-        id: 'item-1',
-        productId: 'prod-lapte-1',
-        name: 'Lapte proaspăt 1.5% grăsime 1L',
-        brand: 'Napolact',
-        category: 'Lactate și ouă',
-        quantity: 2,
-        unit: 'l',
-        checked: false,
-        referencePrice: 6.89,
-        estimatedPrice: 6.29
-      },
-      {
-        id: 'item-2',
-        productId: 'prod-oua-m10',
-        name: 'Ouă proaspete M 10 buc',
-        brand: 'Toneli / Din Ogradă',
-        category: 'Lactate și ouă',
-        quantity: 1,
-        unit: 'buc',
-        checked: false,
-        referencePrice: 11.49,
-        estimatedPrice: 9.99
-      },
-      {
-        id: 'item-3',
-        productId: 'prod-paine-toast',
-        name: 'Pâine feliată albă Toast 500g',
-        brand: 'Vel Pitar',
-        category: 'Panificație',
-        quantity: 1,
-        unit: 'buc',
-        checked: false,
-        referencePrice: 4.89,
-        estimatedPrice: 4.49
-      },
-      {
-        id: 'item-4',
-        productId: 'prod-piept-pui',
-        name: 'Piept de pui dezosat fără piele 1kg',
-        brand: 'Agricola / CocoRico',
-        category: 'Carne și pește',
-        quantity: 1.5,
-        unit: 'kg',
-        checked: false,
-        referencePrice: 28.50,
-        estimatedPrice: 26.90
-      },
-      {
-        id: 'item-5',
-        productId: 'prod-banane',
-        name: 'Banane calitatea I (la kg)',
-        brand: 'Import',
-        category: 'Fructe și legume',
-        quantity: 1.8,
-        unit: 'kg',
-        checked: false,
-        referencePrice: 6.99,
-        estimatedPrice: 5.99
-      },
-      {
-        id: 'item-6',
-        productId: 'prod-detergent-fairy',
-        name: 'Detergent de vase Lemon 800ml',
-        brand: 'Fairy',
-        category: 'Curățenie',
-        quantity: 1,
-        unit: 'buc',
-        checked: false,
-        referencePrice: 12.99,
-        estimatedPrice: 11.49
-      }
-    ]
-  },
-  {
-    id: 'list-curatenie',
-    name: 'Curățenie & Igienă Casă',
-    createdAt: '2026-10-20T14:15:00Z',
-    updatedAt: '2026-10-22T09:00:00Z',
-    items: [
-      {
-        id: 'item-c1',
-        productId: 'prod-detergent-fairy',
-        name: 'Detergent de vase Lemon 800ml',
-        brand: 'Fairy',
-        category: 'Curățenie',
-        quantity: 2,
-        unit: 'buc',
-        checked: true,
-        referencePrice: 12.99,
-        estimatedPrice: 11.49
-      },
-      {
-        id: 'item-c2',
-        productId: 'prod-hartie-igienica',
-        name: 'Hârtie igienică 3 straturi 8 role',
-        brand: 'Zewa Deluxe Pure White',
-        category: 'Igienă personală',
-        quantity: 1,
-        unit: 'buc',
-        checked: false,
-        referencePrice: 21.90,
-        estimatedPrice: 19.90
-      }
-    ]
-  }
-];
+export const INITIAL_SHOPPING_LISTS: ShoppingList[] = [];
 
-export const SAMPLE_RECEIPTS: Receipt[] = [
-  {
-    id: 'rec-kaufland-102',
-    storeId: 'kaufland',
-    storeName: 'Kaufland România',
-    storeAddress: 'Str. Barbu Văcărescu 120, București',
-    fiscalNumber: 'RO1599110 / BF 0042',
-    date: '2026-10-22',
-    time: '17:42',
-    currency: 'RON',
-    verifiedStatus: 'confirmed',
-    createdAt: '2026-10-22T17:45:00Z',
-    items: [
-      {
-        id: 'ri-1',
-        rawName: 'LAPTE NAPOLACT 1.5% 1L',
-        matchedProductId: 'prod-lapte-1',
-        matchedProductName: 'Lapte proaspăt 1.5% grăsime 1L',
-        quantity: 2,
-        unitPrice: 6.49,
-        totalPrice: 12.98,
-        discount: 0,
-        vatRate: 9,
-        confidence: 'high',
-        category: 'Lactate și ouă'
-      },
-      {
-        id: 'ri-2',
-        rawName: 'OUA PROASPETE TONELI M10',
-        matchedProductId: 'prod-oua-m10',
-        matchedProductName: 'Ouă proaspete M 10 buc',
-        quantity: 1,
-        unitPrice: 10.49,
-        totalPrice: 10.49,
-        discount: 1.00,
-        vatRate: 9,
-        confidence: 'high',
-        category: 'Lactate și ouă'
-      },
-      {
-        id: 'ri-3',
-        rawName: 'PAINE VEL PITAR TOAST 500G',
-        matchedProductId: 'prod-paine-toast',
-        matchedProductName: 'Pâine feliată albă Toast 500g',
-        quantity: 1,
-        unitPrice: 4.69,
-        totalPrice: 4.69,
-        discount: 0,
-        vatRate: 9,
-        confidence: 'high',
-        category: 'Panificație'
-      },
-      {
-        id: 'ri-4',
-        rawName: 'BANANE CAL. I (KG)',
-        matchedProductId: 'prod-banane',
-        matchedProductName: 'Banane calitatea I (la kg)',
-        quantity: 1.42,
-        unitPrice: 5.99,
-        totalPrice: 8.51,
-        discount: 0,
-        vatRate: 9,
-        confidence: 'high',
-        category: 'Fructe și legume'
-      },
-      {
-        id: 'ri-5',
-        rawName: 'FAIRY LEMON VASE 800ML',
-        matchedProductId: 'prod-detergent-fairy',
-        matchedProductName: 'Detergent de vase Lemon 800ml',
-        quantity: 1,
-        unitPrice: 11.49,
-        totalPrice: 11.49,
-        discount: 2.50,
-        vatRate: 19,
-        confidence: 'high',
-        category: 'Curățenie'
-      }
-    ],
-    subtotal: 48.16,
-    discountTotal: 3.50,
-    total: 44.66
-  },
-  {
-    id: 'rec-lidl-089',
-    storeId: 'lidl',
-    storeName: 'Lidl Discount',
-    storeAddress: 'Bd. Timișoara 26, București',
-    fiscalNumber: 'RO2289123 / BF 0189',
-    date: '2026-10-18',
-    time: '11:15',
-    currency: 'RON',
-    verifiedStatus: 'confirmed',
-    createdAt: '2026-10-18T11:20:00Z',
-    items: [
-      {
-        id: 'ri-l1',
-        rawName: 'PILOS LAPTE UHT 1.5% 1L',
-        matchedProductId: 'prod-lapte-pilos',
-        matchedProductName: 'Lapte UHT 1.5% 1L',
-        quantity: 4,
-        unitPrice: 5.29,
-        totalPrice: 21.16,
-        discount: 0,
-        vatRate: 9,
-        confidence: 'high',
-        category: 'Lactate și ouă'
-      },
-      {
-        id: 'ri-l2',
-        rawName: 'PIEPT PUI DEZOSAT 1KG',
-        matchedProductId: 'prod-piept-pui',
-        matchedProductName: 'Piept de pui dezosat fără piele 1kg',
-        quantity: 1.25,
-        unitPrice: 26.90,
-        totalPrice: 33.62,
-        discount: 3.36,
-        vatRate: 9,
-        confidence: 'high',
-        category: 'Carne și pește'
-      },
-      {
-        id: 'ri-l3',
-        rawName: 'APA MINERALA BORSEC 2L',
-        matchedProductId: 'prod-apa-borsec',
-        matchedProductName: 'Apă minerală naturală carbogazoasă 2L',
-        quantity: 3,
-        unitPrice: 3.29,
-        totalPrice: 9.87,
-        discount: 0,
-        vatRate: 9,
-        confidence: 'high',
-        category: 'Băuturi'
-      }
-    ],
-    subtotal: 64.65,
-    discountTotal: 3.36,
-    total: 61.29
-  }
-];
+export const SAMPLE_RECEIPTS: Receipt[] = [];
 
 export const INITIAL_USER_PROFILE: UserProfile = {
-  name: 'Ștefan P.',
-  email: 'pascalau.stefan@gmail.com',
-  city: 'București (Sector 3)',
-  preferredStores: ['lidl', 'kaufland', 'carrefour', 'penny'],
-  monthlySavingsGoal: 300,
-  notificationsEnabled: true,
-  defaultTransportCostEstimate: 6.00, // RON
+  name: 'Utilizator',
+  email: '',
+  city: 'București',
+  preferredStores: [],
+  monthlySavingsGoal: 0,
+  notificationsEnabled: false,
+  defaultTransportCostEstimate: 0,
   useLoyaltyCards: true
 };
 

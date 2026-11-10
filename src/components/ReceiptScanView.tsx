@@ -76,39 +76,6 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
     reader.readAsDataURL(file);
   };
 
-  // Load a demo sample receipt for instant testing
-  const handleLoadSample = (sampleType: 'kaufland' | 'lidl') => {
-    // Generate a clean dummy receipt canvas image
-    const canvas = document.createElement('canvas');
-    canvas.width = 400;
-    canvas.height = 600;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.fillStyle = '#f8fafc';
-      ctx.fillRect(0, 0, 400, 600);
-      ctx.fillStyle = '#0f172a';
-      ctx.font = 'bold 20px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(sampleType === 'kaufland' ? 'KAUFLAND ROMANIA' : 'LIDL DISCOUNT', 200, 50);
-      ctx.font = '12px monospace';
-      ctx.fillText('BON FISCAL', 200, 75);
-      ctx.fillText('DATA: 2026-10-26  ORA: 15:30', 200, 95);
-      ctx.textAlign = 'left';
-      ctx.fillText('-----------------------------------', 20, 120);
-      ctx.fillText('LAPTE 1.5% 1L           2 x 6.49', 20, 150);
-      ctx.fillText('OUA M 10 BUC            1 x 10.49', 20, 180);
-      ctx.fillText('PAINE TOAST 500G        1 x 4.69', 20, 210);
-      ctx.fillText('BANANE CAL I 1.45KG     1 x 5.99', 20, 240);
-      ctx.fillText('-----------------------------------', 20, 280);
-      ctx.font = 'bold 16px monospace';
-      ctx.fillText('TOTAL LEI                 36.85', 20, 310);
-    }
-    const sampleDataUrl = canvas.toDataURL('image/jpeg');
-    setImageSrc(sampleDataUrl);
-    setParsedReceipt(null);
-    setScanError(null);
-    setSaveSuccess(false);
-  };
 
   // Rotate image
   const handleRotate = () => {
@@ -377,28 +344,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                 </div>
               </div>
 
-              {/* Instant Demo Samples Selector */}
-              <div className="pt-4 border-t border-slate-100">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">
-                  Sau testează instant cu un bon demonstrativ:
-                </span>
-                <div className="flex flex-wrap gap-2.5">
-                  <button
-                    onClick={() => handleLoadSample('kaufland')}
-                    className="px-3.5 py-2 rounded-xl border border-slate-200 hover:border-red-400 bg-slate-50 hover:bg-red-50/30 text-xs font-semibold text-slate-800 flex items-center gap-2 transition-colors"
-                  >
-                    <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
-                    Bon Kaufland (36,85 lei)
-                  </button>
-                  <button
-                    onClick={() => handleLoadSample('lidl')}
-                    className="px-3.5 py-2 rounded-xl border border-slate-200 hover:border-blue-400 bg-slate-50 hover:bg-blue-50/30 text-xs font-semibold text-slate-800 flex items-center gap-2 transition-colors"
-                  >
-                    <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
-                    Bon Lidl (61,29 lei)
-                  </button>
-                </div>
-              </div>
+
             </div>
           ) : (
             /* Image Preview & Scan Action */
