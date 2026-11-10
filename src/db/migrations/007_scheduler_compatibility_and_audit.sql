@@ -28,6 +28,13 @@ ALTER TABLE catalog_publish_schedules
     ADD COLUMN IF NOT EXISTS per_retailer_status JSONB DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS last_published_count INTEGER NOT NULL DEFAULT 0;
 
+-- Keep granular execution results valid for partial retailer success.
+ALTER TABLE catalog_publish_schedules
+    DROP CONSTRAINT IF EXISTS catalog_publish_schedules_last_status_check;
+ALTER TABLE catalog_publish_schedules
+    ADD CONSTRAINT catalog_publish_schedules_last_status_check
+    CHECK (last_status IN ('idle', 'running', 'success', 'partial', 'failed'));
+
 -- 2. Indexuri de performanță pentru cron și scheduler
 CREATE INDEX IF NOT EXISTS idx_catalog_sched_enabled ON catalog_publish_schedules(enabled);
 CREATE INDEX IF NOT EXISTS idx_catalog_sched_next_run ON catalog_publish_schedules(next_run_at);
