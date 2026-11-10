@@ -1109,7 +1109,8 @@ export class DatabaseService {
     const pool = getPool();
     if (!pool) return [];
     try {
-      const res = await pool.query('SELECT * FROM catalog_extracted_offers ORDER BY created_at DESC LIMIT 500');
+      const res = await pool.query('SELECT * FROM catalog_extracted_offers ORDER BY created_at DESC');
+      const toIso = (value: unknown) => value ? new Date(value as string | number | Date).toISOString() : undefined;
       return res.rows.map(r => ({
         id: r.id,
         runId: r.run_id || undefined,
@@ -1132,8 +1133,8 @@ export class DatabaseService {
         promoDetails: r.promo_details || undefined,
         loyaltyCardRequired: r.loyalty_card_required,
         loyaltyCardName: r.loyalty_card_name || undefined,
-        validFrom: r.valid_from ? new Date(r.valid_from).toISOString().split('T')[0] : undefined,
-        validUntil: r.valid_until ? new Date(r.valid_until).toISOString().split('T')[0] : undefined,
+        validFrom: toIso(r.valid_from)?.split('T')[0],
+        validUntil: toIso(r.valid_until)?.split('T')[0],
         matchedProductId: r.matched_product_id || undefined,
         matchConfidence: parseFloat(r.match_confidence || '0'),
         matchMethod: r.match_method || 'unmatched',
@@ -1142,8 +1143,8 @@ export class DatabaseService {
         reviewedBy: r.reviewed_by || undefined,
         reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : undefined,
         rejectionReason: r.rejection_reason || undefined,
-        createdAt: new Date(r.created_at).toISOString(),
-        updatedAt: new Date(r.updated_at).toISOString()
+        createdAt: toIso(r.created_at) || new Date(0).toISOString(),
+        updatedAt: toIso(r.updated_at) || toIso(r.created_at) || new Date(0).toISOString()
       }));
     } catch {
       return [];
