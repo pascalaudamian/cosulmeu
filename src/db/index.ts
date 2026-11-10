@@ -1238,6 +1238,11 @@ export class DatabaseService {
       await client.query('BEGIN');
 
       const todayStr = new Date().toISOString().split('T')[0];
+      const sourceRes = await client.query(
+        'SELECT id FROM data_sources WHERE retailer_id = $1 ORDER BY created_at ASC LIMIT 1',
+        [params.retailerId]
+      );
+      const dbSourceId = sourceRes.rows[0]?.id || null;
 
       // Preluăm toate produsele existente pentru potrivire fuzzy de rezervă
       const existingProductsRes = await client.query('SELECT * FROM products');
@@ -1318,7 +1323,7 @@ export class DatabaseService {
           });
 
           if (matchResult.matchedProduct && matchResult.confidence >= 0.75) {
-            canonicalProduct = matchResult.matchedProduct;
+            canonicalProduct = dbProducts.find(p => p.id === matchResult.matchedProduct!.id);
           }
         }
 
@@ -1470,7 +1475,7 @@ export class DatabaseService {
               offerId,
               canonicalId,
               params.retailerId,
-              params.sourceId,
+              dbSourceId,
               item.effectivePrice,
               item.normalPrice !== item.effectivePrice ? item.normalPrice : null,
               item.normalPrice || null,
@@ -1499,7 +1504,7 @@ export class DatabaseService {
               obsId,
               canonicalId,
               params.retailerId,
-              params.sourceId,
+              dbSourceId,
               item.effectivePrice,
               item.normalPrice || null,
               item.promoPrice || null,
@@ -1599,7 +1604,7 @@ export class DatabaseService {
                 obsId,
                 canonicalId,
                 params.retailerId,
-                params.sourceId,
+                dbSourceId,
                 item.effectivePrice,
                 item.normalPrice || null,
                 item.promoPrice || null,
