@@ -1239,7 +1239,12 @@ export class DatabaseService {
 
       const todayStr = new Date().toISOString().split('T')[0];
       const sourceRes = await client.query(
-        'SELECT id FROM data_sources WHERE retailer_id = $1 ORDER BY created_at ASC LIMIT 1',
+        `SELECT ds.id
+           FROM data_sources ds
+           LEFT JOIN stores s ON s.id = ds.store_id
+          WHERE ds.id = $1 OR ds.store_id = $1 OR s.slug = $1
+          ORDER BY ds.created_at ASC
+          LIMIT 1`,
         [params.retailerId]
       );
       const dbSourceId = sourceRes.rows[0]?.id || null;
