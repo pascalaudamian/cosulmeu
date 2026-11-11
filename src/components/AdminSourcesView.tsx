@@ -148,7 +148,8 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   const [stagingRetailerFilter, setStagingRetailerFilter] = useState<string>('toate');
   const [stagingSearch, setStagingSearch] = useState<string>('');
   const [selectedStagingIds, setSelectedStagingIds] = useState<Set<string>>(new Set());
-
+  const [isBulkReviewing, setIsBulkReviewing] = useState(false);
+  
   // Canonical Products from PostgreSQL
   const [products, setProducts] = useState<any[]>([]);
   const [productsTotal, setProductsTotal] = useState<number>(0);
@@ -496,6 +497,52 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     setShowLogoutConfirmModal(false);
   };
 
+  const handleBulkReviewOffers = async (action: 'approve' | 'reject') => {
+    const offerIds = stagingOffers
+      .filter(offer => selectedStagingIds.has(offer.id) && offer.stagingStatus === 'NEEDS_REVIEW')
+      .map(offer => offer.id);
+    if (offerIds.length === 0 || isBulkReviewing) return;
+
+    setIsBulkReviewing(true);
+    setReviewingOfferIds(previous => new Set([...previous, ...offerIds]));
+    let succeeded = 0;
+    const failedIds: string[] = [];
+    try {
+      for (const offerId of offerIds) {
+        try {
+          const response = await fetchWithAuth(`/api/admin/catalog-importer/staging/${offerId}/review`, {
+            method: 'POST',
+            body: JSON.stringify({ action })
+          });
+          if (!response.ok) {
+            failedIds.push(offerId);
+            continue;
+          }
+          succeeded += 1;
+        } catch {
+          failedIds.push(offerId);
+        }
+      }
+
+      setSelectedStagingIds(new Set(failedIds));
+      setActionMessage({
+        type: failedIds.length ? 'error' : 'success',
+        text: failedIds.length
+          ? `${succeeded} oferte actualizate; ${failedIds.length} nu au putut fi procesate.`
+          : `${succeeded} oferte ${action === 'approve' ? 'validate' : 'respinse'} cu succes.`
+      });
+      await Promise.all([loadStaging(), loadDashboard(), loadRunsAndErrors()]);
+      if (onRefreshAll) onRefreshAll();
+    } finally {
+      setIsBulkReviewing(false);
+      setReviewingOfferIds(previous => {
+        const next = new Set(previous);
+        offerIds.forEach(id => next.delete(id));
+        return next;
+      });
+    }
+  };
+
   const handleReviewOffer = async (offerId: string, action: 'approve' | 'reject') => {
     setReviewingOfferIds(previous => new Set(previous).add(offerId));
     try {
@@ -559,6 +606,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       return matchStatus && matchRetailer && matchSearch;
     });
   }, [stagingOffers, stagingFilter, stagingRetailerFilter, stagingSearch]);
+  const visibleStagingOffers = filteredStagingOffers.slice(0, 25);
+  const selectedPendingOffers = stagingOffers.filter(
+    offer => selectedStagingIds.has(offer.id) && offer.stagingStatus === 'NEEDS_REVIEW'
+  );
 
   if (!isAuthenticated) {
     return (
@@ -1516,6 +1567,40 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             </div>
           </div>
 
+          {selectedStagingIds.size > 0 && (
+            <div className="flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs font-semibold text-slate-700" aria-live="polite">
+                {selectedStagingIds.size} selectate · {selectedPendingOffers.length} în așteptare pentru validare
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleBulkReviewOffers('approve')}
+                  disabled={isBulkReviewing || selectedPendingOffers.length === 0}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isBulkReviewing ? 'Se procesează…' : `Validează selectatele (${selectedPendingOffers.length})`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBulkReviewOffers('reject')}
+                  disabled={isBulkReviewing || selectedPendingOffers.length === 0}
+                  className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Respinge selectatele ({selectedPendingOffers.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedStagingIds(new Set())}
+                  disabled={isBulkReviewing}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Șterge selecția
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Staging Filters */}
           <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2 flex-1 min-w-[200px]">
@@ -1566,16 +1651,18 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     <th className="p-3 w-8">
                       <input
                         type="checkbox"
+                        aria-label="Selectează toate ofertele afișate"
                         checked={
-                          selectedStagingIds.size > 0 &&
-                          selectedStagingIds.size === filteredStagingOffers.length
+                          visibleStagingOffers.length > 0 &&
+                          visibleStagingOffers.every(offer => selectedStagingIds.has(offer.id))
                         }
                         onChange={e => {
-                          if (e.target.checked) {
-                            setSelectedStagingIds(new Set(filteredStagingOffers.map(o => o.id)));
-                          } else {
-                            setSelectedStagingIds(new Set());
-                          }
+                          const next = new Set(selectedStagingIds);
+                          visibleStagingOffers.forEach(offer => {
+                            if (e.target.checked) next.add(offer.id);
+                            else next.delete(offer.id);
+                          });
+                          setSelectedStagingIds(next);
                         }}
                       />
                     </th>
@@ -1589,11 +1676,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredStagingOffers.slice(0, 25).map(off => (
+                  {visibleStagingOffers.map(off => (
                     <tr key={off.id} className="hover:bg-slate-50/70">
                       <td className="p-3">
                         <input
                           type="checkbox"
+                          aria-label={`Selectează oferta ${off.rawTitle}`}
                           checked={selectedStagingIds.has(off.id)}
                           onChange={e => {
                             const next = new Set(selectedStagingIds);
