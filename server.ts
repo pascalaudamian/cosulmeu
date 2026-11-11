@@ -15,6 +15,7 @@ import { CollectionWorker } from './src/services/CollectionWorker.ts';
 import { IndexerScheduler } from './src/services/IndexerScheduler.ts';
 import { PriceQualityMonitor } from './src/indexing/PriceQualityMonitor.ts';
 import { CATEGORIES_TAXONOMY, mapRetailerCategoryToStandard } from './src/data/categories.ts';
+import { STORES } from './src/data/mockData.ts';
 import { CatalogDownloader } from './src/indexing/catalog/CatalogDownloader.ts';
 import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.ts';
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
@@ -2236,9 +2237,10 @@ app.get('/api/admin/catalog-importer/staging', requireAdminAuth, async (req, res
   try {
   const { status, retailerId, search } = req.query;
   const pool = getPool();
-  let offers = pool
+  const allOffers = pool
     ? await DatabaseService.getCatalogExtractedOffers()
     : StorageService.getCatalogExtractedOffers();
+  let offers = allOffers;
 
     if (status && typeof status === 'string' && status !== 'toate') {
       offers = offers.filter(o => o.stagingStatus === status);
@@ -2255,9 +2257,16 @@ app.get('/api/admin/catalog-importer/staging', requireAdminAuth, async (req, res
       );
     }
 
+    const statusCounts = allOffers.reduce<Record<string, number>>((counts, offer) => {
+      const normalizedStatus = String(offer.stagingStatus || 'NEEDS_REVIEW').toUpperCase();
+      counts[normalizedStatus] = (counts[normalizedStatus] || 0) + 1;
+      return counts;
+    }, {});
+
     res.json({
       success: true,
       count: offers.length,
+      statusCounts,
       offers: offers.slice(0, 200)
     });
   } catch (err: any) {
