@@ -1,4 +1,5 @@
 import pg from 'pg';
+import crypto from 'crypto';
 import {
   Product,
   Store,
@@ -247,6 +248,23 @@ export async function checkDbHealth(): Promise<{
 // DATA ACCESS LAYER (DAL) / REPOSITORIES CU GARANȚII DE IMUABILITATE
 // ============================================================================
 
+function latestCanonicalOffers(offers: ProductOffer[]): ProductOffer[] {
+  const offersByProductAndStore = new Map<string, ProductOffer>();
+
+  for (const offer of offers) {
+    const key = `${offer.productId}__${offer.storeId}`;
+    const current = offersByProductAndStore.get(key);
+    const offerDate = `${offer.observationDate || ''}:${offer.lastChecked || ''}`;
+    const currentDate = current ? `${current.observationDate || ''}:${current.lastChecked || ''}` : '';
+
+    if (!current || offerDate >= currentDate) {
+      offersByProductAndStore.set(key, offer);
+    }
+  }
+
+  return Array.from(offersByProductAndStore.values());
+}
+
 export class DatabaseService {
   /**
    * Initializes PostgreSQL tables if they don't exist and seeds default catalog if empty.
@@ -288,13 +306,25 @@ export class DatabaseService {
               barcode VARCHAR(64),
               image_url TEXT,
               is_bio BOOLEAN NOT NULL DEFAULT FALSE,
-              is_romanian_product BOOLEAN NOT NULL DEFAULT FALSE,
-              base_reference_price NUMERIC(10,2) NOT NULL,
-              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          );
+  is_romanian_product BOOLEAN NOT NULL DEFAULT FALSE,
+  base_reference_price NUMERIC(10,2) NOT NULL,
+  canonical_product_id VARCHAR(64) REFERENCES products(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
 
-          CREATE TABLE IF NOT EXISTS data_sources (
+  CREATE INDEX IF NOT EXISTS products_canonical_product_id_idx
+  ON products (canonical_product_id) WHERE canonical_product_id IS NOT NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS products_canonical_identity_unique
+  ON products (
+  lower(btrim(name)),
+  lower(btrim(coalesce(brand, ''))),
+  package_weight_or_volume,
+  lower(btrim(coalesce(package_unit, ''))),
+  lower(btrim(coalesce(barcode, '')))
+  ) WHERE canonical_product_id IS NULL;
+
+  CREATE TABLE IF NOT EXISTS data_sources (
               id VARCHAR(64) PRIMARY KEY,
               name VARCHAR(128) NOT NULL,
               type VARCHAR(32) NOT NULL,
@@ -345,10 +375,9 @@ export class DatabaseService {
               date DATE NOT NULL,
               receipt_id VARCHAR(64),
               loyalty_card_used BOOLEAN NOT NULL DEFAULT FALSE,
-              source VARCHAR(32) NOT NULL DEFAULT 'official_feed',
-              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-              CONSTRAINT uq_daily_price_obs UNIQUE (product_id, store_id, date, price)
-          );
+  source VARCHAR(32) NOT NULL DEFAULT 'official_feed',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
 
           CREATE TABLE IF NOT EXISTS product_match_candidates (
               id VARCHAR(64) PRIMARY KEY,
@@ -478,8 +507,8 @@ export class DatabaseService {
             await client.query(
               `INSERT INTO price_observations (id, product_id, store_id, price, date, receipt_id, loyalty_card_used, source)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-               ON CONFLICT (product_id, store_id, date, price) DO NOTHING`,
-              [obs.id, obs.productId, obs.storeId, obs.price, obs.date, obs.receiptId || null, obs.loyaltyCardUsed || false, obs.source]
+  ON CONFLICT (id) DO NOTHING`,
+  [obs.id, obs.productId, obs.storeId, obs.price, obs.date, obs.receiptId || null, obs.loyaltyCardUsed || false, obs.source]
             );
           }
 
@@ -518,7 +547,7 @@ export class DatabaseService {
     const pool = getPool();
     if (pool) {
       try {
-        const res = await pool.query('SELECT * FROM products ORDER BY name ASC');
+        const res = await pool.query('SELECT * FROM products WHERE canonical_product_id IS NULL ORDER BY name ASC');
         if (res.rows.length > 0) {
           return res.rows.map(r => ({
             id: r.id,
@@ -542,7 +571,7 @@ export class DatabaseService {
     }
 
     try {
-      const { data, error } = await supabase.from('products').select('*').order('name', { ascending: true });
+      const { data, error } = await supabase.from('products').select('*').is('canonical_product_id', null).order('name', { ascending: true });
       if (!error && data && data.length > 0) {
         return data.map(r => ({
           id: r.id,
@@ -693,13 +722,17 @@ export class DatabaseService {
     const pool = getPool();
     if (pool) {
       try {
-        const res = await pool.query(
-          "SELECT * FROM product_offers WHERE source != 'demo' AND verification_status != 'demo'"
-        );
-        if (res.rows.length > 0) {
-          return res.rows.map(r => ({
-            id: r.id,
-            productId: r.product_id,
+  const res = await pool.query(
+  `SELECT po.*, COALESCE(p.canonical_product_id, p.id) AS canonical_product_id
+  FROM product_offers po
+  JOIN products p ON p.id = po.product_id
+  WHERE po.source != 'demo' AND po.verification_status != 'demo'
+  ORDER BY po.observation_date ASC, po.last_checked ASC`
+  );
+  if (res.rows.length > 0) {
+  const offers = res.rows.map(r => ({
+  id: r.id,
+  productId: r.canonical_product_id || r.product_id,
             storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
             sourceId: r.source_id || undefined,
             price: parseFloat(r.price),
@@ -716,25 +749,28 @@ export class DatabaseService {
             confidenceLevel: r.confidence_level || 'high',
             verificationStatus: r.verification_status || 'verified',
             lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
-            isSponsored: Boolean(r.is_sponsored)
-          }));
-        }
-      } catch (err: any) {
-        console.warn('Postgres pool getOffers failed, falling back to Supabase:', err.message);
+  isSponsored: Boolean(r.is_sponsored)
+  }));
+  return latestCanonicalOffers(offers);
+  }
+  } catch (err: any) {
+  console.warn('Postgres pool getOffers failed, falling back to Supabase:', err.message);
       }
     }
 
     try {
-      const { data, error } = await supabase
-        .from('product_offers')
-        .select('*')
-        .neq('source', 'demo')
-        .neq('verification_status', 'demo');
+  const [{ data, error }, { data: productRows }] = await Promise.all([
+  supabase.from('product_offers').select('*').neq('source', 'demo').neq('verification_status', 'demo'),
+  supabase.from('products').select('id, canonical_product_id')
+  ]);
+  const canonicalIdByProductId = new Map(
+  (productRows || []).map(product => [product.id, product.canonical_product_id || product.id])
+  );
 
-      if (!error && data && data.length > 0) {
-        return data.map(r => ({
-          id: r.id,
-          productId: r.product_id,
+  if (!error && data && data.length > 0) {
+  const offers = data.map(r => ({
+  id: r.id,
+  productId: canonicalIdByProductId.get(r.product_id) || r.product_id,
           storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
           sourceId: r.source_id || undefined,
           price: parseFloat(r.price),
@@ -751,11 +787,12 @@ export class DatabaseService {
           confidenceLevel: r.confidence_level || 'high',
           verificationStatus: r.verification_status || 'verified',
           lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
-          isSponsored: Boolean(r.is_sponsored)
-        }));
-      }
-    } catch (err: any) {
-      console.warn('Supabase getOffers failed:', err.message);
+  isSponsored: Boolean(r.is_sponsored)
+  }));
+  return latestCanonicalOffers(offers);
+  }
+  } catch (err: any) {
+  console.warn('Supabase getOffers failed:', err.message);
     }
 
     return [];
@@ -893,8 +930,8 @@ export class DatabaseService {
           const res = await client.query(
             `INSERT INTO price_observations (id, product_id, store_id, source_id, price, date, receipt_id, loyalty_card_used, source)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-             ON CONFLICT (product_id, store_id, date, price) DO NOTHING
-             RETURNING id`,
+  ON CONFLICT (id) DO NOTHING
+  RETURNING id`,
             [
               obs.id,
               obs.productId,
@@ -937,7 +974,9 @@ export class DatabaseService {
         source: obs.source
       }));
 
-      const { error } = await supabase.from('price_observations').insert(records);
+      const { error } = await supabase
+  .from('price_observations')
+  .upsert(records, { onConflict: 'id', ignoreDuplicates: true });
       if (error) {
         console.error('Supabase appendPriceObservations error:', error);
         return { inserted: 0, persisted: false };
@@ -954,19 +993,19 @@ export class DatabaseService {
     if (pool) {
       try {
         const query = productId
-          ? 'SELECT * FROM price_observations WHERE product_id = $1 ORDER BY date ASC'
-          : 'SELECT * FROM price_observations ORDER BY date DESC LIMIT 200';
+  ? 'SELECT * FROM price_observations WHERE product_id = $1 OR product_id IN (SELECT id FROM products WHERE canonical_product_id = $1) ORDER BY date ASC, created_at ASC'
+  : 'SELECT * FROM price_observations ORDER BY date DESC, created_at DESC LIMIT 200';
         const params = productId ? [productId] : [];
         const res = await pool.query(query, params);
 
         if (res.rows.length > 0) {
           return res.rows.map(r => ({
-            id: r.id,
-            productId: r.product_id,
-            storeId: r.store_id,
-            sourceId: r.source_id || undefined,
-            price: parseFloat(r.price),
-            date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
+  id: r.id,
+  productId: productId || r.product_id,
+  storeId: r.store_id,
+  sourceId: r.source_id || undefined,
+  price: parseFloat(r.price),
+  date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
             receiptId: r.receipt_id || undefined,
             loyaltyCardUsed: r.loyalty_card_used,
             source: r.source
@@ -978,21 +1017,26 @@ export class DatabaseService {
     }
 
     try {
-      let query = supabase.from('price_observations').select('*');
-      if (productId) {
-        query = query.eq('product_id', productId).order('date', { ascending: true });
-      } else {
+  let query = supabase.from('price_observations').select('*');
+  if (productId) {
+  const { data: aliases } = await supabase
+  .from('products')
+  .select('id')
+  .eq('canonical_product_id', productId);
+  const productIds = [productId, ...(aliases || []).map(alias => alias.id)];
+  query = query.in('product_id', productIds).order('date', { ascending: true });
+  } else {
         query = query.order('date', { ascending: false }).limit(200);
       }
       const { data, error } = await query;
       if (!error && data && data.length > 0) {
         return data.map(r => ({
-          id: r.id,
-          productId: r.product_id,
-          storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
-          sourceId: r.source_id || undefined,
-          price: parseFloat(r.price),
-          date: r.date ? String(r.date).slice(0, 10) : '',
+  id: r.id,
+  productId: productId || r.product_id,
+  storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+  sourceId: r.source_id || undefined,
+  price: parseFloat(r.price),
+  date: r.date ? String(r.date).slice(0, 10) : '',
           receiptId: r.receipt_id || undefined,
           loyaltyCardUsed: Boolean(r.loyalty_card_used),
           source: r.source || 'verified'
@@ -1579,14 +1623,14 @@ export class DatabaseService {
 
         // 1.4 După similaritate text & atribute prin ProductMatcher
         if (!canonicalProduct) {
-          const matchResult = ProductMatcher.matchProduct({
-            rawName: item.rawTitle,
-            barcode: item.rawBarcode,
-            brand: item.rawBrand,
-            packageWeightOrVolume: item.packageQuantity,
-            packageUnit: item.packageUnit as any,
-            category: item.rawCategory
-          });
+  const matchResult = ProductMatcher.matchProduct({
+  rawName: item.rawTitle,
+  barcode: item.rawBarcode,
+  brand: item.rawBrand,
+  packageWeightOrVolume: item.packageQuantity,
+  packageUnit: item.packageUnit as any,
+  category: item.rawCategory
+  }, dbProducts);
 
           if (matchResult.matchedProduct && matchResult.confidence >= 0.75) {
             canonicalProduct = dbProducts.find(p => p.id === matchResult.matchedProduct!.id);
@@ -1759,13 +1803,13 @@ export class DatabaseService {
           );
 
           // Inserare observație nouă în istoricul append-only
-          const obsId = `obs-${params.retailerId}-${canonicalId}-${Date.now()}`;
+          const obsId = `obs-${crypto.createHash('sha256').update(`${params.runId}:${item.id}:${canonicalId}`).digest('hex').slice(0, 48)}`;
           await client.query(
             `INSERT INTO price_observations (
               id, product_id, store_id, source_id, price, normal_price,
               promo_price, loyalty_price, date, loyalty_card_used, source
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'official_feed')
-            ON CONFLICT (product_id, store_id, date, price) DO NOTHING`,
+            ON CONFLICT (id) DO NOTHING`,
             [
               obsId,
               canonicalId,
@@ -1859,13 +1903,13 @@ export class DatabaseService {
             );
 
             // Istoric imutabil append-only: adăugare nouă observație
-            const obsId = `obs-${params.retailerId}-${canonicalId}-${Date.now()}`;
+            const obsId = `obs-${crypto.createHash('sha256').update(`${params.runId}:${item.id}:${canonicalId}`).digest('hex').slice(0, 48)}`;
             await client.query(
               `INSERT INTO price_observations (
                 id, product_id, store_id, source_id, price, normal_price,
                 promo_price, loyalty_price, date, loyalty_card_used, source
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'official_feed')
-              ON CONFLICT (product_id, store_id, date, price) DO NOTHING`,
+  ON CONFLICT (id) DO NOTHING`,
               [
                 obsId,
                 canonicalId,
@@ -1915,11 +1959,32 @@ export class DatabaseService {
               );
             }
           } else {
-            // Prețul nu s-a schimbat: actualizare verificare fără inserare în istoric (idempotență)
+            // Keep the current offer fresh while appending one observation for this import run.
             stats.unchangedPricesCount++;
             await client.query(
               'UPDATE product_offers SET last_checked = NOW(), last_verified_at = NOW(), updated_at = NOW() WHERE id = $1',
               [offerId]
+            );
+
+            const obsId = `obs-${crypto.createHash('sha256').update(`${params.runId}:${item.id}:${canonicalId}`).digest('hex').slice(0, 48)}`;
+            await client.query(
+              `INSERT INTO price_observations (
+                id, product_id, store_id, source_id, price, normal_price,
+                promo_price, loyalty_price, date, loyalty_card_used, source
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'official_feed')
+              ON CONFLICT (id) DO NOTHING`,
+              [
+                obsId,
+                canonicalId,
+                params.retailerId,
+                dbSourceId,
+                item.effectivePrice,
+                item.normalPrice || null,
+                item.promoPrice || null,
+                item.loyaltyPrice || null,
+                todayStr,
+                Boolean(item.loyaltyCardRequired || item.loyaltyPrice)
+              ]
             );
           }
         }
@@ -2558,7 +2623,7 @@ export class DatabaseService {
     }
 
     try {
-      const conditions: string[] = ['1=1'];
+      const conditions: string[] = ['p.canonical_product_id IS NULL'];
       const values: any[] = [];
       let idx = 1;
 
@@ -2592,10 +2657,31 @@ export class DatabaseService {
           p.is_bio AS "isBio", p.is_romanian_product AS "isRomanianProduct",
           p.base_reference_price AS "baseReferencePrice",
           p.created_at AS "createdAt", p.updated_at AS "updatedAt",
-          (SELECT count(*) FROM product_offers po WHERE po.product_id = p.id) AS "offersCount",
-          (SELECT min(price) FROM product_offers po WHERE po.product_id = p.id) AS "minPrice",
-          (SELECT max(price) FROM product_offers po WHERE po.product_id = p.id) AS "maxPrice",
-          (SELECT json_agg(json_build_object('storeId', po.store_id, 'price', po.price, 'isPromo', po.is_promo, 'normalPrice', po.normal_price, 'promoPrice', po.promo_price, 'loyaltyPrice', po.loyalty_price)) FROM product_offers po WHERE po.product_id = p.id) AS "offers"
+  (SELECT count(*) FROM (
+  SELECT DISTINCT ON (po.store_id) po.store_id
+  FROM product_offers po
+  WHERE po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id)
+  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
+  ) current_offers) AS "offersCount",
+  (SELECT min(current_offers.price) FROM (
+  SELECT DISTINCT ON (po.store_id) po.store_id, po.price
+  FROM product_offers po
+  WHERE po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id)
+  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
+  ) current_offers) AS "minPrice",
+  (SELECT max(current_offers.price) FROM (
+  SELECT DISTINCT ON (po.store_id) po.store_id, po.price
+  FROM product_offers po
+  WHERE po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id)
+  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
+  ) current_offers) AS "maxPrice",
+  (SELECT json_agg(json_build_object('storeId', current_offers.store_id, 'price', current_offers.price, 'isPromo', current_offers.is_promo, 'normalPrice', current_offers.normal_price, 'promoPrice', current_offers.promo_price, 'loyaltyPrice', current_offers.loyalty_price))
+  FROM (
+  SELECT DISTINCT ON (po.store_id) po.store_id, po.price, po.is_promo, po.normal_price, po.promo_price, po.loyalty_price
+  FROM product_offers po
+  WHERE po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id)
+  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
+  ) current_offers) AS "offers"
         FROM products p
         WHERE ${whereClause}
         ORDER BY p.updated_at DESC
@@ -2617,35 +2703,39 @@ export class DatabaseService {
     const pool = getPool();
     if (pool) {
       try {
-        const prodRes = await pool.query(`SELECT * FROM products WHERE id = $1`, [productId]);
-        if (prodRes.rows.length > 0) {
-          const product = prodRes.rows[0];
+  const prodRes = await pool.query(
+  'SELECT * FROM products WHERE id = COALESCE((SELECT canonical_product_id FROM products WHERE id = $1), $1)',
+  [productId]
+  );
+  if (prodRes.rows.length > 0) {
+  const product = prodRes.rows[0];
+  const canonicalProductId = product.id;
 
-          const offersRes = await pool.query(`
-            SELECT po.*, s.name AS store_name, s.brand_color AS store_brand_color, s.logo_url AS store_logo_url
-            FROM product_offers po
-            LEFT JOIN stores s ON s.id = po.store_id
-            WHERE po.product_id = $1
-            ORDER BY po.price ASC
-          `, [productId]);
+  const offersRes = await pool.query(`
+  SELECT DISTINCT ON (po.store_id) po.*, s.name AS store_name, s.brand_color AS store_brand_color, s.logo_url AS store_logo_url
+  FROM product_offers po
+  LEFT JOIN stores s ON s.id = po.store_id
+  WHERE po.product_id = $1 OR po.product_id IN (SELECT id FROM products WHERE canonical_product_id = $1)
+  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
+  `, [canonicalProductId]);
 
-          const historyRes = await pool.query(`
-            SELECT * FROM price_observations
-            WHERE product_id = $1
-            ORDER BY date DESC, created_at DESC
-            LIMIT 50
-          `, [productId]);
+  const historyRes = await pool.query(`
+  SELECT * FROM price_observations
+  WHERE product_id = $1 OR product_id IN (SELECT id FROM products WHERE canonical_product_id = $1)
+  ORDER BY date DESC, created_at DESC
+  LIMIT 50
+  `, [canonicalProductId]);
 
-          const retailerMappingRes = await pool.query(`
-            SELECT * FROM retailer_products
-            WHERE product_id = $1
-          `, [productId]);
+  const retailerMappingRes = await pool.query(`
+  SELECT * FROM retailer_products
+  WHERE product_id = $1 OR product_id IN (SELECT id FROM products WHERE canonical_product_id = $1)
+  `, [canonicalProductId]);
 
-          const promosRes = await pool.query(`
-            SELECT * FROM promotions
-            WHERE product_id = $1
-            ORDER BY ends_at DESC NULLS LAST
-          `, [productId]);
+  const promosRes = await pool.query(`
+  SELECT * FROM promotions
+  WHERE product_id = $1 OR product_id IN (SELECT id FROM products WHERE canonical_product_id = $1)
+  ORDER BY ends_at DESC NULLS LAST
+  `, [canonicalProductId]);
 
           return {
             product: {
@@ -2683,9 +2773,9 @@ export class DatabaseService {
               lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
               isSponsored: Boolean(r.is_sponsored)
             })),
-            priceHistory: historyRes.rows.map(h => ({
-              id: h.id,
-              productId: h.product_id,
+  priceHistory: historyRes.rows.map(h => ({
+  id: h.id,
+  productId: canonicalProductId,
               storeId: h.store_id ? h.store_id.replace(/^store-/, '') : '',
               price: parseFloat(h.price),
               date: h.date ? (h.date.toISOString?.().split('T')[0] || String(h.date).slice(0, 10)) : '',
@@ -2701,7 +2791,7 @@ export class DatabaseService {
     }
 
     try {
-      const { data: prodData, error: prodErr } = await supabase
+      let { data: prodData, error: prodErr } = await supabase
         .from('products')
         .select('*')
         .eq('id', productId)
@@ -2710,6 +2800,22 @@ export class DatabaseService {
       if (prodErr || !prodData) {
         return null;
       }
+
+      if (prodData.canonical_product_id) {
+        const canonicalResult = await supabase
+          .from('products')
+          .select('*')
+          .eq('id', prodData.canonical_product_id)
+          .maybeSingle();
+        prodData = canonicalResult.data;
+      }
+
+      if (!prodData) return null;
+      const { data: aliases } = await supabase
+        .from('products')
+        .select('id')
+        .eq('canonical_product_id', prodData.id);
+      const linkedProductIds = [prodData.id, ...(aliases || []).map(alias => alias.id)];
 
       const product: Product = {
         id: prodData.id,
@@ -2730,21 +2836,22 @@ export class DatabaseService {
       const { data: offersData } = await supabase
         .from('product_offers')
         .select('*')
-        .eq('product_id', productId)
+        .in('product_id', linkedProductIds)
         .neq('source', 'demo')
         .neq('verification_status', 'demo')
-        .order('price', { ascending: true });
+        .order('observation_date', { ascending: true })
+        .order('last_checked', { ascending: true });
 
       const { data: historyData } = await supabase
         .from('price_observations')
         .select('*')
-        .eq('product_id', productId)
+        .in('product_id', linkedProductIds)
         .order('date', { ascending: false })
         .limit(50);
 
-      const offers: ProductOffer[] = (offersData || []).map(r => ({
+      const offers: ProductOffer[] = latestCanonicalOffers((offersData || []).map(r => ({
         id: r.id,
-        productId: r.product_id,
+        productId: product.id,
         storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
         sourceId: r.source_id || undefined,
         price: parseFloat(r.price),
@@ -2762,11 +2869,11 @@ export class DatabaseService {
         verificationStatus: r.verification_status || 'verified',
         lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
         isSponsored: Boolean(r.is_sponsored)
-      }));
+      })));
 
       const priceHistory: PriceObservation[] = (historyData || []).map(h => ({
         id: h.id,
-        productId: h.product_id,
+        productId: product.id,
         storeId: h.store_id ? h.store_id.replace(/^store-/, '') : '',
         sourceId: h.source_id || undefined,
         price: parseFloat(h.price),

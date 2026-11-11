@@ -9,6 +9,7 @@ import { PriceComparisonService } from '../src/services/PriceComparisonService.t
 import { ProductMatcher } from '../src/services/ProductMatcher.ts';
 import { CATEGORIES_TAXONOMY, mapRetailerCategoryToStandard } from '../src/data/categories.ts';
 import { IndexerScheduler } from '../src/services/IndexerScheduler.ts';
+import type { ProductOffer } from '../src/types.ts';
 
 function pass(msg: string) {
   console.log(`✅ [PASS] ${msg}`);
@@ -84,8 +85,86 @@ async function runTests() {
   assert.strictEqual(matchExactGtin.matchedProduct?.id, 'prod-lapte-1');
   pass('Potrivirea prin GTIN/EAN are prioritate absolută și confidence 1.0');
 
+  const persistedProduct = {
+    ...StorageService.getAllProducts()[0],
+    id: 'persisted-gem-284',
+    name: 'Gem cireșe negre 284g',
+    brand: 'Marcă Magazin',
+    packageWeightOrVolume: 284,
+    packageUnit: 'g' as const
+  };
+  const persistedMatch = ProductMatcher.matchProduct({
+    rawName: 'Gem cireșe negre 284g',
+    brand: 'Marcă Magazin',
+    packageWeightOrVolume: 284,
+    packageUnit: 'g'
+  }, [persistedProduct]);
+  assert.strictEqual(persistedMatch.matchedProduct?.id, 'persisted-gem-284');
+  pass('Potrivirea folosește catalogul PostgreSQL furnizat, nu doar stocarea locală');
+
+  const repeatedPriceEvents = [
+    { id: 'test-price-event-run-1', productId: 'test-product-history', storeId: 'lidl', price: 2.5, date: '2026-11-11', source: 'official_feed' as const },
+    { id: 'test-price-event-run-2', productId: 'test-product-history', storeId: 'lidl', price: 2.5, date: '2026-11-11', source: 'official_feed' as const }
+  ];
+  assert.strictEqual(StorageService.addPriceObservations(repeatedPriceEvents), 2);
+  assert.strictEqual(
+    StorageService.getPriceObservations().filter(event => event.productId === 'test-product-history').length,
+    2
+  );
+  pass('Reindexările cu același preț și în aceeași zi păstrează două observații distincte');
+
   // --- 3. Comparație Multi-Retailer Detaliată ---
   console.log('\n--- 3. Comparație Multi-Retailer Detaliată (PriceComparisonService) ---');
+
+  const comparisonOfferDate = new Date().toISOString().slice(0, 10);
+  const comparisonOffers: ProductOffer[] = [
+    {
+      id: 'test-lapte-lidl',
+      productId: 'prod-lapte-1',
+      storeId: 'lidl',
+      price: 6.49,
+      unitPrice: 6.49,
+      unitPriceMeasure: 'lei/l',
+      isPromo: true,
+      observationDate: comparisonOfferDate,
+      source: 'official_feed',
+      confidenceLevel: 'high',
+      verificationStatus: 'verified',
+      lastChecked: `${comparisonOfferDate}T10:00:00.000Z`
+    },
+    {
+      id: 'test-lapte-kaufland',
+      productId: 'prod-lapte-1',
+      storeId: 'kaufland',
+      price: 6.59,
+      originalPrice: 7.29,
+      loyaltyCardRequired: true,
+      loyaltyCardName: 'Kaufland Card',
+      unitPrice: 6.79,
+      unitPriceMeasure: 'lei/l',
+      isPromo: true,
+      observationDate: comparisonOfferDate,
+      source: 'official_feed',
+      confidenceLevel: 'high',
+      verificationStatus: 'verified',
+      lastChecked: `${comparisonOfferDate}T10:00:00.000Z`
+    },
+    {
+      id: 'test-lapte-carrefour',
+      productId: 'prod-lapte-1',
+      storeId: 'carrefour',
+      price: 7.19,
+      unitPrice: 7.19,
+      unitPriceMeasure: 'lei/l',
+      isPromo: false,
+      observationDate: comparisonOfferDate,
+      source: 'official_feed',
+      confidenceLevel: 'high',
+      verificationStatus: 'verified',
+      lastChecked: `${comparisonOfferDate}T10:00:00.000Z`
+    }
+  ];
+  StorageService.saveProductOffers(comparisonOffers);
 
   const compDetails = PriceComparisonService.getProductComparisonDetails('prod-lapte-1');
   assert.ok(compDetails, 'Comparația detaliată trebuie să existe');

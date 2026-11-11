@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -863,14 +864,17 @@ app.post('/api/admin/sources/:sourceId/import', requireAdminAuth, async (req, re
       });
     }
 
-    const adapter = new FileImportAdapter(sourceId, `Import ${sourceId}`, storeId);
-    const valResult = adapter.validateRecords(rawRecords);
-    const normResult = adapter.normalize(valResult.valid, storeId);
+  const adapter = new FileImportAdapter(sourceId, `Import ${sourceId}`, storeId);
+  const valResult = adapter.validateRecords(rawRecords);
+  const productsForMatching = isPostgresConfigured()
+  ? await DatabaseService.getProducts()
+  : StorageService.getAllProducts();
+  const normResult = adapter.normalize(valResult.valid, storeId, productsForMatching);
 
     // Prepare observations for valid matched offers (append-only timeline)
-    const todayStr = new Date().toISOString().split('T')[0];
-    const newObservations = normResult.offers.map(off => ({
-      id: `obs-srv-${Date.now()}-${off.productId}`,
+  const todayStr = new Date().toISOString().split('T')[0];
+  const newObservations = normResult.offers.map(off => ({
+  id: `obs-srv-${crypto.randomUUID()}`,
       productId: off.productId,
       storeId: off.storeId,
       sourceId: off.sourceId,

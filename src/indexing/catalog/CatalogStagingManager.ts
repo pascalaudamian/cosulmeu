@@ -184,9 +184,13 @@ export class CatalogStagingManager {
     let needsReviewCount = 0;
     const nowIso = new Date().toISOString();
 
-    for (let idx = 0; idx < parseRes.offers.length; idx++) {
-      const raw = parseRes.offers[idx];
-      const offerId = `stg-${document.retailerId}-${document.id}-${idx + 1}`;
+  const productsForMatching = isPostgresConfigured()
+  ? await DatabaseService.getProducts()
+  : StorageService.getAllProducts();
+
+  for (let idx = 0; idx < parseRes.offers.length; idx++) {
+  const raw = parseRes.offers[idx];
+  const offerId = `stg-${crypto.createHash('sha256').update(`${document.retailerId}:${document.id}:${runId}:${idx + 1}`).digest('hex').slice(0, 48)}`;
 
       // Normalizare gramaj și calcul preț unitar
       const { unitPrice, unitPriceMeasure, packageUnit, packageWeight } = this.normalizePackaging(
@@ -203,8 +207,8 @@ export class CatalogStagingManager {
         brand: raw.rawBrand,
         packageWeightOrVolume: packageWeight,
         packageUnit,
-        category: raw.rawCategory
-      });
+  category: raw.rawCategory
+  }, productsForMatching);
 
       const validationErrors: string[] = [];
 
@@ -446,13 +450,36 @@ export class CatalogStagingManager {
     const newObservations: PriceObservation[] = [];
     const errors: string[] = [];
 
-    const existingOffers = StorageService.getProductOffers();
-    const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
+  const existingOffers = isPostgresConfigured()
+  ? await DatabaseService.getOffers()
+  : StorageService.getProductOffers();
+  const productsForMatching = isPostgresConfigured()
+  ? await DatabaseService.getProducts()
+  : StorageService.getAllProducts();
+  const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
 
-    for (const item of toPublish) {
-      // Dacă oferta aprobată nu a fost asociată manual cu un produs existent,
-      // creăm automat produsul unificat în catalog pentru a fi indexat și vizibil în pagina Produse
-      if (!item.matchedProductId) {
+  for (const item of toPublish) {
+  const persistedMatch = productsForMatching.find(product => product.id === item.matchedProductId);
+  if (persistedMatch) {
+  item.matchedProductName = persistedMatch.name;
+  } else {
+  const matchResult = ProductMatcher.matchProduct({
+  rawName: item.rawTitle,
+  barcode: item.rawBarcode,
+  brand: item.rawBrand,
+  packageWeightOrVolume: item.packageQuantity,
+  packageUnit: item.packageUnit as UnitType,
+  category: item.rawCategory
+  }, productsForMatching);
+  item.matchedProductId = matchResult.matchedProduct?.id;
+  item.matchedProductName = matchResult.matchedProduct?.name;
+  if (matchResult.matchedProduct) {
+  item.matchConfidence = matchResult.confidence;
+  }
+  }
+
+  // If no catalog product matches, create a new canonical product.
+  if (!item.matchedProductId) {
         const { category, subcategory } = mapRetailerCategoryToStandard(item.rawTitle);
         const normUnit: 'kg' | 'l' | 'buc' = ['kg', 'g'].includes(item.packageUnit || '')
           ? 'kg'
@@ -476,8 +503,9 @@ export class CatalogStagingManager {
           isRomanianProduct: true
         };
 
-        StorageService.addCustomProduct(newProduct);
-        item.matchedProductId = newProductId;
+  StorageService.addCustomProduct(newProduct);
+  productsForMatching.push(newProduct);
+  item.matchedProductId = newProductId;
         item.matchedProductName = newProduct.name;
         StorageService.updateCatalogExtractedOffer(item.id, {
           matchedProductId: newProductId,
@@ -519,7 +547,7 @@ export class CatalogStagingManager {
 
       // Adăugare observație istorică append-only
       const obs: PriceObservation = {
-        id: `obs-cat-${item.id}-${Date.now()}`,
+        id: `obs-cat-${crypto.createHash('sha256').update(item.id).digest('hex').slice(0, 48)}`,
         productId: item.matchedProductId,
         storeId: item.retailerId,
         sourceId: `src-${item.retailerId}-catalog`,
