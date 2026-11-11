@@ -674,20 +674,28 @@ export class DatabaseService {
       try {
         const res = await pool.query('SELECT * FROM stores ORDER BY rating DESC');
         if (res.rows.length > 0) {
-          return res.rows.map(r => ({
-            id: r.id,
-            name: r.name,
-            slug: r.slug,
-            chain: r.chain,
-            brandColor: r.brand_color,
-            accentColor: r.accent_color,
-            logoUrl: r.logo_url || undefined,
-            type: r.store_type,
-            rating: parseFloat(r.rating) || 4.0,
-            locationsCount: r.locations_count || 100,
-            sampleAddress: r.sample_address,
-            isPartner: Boolean(r.is_partner)
-          }));
+          const dbStores = res.rows.map(r => {
+            const fallbackStore = STORES.find(s => s.id === r.id || s.slug === r.slug);
+            return {
+              id: r.id,
+              name: r.name,
+              slug: r.slug,
+              chain: r.chain,
+              brandColor: r.brand_color,
+              accentColor: r.accent_color,
+              logoUrl: r.logo_url || undefined,
+              officialUrl: r.official_url || r.website_url || fallbackStore?.officialUrl,
+              websiteUrl: r.website_url || r.official_url || fallbackStore?.websiteUrl,
+              type: r.store_type,
+              rating: parseFloat(r.rating) || 4.0,
+              locationsCount: r.locations_count || 100,
+              sampleAddress: r.sample_address,
+              isPartner: Boolean(r.is_partner)
+            };
+          });
+          const existingSlugs = new Set(dbStores.map(s => (s.slug || s.id).toLowerCase()));
+          const missing = STORES.filter(s => !existingSlugs.has((s.slug || s.id).toLowerCase()));
+          return [...dbStores, ...missing];
         }
       } catch (err: any) {
         console.warn('Postgres pool getStores failed, falling back to Supabase:', err.message);
@@ -697,20 +705,28 @@ export class DatabaseService {
     try {
       const { data, error } = await supabase.from('stores').select('*').order('rating', { ascending: false });
       if (!error && data && data.length > 0) {
-        return data.map(r => ({
-          id: r.id,
-          name: r.name,
-          slug: r.slug,
-          chain: r.chain,
-          brandColor: r.brand_color,
-          accentColor: r.accent_color,
-          logoUrl: r.logo_url || undefined,
-          type: r.store_type,
-          rating: parseFloat(r.rating) || 4.0,
-          locationsCount: r.locations_count || 100,
-          sampleAddress: r.sample_address,
-          isPartner: Boolean(r.is_partner)
-        }));
+        const sbStores = data.map(r => {
+          const fallbackStore = STORES.find(s => s.id === r.id || s.slug === r.slug);
+          return {
+            id: r.id,
+            name: r.name,
+            slug: r.slug,
+            chain: r.chain,
+            brandColor: r.brand_color,
+            accentColor: r.accent_color,
+            logoUrl: r.logo_url || undefined,
+            officialUrl: r.official_url || r.website_url || fallbackStore?.officialUrl,
+            websiteUrl: r.website_url || r.official_url || fallbackStore?.websiteUrl,
+            type: r.store_type,
+            rating: parseFloat(r.rating) || 4.0,
+            locationsCount: r.locations_count || 100,
+            sampleAddress: r.sample_address,
+            isPartner: Boolean(r.is_partner)
+          };
+        });
+        const existingSlugs = new Set(sbStores.map(s => (s.slug || s.id).toLowerCase()));
+        const missing = STORES.filter(s => !existingSlugs.has((s.slug || s.id).toLowerCase()));
+        return [...sbStores, ...missing];
       }
     } catch {}
 

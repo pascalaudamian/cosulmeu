@@ -429,6 +429,18 @@ app.get('/api/storage/status', async (req, res) => {
   }
 });
 
+// Stores & Supermarket Retailers endpoint (Public)
+const handleGetStores = async (_req: express.Request, res: express.Response) => {
+  try {
+    const stores = await DatabaseService.getStores();
+    res.json({ success: true, count: stores.length, stores });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la preluarea listei de supermarketuri.' });
+  }
+};
+app.get('/api/stores', handleGetStores);
+app.get('/api/catalog/stores', handleGetStores);
+
 // Catalog Products endpoint
 app.get('/api/catalog/products', async (req, res) => {
   try {

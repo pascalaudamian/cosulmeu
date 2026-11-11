@@ -26,6 +26,8 @@ export interface Store {
   brandColor: string;
   accentColor: string;
   logoUrl?: string;
+  officialUrl?: string;
+  websiteUrl?: string;
   type: 'discounter' | 'hypermarket' | 'supermarket' | 'proximity';
   rating: number;
   locationsCount: number;
