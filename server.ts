@@ -16,11 +16,13 @@ import { IndexerScheduler } from './src/services/IndexerScheduler.ts';
 import { PriceQualityMonitor } from './src/indexing/PriceQualityMonitor.ts';
 import { CATEGORIES_TAXONOMY, mapRetailerCategoryToStandard } from './src/data/categories.ts';
 import { STORES } from './src/data/mockData.ts';
+import { supabase } from './src/lib/supabase.ts';
 import { CatalogDownloader } from './src/indexing/catalog/CatalogDownloader.ts';
 import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.ts';
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
+import { Store } from './src/types.ts';
 import { createHash } from 'node:crypto';
 import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 
@@ -2000,6 +2002,163 @@ app.post('/api/admin/audit-logs', requireAdminAuth, async (req, res) => {
   }
 });
 
+// 1.5. Administrare Retaileri (Listare & Adăugare Retailer Nou)
+app.get('/api/admin/retailers', requireAdminAuth, async (req, res) => {
+  try {
+    const stores = await DatabaseService.getStores();
+    const mapped = stores.map(s => ({
+      id: s.id,
+      name: s.name,
+      slug: s.slug,
+      chain: s.chain,
+      format: s.chain?.includes('PDF') ? 'PDF' : 'HTML & PDF',
+      defaultStatus: s.isPartner ? 'ACTIVE' : 'ACTIVE',
+      color: s.brandColor?.replace('bg-', '')?.replace('-600', '') || 'emerald',
+      brandColor: s.brandColor,
+      accentColor: s.accentColor,
+      type: s.type
+    }));
+    res.json({ success: true, retailers: mapped });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la preluarea listei de retaileri.' });
+  }
+});
+
+app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
+  try {
+    const {
+      id,
+      name,
+      chain,
+      format = 'HTML & PDF',
+      defaultStatus = 'ACTIVE',
+      color = 'emerald',
+      storeType = 'supermarket',
+      catalogUrl,
+      sourceName
+    } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Numele retailerului este obligatoriu.' });
+    }
+
+    const cleanId = (id && id.trim())
+      ? id.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')
+      : name.trim().toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+
+    const brandColor = `bg-${color}-600`;
+    const accentColor = `text-${color}-600`;
+
+    const newStore: Store = {
+      id: cleanId,
+      name: name.trim(),
+      slug: cleanId,
+      chain: chain?.trim() || name.trim(),
+      brandColor,
+      accentColor,
+      type: (['discounter', 'hypermarket', 'supermarket', 'proximity'].includes(storeType) ? storeType : 'supermarket') as any,
+      rating: 4.5,
+      locationsCount: 1,
+      sampleAddress: 'România',
+      isPartner: false
+    };
+
+    const pool = getPool();
+    if (pool) {
+      await pool.query(
+        `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, store_type, rating, locations_count, sample_address, is_partner)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name,
+           chain = EXCLUDED.chain,
+           brand_color = EXCLUDED.brand_color,
+           accent_color = EXCLUDED.accent_color,
+           store_type = EXCLUDED.store_type`,
+        [newStore.id, newStore.name, newStore.slug, newStore.chain, newStore.brandColor, newStore.accentColor, newStore.type, newStore.rating, newStore.locationsCount, newStore.sampleAddress, newStore.isPartner]
+      );
+    } else {
+      try {
+        await supabase.from('stores').upsert({
+          id: newStore.id,
+          name: newStore.name,
+          slug: newStore.slug,
+          chain: newStore.chain,
+          brand_color: newStore.brandColor,
+          accent_color: newStore.accentColor,
+          store_type: newStore.type,
+          rating: newStore.rating,
+          locations_count: newStore.locationsCount,
+          sample_address: newStore.sampleAddress,
+          is_partner: newStore.isPartner
+        }, { onConflict: 'id' });
+      } catch (e: any) {
+        console.warn('Supabase stores upsert warning:', e.message);
+      }
+    }
+
+    // Configurare opțională a primei surse de catalog
+    let createdSource: CatalogSource | null = null;
+    if (catalogUrl && catalogUrl.trim()) {
+      const sourceId = `cat-src-${cleanId}-${Date.now()}`;
+      createdSource = {
+        id: sourceId,
+        retailerId: cleanId,
+        retailerName: name.trim(),
+        name: sourceName?.trim() || `Catalog Online ${name.trim()}`,
+        catalogUrl: catalogUrl.trim(),
+        format: format.toLowerCase().includes('pdf') ? 'pdf' : 'html',
+        status: defaultStatus === 'ACTIVE' ? 'active' : 'disabled',
+        updateFrequencyDays: 7,
+        authRequired: false,
+        legalStatusNotice: `Catalog oficial ${name.trim()}; configurat manual de administrator.`
+      };
+
+      const sources = StorageService.getCatalogSources();
+      sources.push(createdSource);
+      StorageService.saveCatalogSources(sources);
+
+      if (pool) {
+        await pool.query(
+          `INSERT INTO catalog_sources (id, retailer_id, name, catalog_url, format, status, update_frequency_days, auth_required, legal_status_notice)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, catalog_url = EXCLUDED.catalog_url, updated_at = NOW()`,
+          [createdSource.id, createdSource.retailerId, createdSource.name, createdSource.catalogUrl, createdSource.format, createdSource.status, createdSource.updateFrequencyDays, createdSource.authRequired, createdSource.legalStatusNotice]
+        );
+      } else {
+        try {
+          await supabase.from('catalog_sources').upsert({
+            id: createdSource.id,
+            retailer_id: createdSource.retailerId,
+            name: createdSource.name,
+            catalog_url: createdSource.catalogUrl,
+            format: createdSource.format,
+            status: createdSource.status,
+            update_frequency_days: createdSource.updateFrequencyDays,
+            auth_required: createdSource.authRequired,
+            legal_status_notice: createdSource.legalStatusNotice
+          }, { onConflict: 'id' });
+        } catch (e: any) {}
+      }
+    }
+
+    res.json({
+      success: true,
+      retailer: {
+        id: cleanId,
+        name: name.trim(),
+        format,
+        defaultStatus,
+        color
+      },
+      source: createdSource,
+      message: `Retailerul "${name.trim()}" a fost salvat cu succes.`
+    });
+  } catch (err: any) {
+    console.error('Eroare adăugare retailer:', err);
+    res.status(500).json({ error: 'Eroare la adăugarea retailerului.' });
+  }
+});
+
 // 2. Surse de catalog
 app.get('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, res) => {
   try {
@@ -2008,6 +2167,27 @@ app.get('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, res
       const result = await pool.query(`SELECT id, retailer_id AS "retailerId", retailer_id AS "retailerName", name, catalog_url AS "catalogUrl", format, status, update_frequency_days AS "updateFrequencyDays", auth_required AS "authRequired", legal_status_notice AS "legalStatusNotice" FROM catalog_sources ORDER BY retailer_id, name`);
       return res.json({ success: true, sources: result.rows, count: result.rows.length });
     }
+
+    // Fallback la Supabase REST
+    try {
+      const { data, error } = await supabase.from('catalog_sources').select('*').order('retailer_id', { ascending: true });
+      if (!error && data && data.length > 0) {
+        const mapped = data.map(r => ({
+          id: r.id,
+          retailerId: r.retailer_id,
+          retailerName: r.retailer_id.toUpperCase(),
+          name: r.name,
+          catalogUrl: r.catalog_url,
+          format: r.format,
+          status: r.status,
+          updateFrequencyDays: r.update_frequency_days || 7,
+          authRequired: Boolean(r.auth_required),
+          legalStatusNotice: r.legal_status_notice
+        }));
+        return res.json({ success: true, sources: mapped, count: mapped.length });
+      }
+    } catch {}
+
     const sources = StorageService.getCatalogSources();
     return res.json({ success: true, sources, count: sources.length });
   } catch (err: any) {
@@ -2018,7 +2198,19 @@ app.get('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, res
 // 3. Adăugare / editare sursă de catalog cu validare SSRF
 app.post('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, res) => {
   try {
-    const { id, retailerId, retailerName, name, catalogUrl, format = 'html', status = 'active', legalStatusNotice } = req.body;
+    const {
+      id,
+      retailerId,
+      retailerName,
+      name,
+      catalogUrl,
+      format = 'html',
+      status = 'active',
+      updateFrequencyDays = 7,
+      authRequired = false,
+      legalStatusNotice
+    } = req.body;
+
     if (!retailerId || !catalogUrl || !name) {
       return res.status(400).json({ error: 'Câmpurile retailerId, catalogUrl și name sunt obligatorii.' });
     }
@@ -2033,12 +2225,12 @@ app.post('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, re
       id: sourceId,
       retailerId,
       retailerName: retailerName || retailerId.toUpperCase(),
-      name,
-      catalogUrl,
+      name: name.trim(),
+      catalogUrl: catalogUrl.trim(),
       format,
       status,
-      updateFrequencyDays: 7,
-      authRequired: status === 'pending_authorization',
+      updateFrequencyDays: Number(updateFrequencyDays) || 7,
+      authRequired: Boolean(authRequired) || status === 'pending_authorization',
       legalStatusNotice: legalStatusNotice || 'Sursă configurată de administrator cu verificare SSRF.'
     };
 
@@ -2050,14 +2242,68 @@ app.post('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, re
       sources.push(newSource);
     }
     StorageService.saveCatalogSources(sources);
+
     const pool = getPool();
     if (pool) {
-      await pool.query(`INSERT INTO catalog_sources (id, retailer_id, name, catalog_url, format, status, update_frequency_days, auth_required, legal_status_notice) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO UPDATE SET retailer_id = EXCLUDED.retailer_id, name = EXCLUDED.name, catalog_url = EXCLUDED.catalog_url, format = EXCLUDED.format, status = EXCLUDED.status, auth_required = EXCLUDED.auth_required, legal_status_notice = EXCLUDED.legal_status_notice, updated_at = NOW()`, [newSource.id, newSource.retailerId, newSource.name, newSource.catalogUrl, newSource.format, newSource.status, newSource.updateFrequencyDays, newSource.authRequired, newSource.legalStatusNotice]);
+      await pool.query(
+        `INSERT INTO catalog_sources (id, retailer_id, name, catalog_url, format, status, update_frequency_days, auth_required, legal_status_notice)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (id) DO UPDATE SET
+           retailer_id = EXCLUDED.retailer_id,
+           name = EXCLUDED.name,
+           catalog_url = EXCLUDED.catalog_url,
+           format = EXCLUDED.format,
+           status = EXCLUDED.status,
+           update_frequency_days = EXCLUDED.update_frequency_days,
+           auth_required = EXCLUDED.auth_required,
+           legal_status_notice = EXCLUDED.legal_status_notice,
+           updated_at = NOW()`,
+        [newSource.id, newSource.retailerId, newSource.name, newSource.catalogUrl, newSource.format, newSource.status, newSource.updateFrequencyDays, newSource.authRequired, newSource.legalStatusNotice]
+      );
+    } else {
+      try {
+        await supabase.from('catalog_sources').upsert({
+          id: newSource.id,
+          retailer_id: newSource.retailerId,
+          name: newSource.name,
+          catalog_url: newSource.catalogUrl,
+          format: newSource.format,
+          status: newSource.status,
+          update_frequency_days: newSource.updateFrequencyDays,
+          auth_required: newSource.authRequired,
+          legal_status_notice: newSource.legalStatusNotice,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
+      } catch (e: any) {
+        console.warn('Supabase catalog_sources upsert warning:', e.message);
+      }
     }
 
     res.json({ success: true, source: newSource, message: 'Sursa de catalog a fost salvată cu succes.' });
   } catch (err: any) {
+    console.error('Eroare salvare sursă:', err);
     res.status(500).json({ error: 'Eroare la salvarea sursei de catalog.' });
+  }
+});
+
+// 3.5. Ștergere sursă de catalog
+app.delete('/api/admin/catalog-importer/sources/:id', requireAdminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sources = StorageService.getCatalogSources().filter(s => s.id !== id);
+    StorageService.saveCatalogSources(sources);
+
+    const pool = getPool();
+    if (pool) {
+      await pool.query('DELETE FROM catalog_sources WHERE id = $1', [id]);
+    } else {
+      try {
+        await supabase.from('catalog_sources').delete().eq('id', id);
+      } catch {}
+    }
+    res.json({ success: true, message: 'Sursa a fost ștearsă cu succes.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la ștergerea sursei.' });
   }
 });
 

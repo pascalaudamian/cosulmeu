@@ -46,7 +46,11 @@ import {
   Percent,
   CheckCheck,
   HelpCircle,
-  Activity
+  Activity,
+  Pencil,
+  Plus,
+  PlusCircle,
+  Trash2
 } from 'lucide-react';
 import {
   DataSource,
@@ -69,6 +73,8 @@ import { AdminPublishPreviewModal, PublishPreviewData } from './AdminPublishPrev
 import { AdminProductDetailModal } from './AdminProductDetailModal.tsx';
 import { AdminImportConfirmModal } from './AdminImportConfirmModal.tsx';
 import AdminPublishScheduler from './AdminPublishScheduler.tsx';
+import { AdminEditSourceModal } from './AdminEditSourceModal.tsx';
+import { AdminAddRetailerModal } from './AdminAddRetailerModal.tsx';
 
 interface AdminSourcesViewProps {
   onRefreshAll?: () => void;
@@ -97,7 +103,15 @@ const TABS: { id: AdminTabId; label: string; icon: React.FC<{ className?: string
   { id: 'settings', label: 'Setări', icon: Sliders }
 ];
 
-const ALL_8_RETAILERS = [
+export interface RetailerConfig {
+  id: string;
+  name: string;
+  format: string;
+  defaultStatus: 'ACTIVE' | 'BLOCKED';
+  color: string;
+}
+
+const ALL_8_RETAILERS: RetailerConfig[] = [
   { id: 'lidl', name: 'Lidl România', format: 'HTML & PDF', defaultStatus: 'ACTIVE', color: 'blue' },
   { id: 'kaufland', name: 'Kaufland România', format: 'PDF (Schwarz CDN)', defaultStatus: 'ACTIVE', color: 'red' },
   { id: 'carrefour', name: 'Carrefour România', format: 'HTML Store', defaultStatus: 'ACTIVE', color: 'sky' },
@@ -137,6 +151,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   const [isLoadingDashboard, setIsLoadingDashboard] = useState<boolean>(true);
 
   // Sources and Retailers
+  const [retailersList, setRetailersList] = useState<RetailerConfig[]>(ALL_8_RETAILERS);
   const [sources, setSources] = useState<CatalogSource[]>([]);
   const [expandedRetailers, setExpandedRetailers] = useState<Set<string>>(new Set(['lidl', 'auchan', 'mega-image']));
 
@@ -181,11 +196,20 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     open: boolean;
     title: string;
     description: string;
-    retailers: typeof ALL_8_RETAILERS;
+    retailers: RetailerConfig[];
     actionType: 'active' | 'all' | 'single';
     targetId?: string;
   } | null>(null);
   const [showLogoutConfirmModal, setShowLogoutConfirmModal] = useState<boolean>(false);
+
+  // Modale noi: Editare sursă & Adăugare retailer
+  const [editingSourceModal, setEditingSourceModal] = useState<{
+    open: boolean;
+    source: CatalogSource | null;
+    retailerId: string;
+    retailerName: string;
+  } | null>(null);
+  const [showAddRetailerModal, setShowAddRetailerModal] = useState<boolean>(false);
 
   // Helper fetch with Bearer token
   const fetchWithAuth = useCallback(async (url: string, options: RequestInit = {}) => {
@@ -221,6 +245,21 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       console.error('Eroare la încărcarea dashboard-ului operațional:', err);
     } finally {
       setIsLoadingDashboard(false);
+    }
+  }, [fetchWithAuth]);
+
+  // Load Retailers (dynamic list from PostgreSQL & custom additions)
+  const loadRetailers = useCallback(async () => {
+    try {
+      const res = await fetchWithAuth('/api/admin/retailers');
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json.retailers) && json.retailers.length > 0) {
+          setRetailersList(json.retailers);
+        }
+      }
+    } catch (err) {
+      console.warn('Nu s-au putut încărca retailerii din baza de date, se folosește lista implicită:', err);
     }
   }, [fetchWithAuth]);
 
@@ -309,12 +348,13 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   useEffect(() => {
     if (!isAuthenticated) return;
     loadDashboard();
+    loadRetailers();
     loadSources();
     loadDocuments();
     loadStaging();
     loadRunsAndErrors();
     loadAuditLogs();
-  }, [isAuthenticated, loadDashboard, loadSources, loadDocuments, loadStaging, loadRunsAndErrors, loadAuditLogs]);
+  }, [isAuthenticated, loadDashboard, loadRetailers, loadSources, loadDocuments, loadStaging, loadRunsAndErrors, loadAuditLogs]);
 
   // Load products when tab is active or filters change
   useEffect(() => {
@@ -1082,31 +1122,40 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-extrabold text-slate-900">
-                Gestiune Retaileri & Surse Oficiale ({ALL_8_RETAILERS.length} Retaileri)
+                Gestiune Retaileri & Surse Oficiale ({retailersList.length} Retaileri)
               </h2>
               <p className="text-xs text-slate-500">
                 Fiecare retailer include sursele sale oficiale configurate pentru extragerea de oferte și cataloage.
               </p>
             </div>
-            <button
-              onClick={() => {
-                setShowImportConfirmModal({
-                  open: true,
-                  title: 'Rulează Importurile Active',
-                  description: 'Sincronizare completă a celor 6 retaileri operaționali în Supabase PostgreSQL.',
-                  retailers: ALL_8_RETAILERS.filter(r => r.defaultStatus === 'ACTIVE'),
-                  actionType: 'active'
-                });
-              }}
-              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
-            >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Rulează Toate Sursele Active</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowAddRetailerModal(true)}
+                className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs shadow-2xs flex items-center gap-1.5 cursor-pointer transition-all hover:border-emerald-300"
+              >
+                <PlusCircle className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Adaugă Retailer Nou</span>
+              </button>
+              <button
+                onClick={() => {
+                  setShowImportConfirmModal({
+                    open: true,
+                    title: 'Rulează Importurile Active',
+                    description: 'Sincronizare completă a retailerilor operaționali în Supabase PostgreSQL.',
+                    retailers: retailersList.filter(r => r.defaultStatus === 'ACTIVE'),
+                    actionType: 'active'
+                  });
+                }}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>Rulează Toate Sursele Active</span>
+              </button>
+            </div>
           </div>
 
           <div className="space-y-3">
-            {ALL_8_RETAILERS.map(retailer => {
+            {retailersList.map(retailer => {
               const retailerSources = sources.filter(s => s.retailerId === retailer.id);
               const isExpanded = expandedRetailers.has(retailer.id);
               const isBlocked = retailer.defaultStatus === 'BLOCKED';
@@ -1177,7 +1226,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                         retailerSources.map(src => (
                           <div
                             key={src.id}
-                            className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2 text-xs"
+                            className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2 text-xs shadow-2xs"
                           >
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                               <div>
@@ -1209,6 +1258,19 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <button
+                                  onClick={() => setEditingSourceModal({
+                                    open: true,
+                                    source: src,
+                                    retailerId: retailer.id,
+                                    retailerName: retailer.name
+                                  })}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold text-xs border border-emerald-200 flex items-center gap-1 cursor-pointer transition-colors"
+                                  title="Editează parametrii, URL-ul și formatul acestei surse"
+                                >
+                                  <Pencil className="w-3 h-3 text-emerald-600" />
+                                  <span>Editează Sursă</span>
+                                </button>
+                                <button
                                   onClick={() => handleToggleSourceStatus(src)}
                                   className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer border transition-colors ${
                                     src.status === 'active'
@@ -1216,7 +1278,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                                       : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                                   }`}
                                 >
-                                  {src.status === 'active' ? 'Dezactivează' : 'Activează Sursă'}
+                                  {src.status === 'active' ? 'Dezactivează' : 'Activează'}
                                 </button>
                                 <button
                                   onClick={() => {
@@ -1236,10 +1298,24 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                           </div>
                         ))
                       ) : (
-                        <p className="text-xs text-slate-500 italic p-2">
+                        <p className="text-xs text-slate-500 italic p-1">
                           Nicio sursă specifică înregistrată pentru acest retailer.
                         </p>
                       )}
+
+                      {/* Add source button for this retailer */}
+                      <button
+                        onClick={() => setEditingSourceModal({
+                          open: true,
+                          source: null,
+                          retailerId: retailer.id,
+                          retailerName: retailer.name
+                        })}
+                        className="w-full py-2.5 border-2 border-dashed border-slate-200 hover:border-emerald-400 hover:bg-emerald-50/50 rounded-xl text-slate-600 hover:text-emerald-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer mt-2"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Adaugă sursă nouă pentru {retailer.name}</span>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1633,7 +1709,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none"
               >
                 <option value="toate">Toți Retailerii</option>
-                {ALL_8_RETAILERS.map(r => (
+                {retailersList.map(r => (
                   <option key={r.id} value={r.id}>
                     {r.name}
                   </option>
@@ -2044,6 +2120,54 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           </div>
         </div>
       )}
+
+      {/* 5. Modal Editare / Adăugare Sursă Catalog */}
+      {editingSourceModal && (
+        <AdminEditSourceModal
+          open={editingSourceModal.open}
+          onClose={() => setEditingSourceModal(null)}
+          source={editingSourceModal.source}
+          retailerId={editingSourceModal.retailerId}
+          retailerName={editingSourceModal.retailerName}
+          fetchWithAuth={fetchWithAuth}
+          onSaved={(savedSource) => {
+            loadSources();
+            loadDashboard();
+            setActionMessage({
+              type: 'success',
+              text: `Sursa "${savedSource.name}" a fost salvată cu succes.`
+            });
+            setEditingSourceModal(null);
+          }}
+          onDeleted={(_deletedId) => {
+            loadSources();
+            loadDashboard();
+            setActionMessage({
+              type: 'info',
+              text: `Sursa a fost ștearsă din sistem.`
+            });
+            setEditingSourceModal(null);
+          }}
+        />
+      )}
+
+      {/* 6. Modal Definire Retailer Nou */}
+      <AdminAddRetailerModal
+        open={showAddRetailerModal}
+        onClose={() => setShowAddRetailerModal(false)}
+        fetchWithAuth={fetchWithAuth}
+        onSaved={(newRetailer, _initialSource) => {
+          loadRetailers();
+          loadSources();
+          loadDashboard();
+          setExpandedRetailers(prev => new Set(prev).add(newRetailer.id));
+          setActionMessage({
+            type: 'success',
+            text: `Retailerul "${newRetailer.name}" a fost salvat și adăugat cu succes!`
+          });
+          setShowAddRetailerModal(false);
+        }}
+      />
     </div>
   );
 };

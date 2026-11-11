@@ -22,7 +22,7 @@ export class CatalogDownloader {
   /**
    * Domenii oficiale permise pentru descărcare cataloage
    */
-  public static readonly ALLOWED_HOST_DOMAINS = [
+  public static readonly ALLOWED_HOST_DOMAINS: string[] = [
     'lidl.ro',
     'kaufland.ro',
     'carrefour.ro',
@@ -33,6 +33,12 @@ export class CatalogDownloader {
     'profi.ro',
     'mega-image.ro',
     'metro.ro',
+    'selgros.ro',
+    'supeco.ro',
+    'la-cocos.ro',
+    'freshful.ro',
+    'sezamo.ro',
+    'cora.ro',
     'leaflet.lidl.ro',
     'cdn.lidl.ro',
     'media.kaufland.com',
@@ -46,10 +52,17 @@ export class CatalogDownloader {
     'carrefour-romania.ro'
   ];
 
+  public static addAllowedDomain(domain: string): void {
+    const clean = domain.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (clean && !this.ALLOWED_HOST_DOMAINS.includes(clean)) {
+      this.ALLOWED_HOST_DOMAINS.push(clean);
+    }
+  }
+
   /**
    * Verifică dacă adresa URL este sigură împotriva atacurilor SSRF
    */
-  static validateUrlSafety(inputUrl: string): { safe: boolean; reason?: string } {
+  static validateUrlSafety(inputUrl: string, additionalAllowedDomains?: string[]): { safe: boolean; reason?: string } {
     try {
       const parsed = new URL(inputUrl);
 
@@ -90,7 +103,11 @@ export class CatalogDownloader {
       }
 
       // 4. Verificare dacă domeniul aparține retailerilor autorizați sau allowlist-ului
-      const matchesAllowed = this.ALLOWED_HOST_DOMAINS.some(allowed => {
+      const allAllowed = additionalAllowedDomains && additionalAllowedDomains.length > 0
+        ? [...this.ALLOWED_HOST_DOMAINS, ...additionalAllowedDomains]
+        : this.ALLOWED_HOST_DOMAINS;
+
+      const matchesAllowed = allAllowed.some(allowed => {
         return hostname === allowed || hostname.endsWith('.' + allowed);
       });
 
