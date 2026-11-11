@@ -143,6 +143,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   // Documents and Staging
   const [documents, setDocuments] = useState<CatalogDocument[]>([]);
   const [stagingOffers, setStagingOffers] = useState<CatalogExtractedOffer[]>([]);
+  const [validatedStagingTotal, setValidatedStagingTotal] = useState(0);
   const [stagingFilter, setStagingFilter] = useState<'toate' | 'NEEDS_REVIEW' | 'VALIDATED' | 'PUBLISHED' | 'REJECTED'>('NEEDS_REVIEW');
   const [stagingRetailerFilter, setStagingRetailerFilter] = useState<string>('toate');
   const [stagingSearch, setStagingSearch] = useState<string>('');
@@ -249,10 +250,11 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     try {
       const res = await fetchWithAuth('/api/admin/catalog-importer/staging');
       if (res.ok) {
-        const json = await res.json();
-        setStagingOffers(json.offers || []);
-      }
-    } catch {}
+      const json = await res.json();
+      setStagingOffers(json.offers || []);
+      setValidatedStagingTotal(Number(json.statusCounts?.VALIDATED ?? 0));
+    }
+  } catch {}
   }, [fetchWithAuth]);
 
   // Load Runs & Errors
@@ -425,7 +427,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   // Staging Preview and Publish (Requirement 6)
   const handleOpenPublishPreview = async () => {
     try {
-      const targetOfferIds = selectedStagingIds.size > 0 ? Array.from(selectedStagingIds) : undefined;
+      const selectedValidatedIds = stagingOffers
+        .filter(offer => selectedStagingIds.has(offer.id) && offer.stagingStatus === 'VALIDATED')
+        .map(offer => offer.id);
+      const targetOfferIds = selectedValidatedIds.length > 0 ? selectedValidatedIds : undefined;
       const res = await fetchWithAuth('/api/admin/staging/preview-publish', {
         method: 'POST',
         body: JSON.stringify({ offerIds: targetOfferIds })
@@ -445,7 +450,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     if (!publishPreviewData) return;
     setIsPublishing(true);
     try {
-      const targetOfferIds = selectedStagingIds.size > 0 ? Array.from(selectedStagingIds) : undefined;
+      const selectedValidatedIds = stagingOffers
+        .filter(offer => selectedStagingIds.has(offer.id) && offer.stagingStatus === 'VALIDATED')
+        .map(offer => offer.id);
+      const targetOfferIds = selectedValidatedIds.length > 0 ? selectedValidatedIds : undefined;
       const res = await fetchWithAuth('/api/admin/catalog-importer/publish-validated', {
         method: 'POST',
         body: JSON.stringify({ offerIds: targetOfferIds })
@@ -1490,15 +1498,18 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             <div className="flex items-center gap-2">
               <button
                 onClick={handleOpenPublishPreview}
-                disabled={isPublishing || stagingOffers.filter(o => o.stagingStatus === 'VALIDATED').length === 0}
+                disabled={isPublishing || validatedStagingTotal === 0}
                 className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>
                   Publică Ofertele Validate (
-                  {selectedStagingIds.size > 0
-                    ? selectedStagingIds.size
-                    : stagingOffers.filter(o => o.stagingStatus === 'VALIDATED').length}
+                  {(() => {
+                    const selectedValidatedCount = stagingOffers.filter(
+                      offer => selectedStagingIds.has(offer.id) && offer.stagingStatus === 'VALIDATED'
+                    ).length;
+                    return selectedValidatedCount > 0 ? selectedValidatedCount : validatedStagingTotal;
+                  })()}
                   )
                 </span>
               </button>
