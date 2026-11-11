@@ -34,10 +34,22 @@ CREATE TABLE IF NOT EXISTS products (
     image_url TEXT,
     is_bio BOOLEAN NOT NULL DEFAULT FALSE,
     is_romanian_product BOOLEAN NOT NULL DEFAULT FALSE,
-    base_reference_price NUMERIC(10,2) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+  base_reference_price NUMERIC(10,2) NOT NULL,
+  canonical_product_id VARCHAR(64) REFERENCES products(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS products_canonical_product_id_idx
+  ON products (canonical_product_id) WHERE canonical_product_id IS NOT NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS products_canonical_identity_unique
+  ON products (
+  lower(btrim(name)),
+  lower(btrim(coalesce(brand, ''))),
+  package_weight_or_volume,
+  lower(btrim(coalesce(package_unit, ''))),
+  lower(btrim(coalesce(barcode, '')))
+  ) WHERE canonical_product_id IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode) WHERE barcode IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
@@ -123,11 +135,9 @@ CREATE TABLE IF NOT EXISTS price_observations (
     date DATE NOT NULL,
     receipt_id VARCHAR(64),
     loyalty_card_used BOOLEAN NOT NULL DEFAULT FALSE,
-    source VARCHAR(32) NOT NULL DEFAULT 'official_feed',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- Garanție de idempotență: se evită dublurile identice în aceeași zi pentru același produs, magazin și preț
-    CONSTRAINT uq_daily_price_obs UNIQUE (product_id, store_id, date, price)
-);
+  source VARCHAR(32) NOT NULL DEFAULT 'official_feed',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
 
 CREATE INDEX IF NOT EXISTS idx_price_obs_product_date ON price_observations(product_id, date DESC);
 CREATE INDEX IF NOT EXISTS idx_price_obs_store_date ON price_observations(store_id, date DESC);

@@ -411,14 +411,13 @@ export class StorageService {
    */
   static addPriceObservations(newObs: PriceObservation[]): number {
     const current = this.getPriceObservations();
-    // Avoid exact duplicate entries (same product, store, price and date)
-    const existingSignatures = new Set(
-      current.map(obs => `${obs.productId}_${obs.storeId}_${obs.date}_${obs.price}`)
-    );
-
-    const nonDuplicates = newObs.filter(
-      obs => !existingSignatures.has(`${obs.productId}_${obs.storeId}_${obs.date}_${obs.price}`)
-    );
+  // IDs identify the indexing event; equal prices on the same day are separate observations.
+  const existingIds = new Set(current.map(obs => obs.id));
+  const nonDuplicates = newObs.filter(obs => {
+  if (existingIds.has(obs.id)) return false;
+  existingIds.add(obs.id);
+  return true;
+  });
 
     if (nonDuplicates.length > 0) {
       const updated = [...current, ...nonDuplicates];

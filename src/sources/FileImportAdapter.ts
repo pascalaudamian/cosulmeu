@@ -7,6 +7,7 @@ import {
   SourceImportResult
 } from './PriceSourceAdapter.js';
 import {
+  Product,
   ProductOffer,
   SourceSyncRun,
   ProductMatchCandidate,
@@ -15,6 +16,7 @@ import {
 } from '../types.js';
 import { StorageService } from '../services/StorageService.js';
 import { ProductMatcher } from '../services/ProductMatcher.js';
+import { DatabaseService, isPostgresConfigured } from '../db/index.js';
 import { STORES } from '../data/mockData.js';
 
 export class FileImportAdapter implements PriceSourceAdapter {
@@ -283,7 +285,11 @@ export class FileImportAdapter implements PriceSourceAdapter {
   /**
    * Normalize and match records with catalog
    */
-  normalize(records: ValidatedPriceRecord[], storeId: string): {
+  normalize(
+  records: ValidatedPriceRecord[],
+  storeId: string,
+  products: Product[] = StorageService.getAllProducts()
+  ): {
     offers: ProductOffer[];
     matchCandidates: ProductMatchCandidate[];
   } {
@@ -298,8 +304,8 @@ export class FileImportAdapter implements PriceSourceAdapter {
         brand: rec.brand,
         packageWeightOrVolume: rec.packageWeightOrVolume,
         packageUnit: rec.packageUnit,
-        category: rec.category
-      });
+  category: rec.category
+  }, products);
 
       let targetProductId = matchResult.matchedProduct?.id;
 
@@ -352,8 +358,11 @@ export class FileImportAdapter implements PriceSourceAdapter {
       ? FileImportAdapter.parseXML(payload.content)
       : FileImportAdapter.parseCSV(payload.content);
 
-    const validation = this.validateRecords(rawRecords);
-    const { offers, matchCandidates } = this.normalize(validation.valid, targetStoreId);
+  const validation = this.validateRecords(rawRecords);
+  const productsForMatching = isPostgresConfigured()
+  ? await DatabaseService.getProducts()
+  : StorageService.getAllProducts();
+  const { offers, matchCandidates } = this.normalize(validation.valid, targetStoreId, productsForMatching);
 
     const completedAt = new Date().toISOString();
     const hasErrors = validation.invalid.length > 0;

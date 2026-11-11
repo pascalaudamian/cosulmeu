@@ -4,7 +4,7 @@
 import { PromotionRecord } from './types.js';
 import { ProductMatcher } from '../services/ProductMatcher.js';
 import { StorageService } from '../services/StorageService.js';
-import { getPool } from '../db/index.js';
+import { DatabaseService, getPool, isPostgresConfigured } from '../db/index.js';
 
 export interface PromotionIndexingResult {
   promotionsIndexedCount: number;
@@ -38,8 +38,11 @@ export class PromotionIndexer {
     rawPromos: PromotionRecord[],
     options: { dryRun?: boolean; skipExpired?: boolean } = {}
   ): Promise<PromotionIndexingResult> {
-    const validPromotions: PromotionRecord[] = [];
-    let matchedToCatalogCount = 0;
+  const productsForMatching = isPostgresConfigured()
+  ? await DatabaseService.getProducts()
+  : StorageService.getAllProducts();
+  const validPromotions: PromotionRecord[] = [];
+  let matchedToCatalogCount = 0;
     let expiredSkippedCount = 0;
 
     for (const promo of rawPromos) {
@@ -52,10 +55,10 @@ export class PromotionIndexer {
       let finalProductId = promo.productId;
       if (!finalProductId) {
         const match = ProductMatcher.matchProduct({
-          rawName: promo.title,
-          barcode: promo.barcode,
-          brand: promo.brand
-        });
+  rawName: promo.title,
+  barcode: promo.barcode,
+  brand: promo.brand
+  }, productsForMatching);
         if (match.matchedProduct) {
           finalProductId = match.matchedProduct.id;
           matchedToCatalogCount++;

@@ -10,7 +10,7 @@ import { ProductMatcher } from '../services/ProductMatcher.js';
 import { StorageService } from '../services/StorageService.js';
 import { RetailerRegistry } from './RetailerRegistry.js';
 import { getCollectorForRetailer } from './RetailerCollectors.js';
-import { getPool } from '../db/index.js';
+import { DatabaseService, getPool, isPostgresConfigured } from '../db/index.js';
 import { ProductOffer, PriceObservation, ProductMatchCandidate, SourceSyncRun } from '../types.js';
 
 export class ProcessingPipeline {
@@ -33,10 +33,15 @@ export class ProcessingPipeline {
     let autoMatchedCount = 0;
     let priceChangesCount = 0;
 
-    const observationDate = batch.collectedAt.slice(0, 10);
+  const observationDate = batch.collectedAt.slice(0, 10);
+  const productsForMatching = isPostgresConfigured()
+  ? await DatabaseService.getProducts()
+  : StorageService.getAllProducts();
 
-    // Consultăm ofertele curente din memorie/stocare pentru detecția schimbărilor de preț
-    const existingOffers = StorageService.getProductOffers();
+  // Consultăm ofertele curente pentru detecția schimbărilor de preț
+  const existingOffers = isPostgresConfigured()
+  ? await DatabaseService.getOffers()
+  : StorageService.getProductOffers();
     const existingOfferMap = new Map<string, ProductOffer>(
       existingOffers.map(o => [`${o.productId}__${o.storeId}`, o])
     );
@@ -48,9 +53,9 @@ export class ProcessingPipeline {
         barcode: item.barcode,
         brand: item.brand,
         packageWeightOrVolume: item.packageWeightOrVolume,
-        packageUnit: item.packageUnit,
-        category: item.category
-      });
+  packageUnit: item.packageUnit,
+  category: item.category
+  }, productsForMatching);
 
       if (matchResult.candidate) {
         candidates.push(matchResult.candidate);

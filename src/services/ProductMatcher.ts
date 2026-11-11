@@ -38,13 +38,13 @@ export class ProductMatcher {
     packageWeightOrVolume?: number;
     packageUnit?: UnitType;
     category?: string;
-  }): {
+  }, products: Product[] = StorageService.getAllProducts()): {
     matchedProduct?: Product;
     confidence: number;
     matchMethod: 'gtin_exact' | 'name_brand_similarity' | 'manual';
     candidate?: ProductMatchCandidate;
   } {
-    const allProducts = StorageService.getAllProducts();
+    const allProducts = products;
 
     // 1. Exact Barcode Match (GTIN / EAN)
     if (params.barcode && params.barcode.trim()) {
