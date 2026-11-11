@@ -171,6 +171,11 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   const [productsPage, setProductsPage] = useState<number>(1);
   const [productsSearch, setProductsSearch] = useState<string>('');
   const [productsCategory, setProductsCategory] = useState<string>('toate');
+  const [productsRetailer, setProductsRetailer] = useState<string>('toate');
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const [isDeletingProducts, setIsDeletingProducts] = useState<boolean>(false);
+  const [productToDelete, setProductToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState<boolean>(false);
   const [isLoadingProducts, setIsLoadingProducts] = useState<boolean>(false);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
 
@@ -321,7 +326,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     try {
       const limit = 15;
       const offset = (productsPage - 1) * limit;
-      const url = `/api/admin/products-detailed?limit=${limit}&offset=${offset}&search=${encodeURIComponent(productsSearch)}&category=${encodeURIComponent(productsCategory)}`;
+      const url = `/api/admin/products-detailed?limit=${limit}&offset=${offset}&search=${encodeURIComponent(productsSearch)}&category=${encodeURIComponent(productsCategory)}&retailer=${encodeURIComponent(productsRetailer)}`;
       const res = await fetchWithAuth(url);
       if (res.ok) {
         const json = await res.json();
@@ -331,7 +336,81 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     } catch {} finally {
       setIsLoadingProducts(false);
     }
-  }, [fetchWithAuth, productsPage, productsSearch, productsCategory]);
+  }, [fetchWithAuth, productsPage, productsSearch, productsCategory, productsRetailer]);
+
+  // Ștergere produs individual
+  const handleDeleteSingleProduct = async (productId: string, productName: string) => {
+    setIsDeletingProducts(true);
+    try {
+      const res = await fetchWithAuth(`/api/admin/products/${productId}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setActionMessage({
+          type: 'success',
+          text: `Produsul „${productName}” a fost delistat și șters cu succes.`
+        });
+        setSelectedProductIds(prev => {
+          const next = new Set(prev);
+          next.delete(productId);
+          return next;
+        });
+        setProductToDelete(null);
+        loadProducts();
+        loadDashboard();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setActionMessage({
+          type: 'error',
+          text: data.error || 'Eroare la ștergerea produsului.'
+        });
+      }
+    } catch (err: any) {
+      setActionMessage({
+        type: 'error',
+        text: err.message || 'Eroare de conexiune la ștergerea produsului.'
+      });
+    } finally {
+      setIsDeletingProducts(false);
+    }
+  };
+
+  // Ștergere în masă produse selectate
+  const handleBulkDeleteProducts = async () => {
+    const ids = Array.from(selectedProductIds);
+    if (ids.length === 0) return;
+    setIsDeletingProducts(true);
+    try {
+      const res = await fetchWithAuth('/api/admin/products/bulk-delete', {
+        method: 'POST',
+        body: JSON.stringify({ ids })
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setActionMessage({
+          type: 'success',
+          text: data.message || `Au fost delistate și șterse ${ids.length} produse.`
+        });
+        setSelectedProductIds(new Set());
+        setShowBulkDeleteConfirm(false);
+        loadProducts();
+        loadDashboard();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setActionMessage({
+          type: 'error',
+          text: data.error || 'Eroare la ștergerea în masă a produselor.'
+        });
+      }
+    } catch (err: any) {
+      setActionMessage({
+        type: 'error',
+        text: err.message || 'Eroare de conexiune la ștergerea produselor.'
+      });
+    } finally {
+      setIsDeletingProducts(false);
+    }
+  };
 
   // Load Audit Logs
   const loadAuditLogs = useCallback(async () => {
@@ -1472,32 +1551,95 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 onChange={e => {
                   setProductsSearch(e.target.value);
                   setProductsPage(1);
+                  setSelectedProductIds(new Set());
                 }}
                 className="w-full bg-transparent outline-none text-slate-800 placeholder:text-slate-400"
               />
+              {productsSearch && (
+                <button
+                  onClick={() => {
+                    setProductsSearch('');
+                    setProductsPage(1);
+                  }}
+                  className="text-slate-400 hover:text-slate-600 px-1 font-bold text-xs"
+                >
+                  ✕
+                </button>
+              )}
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-slate-400 text-[11px]">Categorie:</span>
-              <select
-                value={productsCategory}
-                onChange={e => {
-                  setProductsCategory(e.target.value);
-                  setProductsPage(1);
-                }}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none"
-              >
-                <option value="toate">Toate Categoriile</option>
-                <option value="Fructe și legume">Fructe și legume</option>
-                <option value="Lactate și ouă">Lactate și ouă</option>
-                <option value="Carne și pește">Carne și pește</option>
-                <option value="Panificație">Panificație</option>
-                <option value="Băuturi">Băuturi</option>
-                <option value="Produse de bază">Produse de bază</option>
-                <option value="Curățenie">Curățenie</option>
-              </select>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400 text-[11px]">Categorie:</span>
+                <select
+                  value={productsCategory}
+                  onChange={e => {
+                    setProductsCategory(e.target.value);
+                    setProductsPage(1);
+                    setSelectedProductIds(new Set());
+                  }}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value="toate">Toate Categoriile</option>
+                  <option value="Fructe și legume">Fructe și legume</option>
+                  <option value="Lactate și ouă">Lactate și ouă</option>
+                  <option value="Carne și pește">Carne și pește</option>
+                  <option value="Panificație">Panificație</option>
+                  <option value="Băuturi">Băuturi</option>
+                  <option value="Produse de bază">Produse de bază</option>
+                  <option value="Curățenie">Curățenie</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400 text-[11px]">Retailer:</span>
+                <select
+                  value={productsRetailer}
+                  onChange={e => {
+                    setProductsRetailer(e.target.value);
+                    setProductsPage(1);
+                    setSelectedProductIds(new Set());
+                  }}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value="toate">Toți Retailerii</option>
+                  {retailersList.map(r => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
+
+          {/* Bulk Selection Toolbar */}
+          {selectedProductIds.size > 0 && (
+            <div className="flex flex-col gap-3 rounded-2xl border border-rose-200 bg-rose-50/70 p-3 sm:flex-row sm:items-center sm:justify-between shadow-2xs">
+              <p className="text-xs font-semibold text-rose-900" aria-live="polite">
+                <strong>{selectedProductIds.size}</strong> produse selectate pentru delistare
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBulkDeleteConfirm(true)}
+                  disabled={isDeletingProducts}
+                  className="rounded-xl bg-rose-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-rose-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-2xs"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Șterge / Delistează selectatele ({selectedProductIds.size})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedProductIds(new Set())}
+                  disabled={isDeletingProducts}
+                  className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+                >
+                  Șterge selecția
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Products Table */}
           <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
@@ -1511,6 +1653,25 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 text-slate-600 border-b border-slate-100">
                     <tr>
+                      <th className="p-3 w-10">
+                        <input
+                          type="checkbox"
+                          aria-label="Selectează toate produsele de pe această pagină"
+                          checked={
+                            products.length > 0 &&
+                            products.every(p => selectedProductIds.has(p.id))
+                          }
+                          onChange={e => {
+                            const next = new Set(selectedProductIds);
+                            products.forEach(p => {
+                              if (e.target.checked) next.add(p.id);
+                              else next.delete(p.id);
+                            });
+                            setSelectedProductIds(next);
+                          }}
+                          className="cursor-pointer rounded accent-emerald-600"
+                        />
+                      </th>
                       <th className="p-3 font-bold">Produs & Brand</th>
                       <th className="p-3 font-bold">Categorie</th>
                       <th className="p-3 font-bold">Gramaj / Unitate</th>
@@ -1525,8 +1686,24 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                       <tr
                         key={p.id}
                         onClick={() => setSelectedProductId(p.id)}
-                        className="hover:bg-slate-50/70 cursor-pointer transition-colors"
+                        className={`hover:bg-slate-50/70 cursor-pointer transition-colors ${
+                          selectedProductIds.has(p.id) ? 'bg-emerald-50/40' : ''
+                        }`}
                       >
+                        <td className="p-3 w-10" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Selectează produsul ${p.name}`}
+                            checked={selectedProductIds.has(p.id)}
+                            onChange={e => {
+                              const next = new Set(selectedProductIds);
+                              if (e.target.checked) next.add(p.id);
+                              else next.delete(p.id);
+                              setSelectedProductIds(next);
+                            }}
+                            className="cursor-pointer rounded accent-emerald-600"
+                          />
+                        </td>
                         <td className="p-3">
                           <div className="font-extrabold text-slate-900">{p.name}</div>
                           <div className="text-[11px] text-slate-500">{p.brand}</div>
@@ -1550,16 +1727,23 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                             ? `${Number(p.baseReferencePrice).toFixed(2)} lei`
                             : '—'}
                         </td>
-                        <td className="p-3 text-center">
-                          <button
-                            onClick={e => {
-                              e.stopPropagation();
-                              setSelectedProductId(p.id);
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold text-[11px] cursor-pointer"
-                          >
-                            Detalii
-                          </button>
+                        <td className="p-3 text-center" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => setSelectedProductId(p.id)}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold text-[11px] cursor-pointer"
+                            >
+                              Detalii
+                            </button>
+                            <button
+                              onClick={() => setProductToDelete({ id: p.id, name: p.name })}
+                              className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/80 font-semibold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                              title={`Șterge / delistează produsul „${p.name}”`}
+                            >
+                              <Trash2 className="w-3 h-3 text-rose-600" />
+                              <span>Șterge</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -2168,6 +2352,82 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           setShowAddRetailerModal(false);
         }}
       />
+
+      {/* 7. Modal Confirmare Ștergere Produs Individual */}
+      {productToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4">
+            <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+              <Trash2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-lg font-extrabold text-slate-900">
+                Confirmare Delistare & Ștergere Produs
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed mt-1">
+                Ești sigur că vrei să ștergi și să delistezi produsul <strong className="text-slate-900">„{productToDelete.name}”</strong>? Vor fi eliminate ofertele active asociate din toate supermarketurile și istoricul de preț.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setProductToDelete(null)}
+                disabled={isDeletingProducts}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold cursor-pointer hover:bg-slate-50 disabled:opacity-50"
+              >
+                Anulează
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteSingleProduct(productToDelete.id, productToDelete.name)}
+                disabled={isDeletingProducts}
+                className="px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isDeletingProducts ? 'Se șterge...' : 'Șterge Produsul'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Modal Confirmare Ștergere în Masă Produse */}
+      {showBulkDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4">
+            <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-lg font-extrabold text-slate-900">
+                Delistare în Masă ({selectedProductIds.size} Produse)
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed mt-1">
+                Ești pe cale să ștergi definitiv <strong className="text-rose-700">{selectedProductIds.size} produse</strong> selectate din catalogul canonic. Toate ofertele corelate și istoricul acestora vor fi eliminate din baza de date.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowBulkDeleteConfirm(false)}
+                disabled={isDeletingProducts}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold cursor-pointer hover:bg-slate-50 disabled:opacity-50"
+              >
+                Anulează
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkDeleteProducts}
+                disabled={isDeletingProducts}
+                className="px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isDeletingProducts ? 'Se șterg...' : `Șterge ${selectedProductIds.size} Produse`}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

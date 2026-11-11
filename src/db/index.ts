@@ -2626,15 +2626,40 @@ export class DatabaseService {
   /**
    * Returnează produsele canonice cu detalii de agregare (paginare, căutare, categorii)
    */
+  /**
+   * Returnează produsele canonice cu detalii de agregare (paginare, căutare, categorii, retaileri)
+   */
   static async getProductsDetailed(params: {
     limit: number;
     offset: number;
     search?: string;
     category?: string;
+    retailer?: string;
   }): Promise<{ products: any[]; total: number }> {
     const pool = getPool();
     if (!pool) {
-      const all = await this.getProducts();
+      let all = await this.getProducts();
+      if (params.search && params.search.trim()) {
+        const q = params.search.toLowerCase().trim();
+        all = all.filter(p =>
+          (p.name && p.name.toLowerCase().includes(q)) ||
+          (p.brand && p.brand.toLowerCase().includes(q)) ||
+          (p.barcode && p.barcode.includes(q))
+        );
+      }
+      if (params.category && params.category !== 'toate') {
+        all = all.filter(p => p.category === params.category);
+      }
+      if (params.retailer && params.retailer !== 'toate') {
+        const cleanRet = params.retailer.trim().toLowerCase().replace(/^store-/, '');
+        const offers: ProductOffer[] = await this.getOffers();
+        const matchingIds = new Set(
+          offers
+            .filter((o: ProductOffer) => (o.storeId || '').toLowerCase().replace(/^store-/, '') === cleanRet)
+            .map((o: ProductOffer) => o.productId)
+        );
+        all = all.filter(p => matchingIds.has(p.id));
+      }
       return { products: all.slice(params.offset, params.offset + params.limit), total: all.length };
     }
 
@@ -2652,6 +2677,17 @@ export class DatabaseService {
       if (params.category && params.category !== 'toate') {
         conditions.push(`p.category = $${idx}`);
         values.push(params.category);
+        idx++;
+      }
+
+      if (params.retailer && params.retailer !== 'toate') {
+        const cleanRet = params.retailer.trim().toLowerCase().replace(/^store-/, '');
+        conditions.push(`EXISTS (
+          SELECT 1 FROM product_offers po_ret
+          WHERE (po_ret.product_id = p.id OR po_ret.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
+            AND (lower(po_ret.store_id) = $${idx} OR lower(po_ret.store_id) = ('store-' || $${idx}) OR replace(lower(po_ret.store_id), 'store-', '') = $${idx})
+        )`);
+        values.push(cleanRet);
         idx++;
       }
 
@@ -2710,6 +2746,66 @@ export class DatabaseService {
       console.error('Eroare getProductsDetailed:', err.message);
       return { products: [], total: 0 };
     }
+  }
+
+  /**
+   * Ștergere / delistare produse (individual sau în calup) cu ștergere în cascadă
+   */
+  static async deleteProducts(productIds: string[]): Promise<{ deletedCount: number }> {
+    if (!productIds || productIds.length === 0) return { deletedCount: 0 };
+
+    const pool = getPool();
+    if (pool) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        // Găsim toate ID-urile (inclusiv aliasuri canonice)
+        const allIdsRes = await client.query(
+          `SELECT id FROM products WHERE id = ANY($1) OR canonical_product_id = ANY($1)`,
+          [productIds]
+        );
+        const targetIds = Array.from(new Set([...productIds, ...allIdsRes.rows.map(r => r.id)]));
+
+        // Ștergere date corelate
+        await client.query(`DELETE FROM price_observations WHERE product_id = ANY($1)`, [targetIds]);
+        await client.query(`DELETE FROM product_offers WHERE product_id = ANY($1)`, [targetIds]);
+        await client.query(`DELETE FROM promotions WHERE product_id = ANY($1)`, [targetIds]);
+        await client.query(`DELETE FROM retailer_products WHERE product_id = ANY($1)`, [targetIds]);
+        await client.query(`DELETE FROM product_match_candidates WHERE target_product_id = ANY($1)`, [targetIds]);
+
+        // Ștergere aliasuri și apoi produse principale
+        await client.query(`DELETE FROM products WHERE canonical_product_id = ANY($1)`, [productIds]);
+        const delRes = await client.query(`DELETE FROM products WHERE id = ANY($1)`, [productIds]);
+
+        await client.query('COMMIT');
+        return { deletedCount: delRes.rowCount || productIds.length };
+      } catch (err: any) {
+        await client.query('ROLLBACK');
+        console.error('Eroare la ștergerea produselor din PostgreSQL:', err.message);
+      } finally {
+        client.release();
+      }
+    }
+
+    // Fallback Supabase
+    try {
+      await supabase.from('price_observations').delete().in('product_id', productIds);
+      await supabase.from('product_offers').delete().in('product_id', productIds);
+      await supabase.from('promotions').delete().in('product_id', productIds);
+      await supabase.from('products').delete().in('canonical_product_id', productIds);
+      const { data } = await supabase.from('products').delete().in('id', productIds).select('id');
+      return { deletedCount: data?.length || productIds.length };
+    } catch (err: any) {
+      console.warn('Eroare Supabase deleteProducts:', err.message);
+    }
+
+    return { deletedCount: productIds.length };
+  }
+
+  static async deleteProduct(productId: string): Promise<boolean> {
+    const res = await this.deleteProducts([productId]);
+    return res.deletedCount > 0;
   }
 
   /**

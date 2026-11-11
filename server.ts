@@ -702,7 +702,7 @@ app.get('/api/products/:id', async (req, res) => {
       comparison = PriceComparisonService.getProductComparisonDetails(
         id,
         dbDetail.product,
-        dbDetail.offers,
+        dbDetail.offers && dbDetail.offers.length > 0 ? dbDetail.offers : undefined,
         STORES
       );
       observations = dbDetail.priceHistory || [];
@@ -2801,15 +2801,44 @@ app.get('/api/admin/products-detailed', requireAdminAuth, async (req, res) => {
     const offset = parseInt(req.query.offset as string || '0', 10);
     const search = (req.query.search as string) || '';
     const category = (req.query.category as string) || 'toate';
+    const retailer = (req.query.retailer as string) || 'toate';
 
-    const result = await DatabaseService.getProductsDetailed({ limit, offset, search, category });
+    const result = await DatabaseService.getProductsDetailed({ limit, offset, search, category, retailer });
     res.json({ success: true, ...result });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la încărcarea produselor pentru administrare.' });
   }
 });
 
-// 13.2 Detaliu produs canonic specific
+// 13.2 Ștergere / Delistare produs individual
+app.delete('/api/admin/products/:id', requireAdminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: 'ID-ul produsului este obligatoriu.' });
+    StorageService.deleteProduct(id);
+    const success = await DatabaseService.deleteProduct(id);
+    res.json({ success, message: 'Produsul a fost delistat și șters cu succes din catalog.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la ștergerea produsului.' });
+  }
+});
+
+// 13.3 Ștergere / Delistare produse în masă (Bulk Delete)
+app.post('/api/admin/products/bulk-delete', requireAdminAuth, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Lista de ID-uri de produse este obligatorie.' });
+    }
+    StorageService.deleteProducts(ids);
+    const result = await DatabaseService.deleteProducts(ids);
+    res.json({ success: true, count: result.deletedCount, message: `Au fost delistate și șterse ${result.deletedCount} produse din catalog.` });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la ștergerea în masă a produselor.' });
+  }
+});
+
+// 13.4 Detaliu produs canonic specific
 app.get('/api/admin/products-detailed/:id', requireAdminAuth, async (req, res) => {
   try {
     const data = await DatabaseService.getProductDetailById(req.params.id);

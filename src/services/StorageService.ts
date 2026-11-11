@@ -70,7 +70,8 @@ const KEYS = {
   CATALOG_DOCUMENTS: 'cosul_meu_catalog_documents_v1',
   CATALOG_IMPORT_RUNS: 'cosul_meu_catalog_import_runs_v1',
   CATALOG_EXTRACTED_OFFERS: 'cosul_meu_catalog_extracted_offers_v1',
-  CATALOG_IMPORT_ERRORS: 'cosul_meu_catalog_import_errors_v1'
+  CATALOG_IMPORT_ERRORS: 'cosul_meu_catalog_import_errors_v1',
+  DELETED_PRODUCT_IDS: 'cosul_meu_deleted_product_ids_v1'
 };
 
 
@@ -317,9 +318,52 @@ export class StorageService {
     safeSetItem(KEYS.CUSTOM_PRODUCTS, JSON.stringify([...list, product]));
   }
 
-  static getAllProducts(): Product[] {
+  static getDeletedProductIds(): string[] {
+    try {
+      const data = safeGetItem(KEYS.DELETED_PRODUCT_IDS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static deleteProducts(ids: string[]): { deletedCount: number } {
+    if (!ids || ids.length === 0) return { deletedCount: 0 };
+    const idSet = new Set(ids);
+    const deletedList = this.getDeletedProductIds();
+    const updatedDeletedList = Array.from(new Set([...deletedList, ...ids]));
+    safeSetItem(KEYS.DELETED_PRODUCT_IDS, JSON.stringify(updatedDeletedList));
+
     const custom = this.getCustomProducts();
-    return [...PRODUCTS, ...custom];
+    const updatedCustom = custom.filter(p => !idSet.has(p.id));
+    safeSetItem(KEYS.CUSTOM_PRODUCTS, JSON.stringify(updatedCustom));
+
+    // Also remove from tracked products
+    const tracked = this.getTrackedProducts();
+    const updatedTracked = tracked.filter((id: string) => !idSet.has(id));
+    safeSetItem(KEYS.TRACKED_PRODUCTS, JSON.stringify(updatedTracked));
+
+    // Also remove offers associated with deleted products
+    const offers = this.getProductOffers();
+    const updatedOffers = offers.filter(o => !idSet.has(o.productId));
+    this.saveProductOffers(updatedOffers);
+
+    // Also remove observations associated with deleted products
+    const observations = this.getPriceObservations();
+    const updatedObs = observations.filter(o => !idSet.has(o.productId));
+    safeSetItem(KEYS.PRICE_OBSERVATIONS, JSON.stringify(updatedObs));
+
+    return { deletedCount: ids.length };
+  }
+
+  static deleteProduct(id: string): boolean {
+    return this.deleteProducts([id]).deletedCount > 0;
+  }
+
+  static getAllProducts(): Product[] {
+    const deleted = new Set(this.getDeletedProductIds());
+    const custom = this.getCustomProducts();
+    return [...PRODUCTS, ...custom].filter(p => !deleted.has(p.id));
   }
 
   static getProducts(): Product[] {

@@ -434,9 +434,13 @@ export class CatalogStagingManager {
     errors: string[];
     perRetailerResults?: Record<string, { published: number; errors: string[] }>;
   }> {
-    const allStaged = isPostgresConfigured()
-      ? await DatabaseService.getCatalogExtractedOffers()
-      : StorageService.getCatalogExtractedOffers();
+    const memStaged = StorageService.getCatalogExtractedOffers();
+    const dbStaged = isPostgresConfigured() ? await DatabaseService.getCatalogExtractedOffers() : [];
+    const stagedMap = new Map<string, CatalogExtractedOffer>();
+    memStaged.forEach(o => stagedMap.set(o.id, o));
+    dbStaged.forEach(o => stagedMap.set(o.id, o));
+    const allStaged = Array.from(stagedMap.values());
+
     const toPublish = offerIds
       ? allStaged.filter(o => offerIds.includes(o.id) && o.stagingStatus === 'VALIDATED')
       : allStaged.filter(o => o.stagingStatus === 'VALIDATED');
@@ -450,13 +454,20 @@ export class CatalogStagingManager {
     const newObservations: PriceObservation[] = [];
     const errors: string[] = [];
 
-  const existingOffers = isPostgresConfigured()
-  ? await DatabaseService.getOffers()
-  : StorageService.getProductOffers();
-  const productsForMatching = isPostgresConfigured()
-  ? await DatabaseService.getProducts()
-  : StorageService.getAllProducts();
-  const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
+    const memOffers = StorageService.getProductOffers();
+    const dbOffers = isPostgresConfigured() ? await DatabaseService.getOffers() : [];
+    const offerMap = new Map<string, ProductOffer>();
+    memOffers.forEach(o => offerMap.set(o.id, o));
+    dbOffers.forEach(o => offerMap.set(o.id, o));
+    const existingOffers = Array.from(offerMap.values());
+
+    const memProducts = StorageService.getAllProducts();
+    const dbProducts = isPostgresConfigured() ? await DatabaseService.getProducts() : [];
+    const prodMap = new Map<string, Product>();
+    memProducts.forEach(p => prodMap.set(p.id, p));
+    dbProducts.forEach(p => prodMap.set(p.id, p));
+    const productsForMatching = Array.from(prodMap.values());
+    const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
 
   for (const item of toPublish) {
   const persistedMatch = productsForMatching.find(product => product.id === item.matchedProductId);

@@ -188,6 +188,18 @@ Paine Toast Integrala 500g,Dobrogea,5942012345678,5.20,2026-12-31`;
   };
 
   StorageService.addCatalogDocument(mockDoc);
+  StorageService.addCustomProduct({
+    id: 'prod-lapte-15',
+    name: 'Lapte proaspăt 1.5% 1L',
+    brand: 'Napolact',
+    category: 'Lactate și ouă',
+    defaultUnit: 'l',
+    packageWeightOrVolume: 1,
+    packageUnit: 'l',
+    normalizedUnit: 'l',
+    barcode: '5941014001018',
+    baseReferencePrice: 5.50
+  });
 
   // Oferte extrase în staging: una validată (asociată cu un produs existent) și una în review
   const testExtractedOffers = [
