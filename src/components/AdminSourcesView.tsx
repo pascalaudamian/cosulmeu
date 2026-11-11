@@ -192,7 +192,17 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       'Authorization': `Bearer ${adminToken}`,
       'Content-Type': 'application/json'
     };
-    return fetch(url, { ...options, headers });
+    const response = await fetch(url, { ...options, headers });
+    if (response.status === 401 || response.status === 403) {
+      try {
+        sessionStorage.removeItem('cosul_meu_admin_token');
+        sessionStorage.removeItem('cosul_meu_admin_auth');
+      } catch {}
+      setAdminToken('');
+      setIsAuthenticated(false);
+      setAuthError('Sesiunea administrativă a expirat sau tokenul nu mai este valid. Introdu tokenul administrativ actual.');
+    }
+    return response;
   }, [adminToken]);
 
   // Load Operational Dashboard data (real-time from PostgreSQL)
