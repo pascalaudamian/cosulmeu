@@ -2415,13 +2415,160 @@ app.patch('/api/admin/catalog-importer/sources/:id/status', requireAdminAuth, as
   }
 });
 
-// 5. Documente descoperite
-app.get('/api/admin/catalog-importer/documents', requireAdminAuth, (req, res) => {
+// 5. Documente descoperite & descărcate cu paginare și filtrare PostgreSQL
+app.get('/api/admin/catalog-importer/documents', requireAdminAuth, async (req, res) => {
   try {
-    const docs = StorageService.getCatalogDocuments();
-    res.json({ success: true, documents: docs, count: docs.length });
+    const page = parseInt((req.query.page as string) || '1', 10);
+    const limit = parseInt((req.query.limit as string) || '50', 10);
+    const offset = (page - 1) * limit;
+    const retailerId = req.query.retailerId as string;
+    const downloadStatus = req.query.downloadStatus as string;
+    const parseStatus = req.query.parseStatus as string;
+    const search = req.query.search as string;
+
+    const result = await DatabaseService.getCatalogDocumentsDetailed({
+      limit,
+      offset,
+      retailerId,
+      downloadStatus,
+      parseStatus,
+      search
+    });
+
+    res.json({
+      success: true,
+      documents: result.documents,
+      total: result.total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(result.total / limit)),
+      count: result.documents.length
+    });
   } catch (err: any) {
+    console.error('Eroare GET /api/admin/catalog-importer/documents:', err.message);
     res.status(500).json({ error: 'Eroare la obținerea documentelor de catalog.' });
+  }
+});
+
+// 5.1. Detaliu document specific
+app.get('/api/admin/catalog-importer/documents/:id', requireAdminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const pool = getPool();
+    if (pool) {
+      const docRes = await pool.query(
+        `SELECT d.*, s.name AS retailer_name, cs.name AS source_name, cs.catalog_url AS source_url
+         FROM catalog_documents d
+         LEFT JOIN stores s ON s.id = d.retailer_id
+         LEFT JOIN catalog_sources cs ON cs.id = d.source_id
+         WHERE d.id = $1`,
+        [id]
+      );
+      if (docRes.rows.length > 0) {
+        const d = docRes.rows[0];
+        return res.json({
+          success: true,
+          document: {
+            id: d.id,
+            sourceId: d.source_id,
+            sourceName: d.source_name,
+            sourceUrl: d.source_url,
+            retailerId: d.retailer_id,
+            retailerName: d.retailer_name || d.retailer_id,
+            documentUrl: d.document_url,
+            title: d.title,
+            format: d.format,
+            validFrom: d.valid_from ? String(d.valid_from).slice(0, 10) : undefined,
+            validUntil: d.valid_until ? String(d.valid_until).slice(0, 10) : undefined,
+            fileSizeBytes: d.file_size_bytes ? parseInt(d.file_size_bytes, 10) : undefined,
+            checksum: d.checksum || d.sha256_checksum,
+            downloadStatus: d.download_status,
+            downloadPath: d.download_path,
+            downloadDurationMs: d.download_duration_ms,
+            parseStatus: d.parse_status,
+            rawExtractedCount: parseInt(d.raw_extracted_count || '0', 10),
+            matchedCount: parseInt(d.matched_count || '0', 10),
+            validatedCount: parseInt(d.validated_count || '0', 10),
+            publishedCount: parseInt(d.published_count || '0', 10),
+            ocrConfidence: d.ocr_confidence ? parseFloat(d.ocr_confidence) : undefined,
+            errorMessage: d.error_message,
+            createdAt: d.created_at ? new Date(d.created_at).toISOString() : new Date().toISOString(),
+            updatedAt: d.updated_at ? new Date(d.updated_at).toISOString() : new Date().toISOString()
+          }
+        });
+      }
+    }
+
+    const doc = StorageService.getCatalogDocuments().find(d => d.id === id);
+    if (!doc) return res.status(404).json({ error: 'Documentul nu a fost găsit.' });
+    res.json({ success: true, document: doc });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la preluarea documentului.' });
+  }
+});
+
+// 5.2. Ofertele extrase din acest document specific (Traseu Verificabil Document -> Extracție)
+app.get('/api/admin/catalog-importer/documents/:id/extracted-offers', requireAdminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const page = parseInt((req.query.page as string) || '1', 10);
+    const limit = parseInt((req.query.limit as string) || '50', 10);
+
+    const result = await DatabaseService.getStagingOffersPaginated({
+      page,
+      limit,
+      documentId: id
+    });
+
+    res.json({
+      success: true,
+      documentId: id,
+      ...result
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea ofertelor extrase din document.' });
+  }
+});
+
+// 5.3. Reprocesare sigură document catalog
+app.post('/api/admin/catalog-importer/documents/:id/reprocess', requireAdminAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const allDocs = getPool()
+      ? (await DatabaseService.getCatalogDocumentsDetailed({ limit: 100 })).documents
+      : StorageService.getCatalogDocuments();
+    const doc = allDocs.find(d => d.id === id);
+
+    if (!doc) {
+      return res.status(404).json({ error: 'Documentul nu a fost găsit pentru reprocesare.' });
+    }
+
+    const result = await CatalogStagingManager.executeImportForDocument(doc, {
+      autoPublishValidated: false
+    });
+
+    await DatabaseService.logAdminActivity({
+      userEmail: (req.body?.userEmail as string) || 'admin@cosulmeu.ro',
+      action: 'reprocess_document',
+      targetType: 'catalog_document',
+      targetId: id,
+      details: {
+        documentTitle: doc.title,
+        retailerId: doc.retailerId,
+        totalRawExtracted: result.run.totalRawExtracted,
+        autoMatchedCount: result.run.autoMatchedCount
+      },
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+    });
+
+    res.json({
+      success: result.run.status !== 'failed',
+      run: result.run,
+      extractedCount: result.offers.length,
+      message: `Documentul „${doc.title}” a fost reprocesat cu succes: ${result.run.totalRawExtracted} oferte extrase.`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Eroare la reprocesarea documentului: ${err.message}` });
   }
 });
 
@@ -2567,45 +2714,125 @@ app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, a
   }
 });
 
-// 9. Coadă de Staging & Validare
+// 9. Coadă de Staging & Validare cu Paginare Reală PostgreSQL
 app.get('/api/admin/catalog-importer/staging', requireAdminAuth, async (req, res) => {
   try {
-  const { status, retailerId, search } = req.query;
-  const pool = getPool();
-  const allOffers = pool
-    ? await DatabaseService.getCatalogExtractedOffers()
-    : StorageService.getCatalogExtractedOffers();
-  let offers = allOffers;
+    const page = parseInt((req.query.page as string) || '1', 10);
+    const limit = parseInt((req.query.limit as string) || '50', 10);
+    const status = (req.query.status as string) || 'toate';
+    const retailerId = (req.query.retailerId as string) || 'toate';
+    const documentId = (req.query.documentId as string) || 'toate';
+    const search = (req.query.search as string) || '';
+    const filterType = (req.query.filterType as string) || '';
 
-    if (status && typeof status === 'string' && status !== 'toate') {
-      offers = offers.filter(o => o.stagingStatus === status);
-    }
-    if (retailerId && typeof retailerId === 'string' && retailerId !== 'toate') {
-      offers = offers.filter(o => o.retailerId === retailerId);
-    }
-    if (search && typeof search === 'string') {
-      const q = search.toLowerCase();
-      offers = offers.filter(o =>
-        o.rawTitle.toLowerCase().includes(q) ||
-        (o.rawBrand && o.rawBrand.toLowerCase().includes(q)) ||
-        (o.matchedProductName && o.matchedProductName.toLowerCase().includes(q))
-      );
-    }
-
-    const statusCounts = allOffers.reduce<Record<string, number>>((counts, offer) => {
-      const normalizedStatus = String(offer.stagingStatus || 'NEEDS_REVIEW').toUpperCase();
-      counts[normalizedStatus] = (counts[normalizedStatus] || 0) + 1;
-      return counts;
-    }, {});
+    const result = await DatabaseService.getStagingOffersPaginated({
+      page,
+      limit,
+      status,
+      retailerId,
+      documentId,
+      search,
+      filterType
+    });
 
     res.json({
       success: true,
-      count: offers.length,
-      statusCounts,
-      offers: offers.slice(0, 200)
+      count: result.total,
+      ...result
     });
   } catch (err: any) {
+    console.error('Eroare GET /api/admin/catalog-importer/staging:', err.message);
     res.status(500).json({ error: 'Eroare la obținerea cozii de staging.' });
+  }
+});
+
+// 9.1. Aprobare sau respingere în masă a ofertelor din Staging (Bulk Review)
+app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, async (req, res) => {
+  try {
+    const { offerIds, action, rejectionReason } = req.body;
+    if (!Array.isArray(offerIds) || offerIds.length === 0) {
+      return res.status(400).json({ error: 'Selectați cel puțin o ofertă pentru procesare.' });
+    }
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'Acțiunea trebuie să fie "approve" sau "reject".' });
+    }
+
+    const result = await DatabaseService.bulkReviewStagingOffers({
+      offerIds,
+      action,
+      rejectionReason,
+      userEmail: (req.body?.userEmail as string) || 'admin@cosulmeu.ro',
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+    });
+
+    res.json({
+      success: true,
+      updatedCount: result.count,
+      message: result.message
+    });
+  } catch (err: any) {
+    console.error('Eroare bulk-review staging:', err.message);
+    res.status(500).json({ error: err.message || 'Eroare la procesarea în lot a ofertelor.' });
+  }
+});
+
+// 9.2. Drill-down: Oferte Aprobate (Cele 437 de oferte din Staging)
+app.get('/api/admin/catalog-importer/approved-offers', requireAdminAuth, async (req, res) => {
+  try {
+    const page = parseInt((req.query.page as string) || '1', 10);
+    const limit = parseInt((req.query.limit as string) || '50', 10);
+    const retailerId = req.query.retailerId as string;
+    const search = req.query.search as string;
+
+    const result = await DatabaseService.getApprovedOffersDetailed({ page, limit, retailerId, search });
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea ofertelor aprobate.' });
+  }
+});
+
+// 9.3. Drill-down: Oferte Publicate (Cele 1.643 de oferte din product_offers)
+app.get('/api/admin/catalog-importer/public-offers', requireAdminAuth, async (req, res) => {
+  try {
+    const page = parseInt((req.query.page as string) || '1', 10);
+    const limit = parseInt((req.query.limit as string) || '50', 10);
+    const retailerId = req.query.retailerId as string;
+    const search = req.query.search as string;
+
+    const result = await DatabaseService.getPublicOffersDetailed({ page, limit, retailerId, search });
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea ofertelor publicate.' });
+  }
+});
+
+// 9.4. Drill-down: Prețuri Modificate (Din tabela append-only price_observations)
+app.get('/api/admin/catalog-importer/price-changes', requireAdminAuth, async (req, res) => {
+  try {
+    const page = parseInt((req.query.page as string) || '1', 10);
+    const limit = parseInt((req.query.limit as string) || '50', 10);
+    const retailerId = req.query.retailerId as string;
+    const search = req.query.search as string;
+
+    const result = await DatabaseService.getPriceChangesDetailed({ page, limit, retailerId, search });
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea istoricului modificărilor de preț.' });
+  }
+});
+
+// 9.5. Drill-down: Produse Fără Preț cu Explicația Cauzei
+app.get('/api/admin/catalog-importer/items-without-price', requireAdminAuth, async (req, res) => {
+  try {
+    const page = parseInt((req.query.page as string) || '1', 10);
+    const limit = parseInt((req.query.limit as string) || '50', 10);
+    const retailerId = req.query.retailerId as string;
+    const search = req.query.search as string;
+
+    const result = await DatabaseService.getItemsWithoutPriceDetailed({ page, limit, retailerId, search });
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la obținerea produselor fără preț.' });
   }
 });
 
@@ -2688,92 +2915,6 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, asy
   }
 });
 
-// 10b. Aprobare sau respingere în masă
-  app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, async (req, res) => {
-  try {
-    const { offerIds, action } = req.body;
-    if (!Array.isArray(offerIds) || !['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ error: 'Date invalide pentru revizuire în masă.' });
-    }
-
-    const allStaged = StorageService.getCatalogExtractedOffers();
-    let updatedCount = 0;
-
-    for (const id of offerIds) {
-      const targetOffer = allStaged.find(o => o.id === id);
-      if (!targetOffer) continue;
-
-      if (action === 'approve') {
-        let pId = targetOffer.matchedProductId;
-        let pName = targetOffer.matchedProductName;
-        if (!pId) {
-          const { category, subcategory } = mapRetailerCategoryToStandard(targetOffer.rawTitle);
-          const normUnit = ['kg', 'g'].includes(targetOffer.packageUnit || '')
-            ? 'kg'
-            : ['l', 'ml'].includes(targetOffer.packageUnit || '')
-            ? 'l'
-            : 'buc';
-          const newProd: any = {
-            id: `prod-cat-${targetOffer.retailerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            name: targetOffer.rawTitle,
-            brand: targetOffer.rawBrand || 'Marcă Magazin',
-            category,
-            subcategory,
-            defaultUnit: targetOffer.packageUnit || 'buc',
-            packageWeightOrVolume: targetOffer.packageQuantity || 1,
-            packageUnit: targetOffer.packageUnit || 'buc',
-            normalizedUnit: normUnit,
-            barcode: targetOffer.rawBarcode || undefined,
-            baseReferencePrice: targetOffer.normalPrice || targetOffer.effectivePrice,
-            isRomanianProduct: true
-          };
-          StorageService.addCustomProduct(newProd);
-          pId = newProd.id;
-          pName = newProd.name;
-        }
-
-        const reviewUpdates = {
-          stagingStatus: 'VALIDATED',
-          matchedProductId: pId,
-          matchedProductName: pName,
-          matchMethod: 'manual',
-          matchConfidence: 1.0,
-          reviewedBy: 'admin',
-          reviewedAt: new Date().toISOString()
-        };
-        StorageService.updateCatalogExtractedOffer(id, reviewUpdates as any);
-        await persistCatalogOfferReview(id, reviewUpdates);
-        updatedCount++;
-      } else {
-        const rejectionUpdates = {
-          stagingStatus: 'REJECTED',
-          reviewedBy: 'admin',
-          reviewedAt: new Date().toISOString()
-        };
-        StorageService.updateCatalogExtractedOffer(id, rejectionUpdates as any);
-        await persistCatalogOfferReview(id, rejectionUpdates);
-        updatedCount++;
-      }
-    }
-
-    await DatabaseService.logAdminActivity({
-      userEmail: (req.body?.userEmail as string) || 'admin@cosulmeu.ro',
-      action: action === 'approve' ? 'approve_staging_offers' : 'reject_staging_offers',
-      targetType: 'staging_offers',
-      targetId: Array.isArray(offerIds) ? offerIds.slice(0, 5).join(',') : undefined,
-      details: { count: updatedCount, action, totalRequested: offerIds?.length },
-      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
-    });
-
-    res.json({
-      success: true,
-      updatedCount,
-      message: `${updatedCount} oferte au fost ${action === 'approve' ? 'validate' : 'respinse'} cu succes.`
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: `Eroare la revizuirea în masă: ${err.message}` });
-  }
-});
 
 // 11. Publicare oferte validate în catalogul public
 app.post('/api/admin/catalog-importer/publish-validated', requireAdminAuth, async (req, res) => {

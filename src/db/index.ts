@@ -3051,6 +3051,900 @@ export class DatabaseService {
       return null;
     }
   }
+  /**
+   * Returnează documentele descărcate cu paginare, căutare și filtrare reală PostgreSQL
+   */
+  static async getCatalogDocumentsDetailed(params: {
+    limit?: number;
+    offset?: number;
+    retailerId?: string;
+    downloadStatus?: string;
+    parseStatus?: string;
+    search?: string;
+  }): Promise<{ documents: any[]; total: number }> {
+    const limit = Math.max(1, Math.min(params.limit || 50, 100));
+    const offset = Math.max(0, params.offset || 0);
+    const pool = getPool();
+
+    if (!pool) {
+      try {
+        let query = supabase.from('catalog_documents').select('*', { count: 'exact' });
+        if (params.retailerId && params.retailerId !== 'toate') query = query.eq('retailer_id', params.retailerId);
+        if (params.downloadStatus && params.downloadStatus !== 'toate') query = query.eq('download_status', params.downloadStatus);
+        if (params.parseStatus && params.parseStatus !== 'toate') query = query.eq('parse_status', params.parseStatus);
+        if (params.search && params.search.trim()) query = query.ilike('title', `%${params.search.trim()}%`);
+        const { data, count, error } = await query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+        if (!error && data) {
+          return { documents: data, total: count || data.length };
+        }
+      } catch {}
+      return { documents: [], total: 0 };
+    }
+
+    try {
+      const conditions: string[] = ['1=1'];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (params.retailerId && params.retailerId !== 'toate') {
+        conditions.push(`d.retailer_id = $${idx}`);
+        values.push(params.retailerId);
+        idx++;
+      }
+      if (params.downloadStatus && params.downloadStatus !== 'toate') {
+        conditions.push(`d.download_status = $${idx}`);
+        values.push(params.downloadStatus);
+        idx++;
+      }
+      if (params.parseStatus && params.parseStatus !== 'toate') {
+        conditions.push(`d.parse_status = $${idx}`);
+        values.push(params.parseStatus);
+        idx++;
+      }
+      if (params.search && params.search.trim()) {
+        conditions.push(`(d.title ILIKE $${idx} OR d.id ILIKE $${idx} OR d.retailer_id ILIKE $${idx} OR d.document_url ILIKE $${idx})`);
+        values.push(`%${params.search.trim()}%`);
+        idx++;
+      }
+
+      const whereClause = conditions.join(' AND ');
+      const countRes = await pool.query(`SELECT count(*) FROM catalog_documents d WHERE ${whereClause}`, values);
+      const total = parseInt(countRes.rows[0]?.count || '0', 10);
+
+      const queryValues = [...values, limit, offset];
+      const dataRes = await pool.query(
+        `SELECT 
+           d.id,
+           d.source_id AS "sourceId",
+           d.retailer_id AS "retailerId",
+           COALESCE(s.name, d.retailer_id) AS "retailerName",
+           COALESCE(cs.name, d.source_id) AS "sourceName",
+           d.document_url AS "documentUrl",
+           d.title,
+           d.format,
+           d.valid_from AS "validFrom",
+           d.valid_until AS "validUntil",
+           d.file_size_bytes AS "fileSizeBytes",
+           COALESCE(d.checksum, (d as any).sha256_checksum) AS "checksum",
+           d.download_status AS "downloadStatus",
+           d.download_path AS "downloadPath",
+           d.download_duration_ms AS "downloadDurationMs",
+           d.parse_status AS "parseStatus",
+           d.raw_extracted_count AS "rawExtractedCount",
+           d.matched_count AS "matchedCount",
+           d.validated_count AS "validatedCount",
+           d.published_count AS "publishedCount",
+           d.ocr_confidence AS "ocrConfidence",
+           d.error_message AS "errorMessage",
+           d.created_at AS "createdAt",
+           d.updated_at AS "updatedAt"
+         FROM catalog_documents d
+         LEFT JOIN stores s ON s.id = d.retailer_id
+         LEFT JOIN catalog_sources cs ON cs.id = d.source_id
+         WHERE ${whereClause}
+         ORDER BY d.created_at DESC
+         LIMIT $${idx} OFFSET $${idx + 1}`,
+        queryValues
+      );
+
+      const documents = dataRes.rows.map(r => ({
+        id: r.id,
+        sourceId: r.sourceId,
+        retailerId: r.retailerId,
+        retailerName: r.retailerName,
+        sourceName: r.sourceName,
+        documentUrl: r.documentUrl,
+        title: r.title,
+        format: r.format,
+        validFrom: r.validFrom ? String(r.validFrom).slice(0, 10) : undefined,
+        validUntil: r.validUntil ? String(r.validUntil).slice(0, 10) : undefined,
+        fileSizeBytes: r.fileSizeBytes ? parseInt(r.fileSizeBytes, 10) : undefined,
+        checksum: r.checksum || undefined,
+        downloadStatus: r.downloadStatus || 'downloaded',
+        downloadPath: r.downloadPath || undefined,
+        downloadDurationMs: r.downloadDurationMs || undefined,
+        parseStatus: r.parseStatus || 'parsed',
+        rawExtractedCount: parseInt(r.rawExtractedCount || '0', 10),
+        matchedCount: parseInt(r.matchedCount || '0', 10),
+        validatedCount: parseInt(r.validatedCount || '0', 10),
+        publishedCount: parseInt(r.publishedCount || '0', 10),
+        ocrConfidence: r.ocrConfidence ? parseFloat(r.ocrConfidence) : undefined,
+        errorMessage: r.errorMessage || undefined,
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString(),
+        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : new Date().toISOString()
+      }));
+
+      return { documents, total };
+    } catch (err: any) {
+      console.error('Eroare getCatalogDocumentsDetailed:', err.message);
+      return { documents: [], total: 0 };
+    }
+  }
+
+  /**
+   * Paginare reală, filtrare și numărare statusuri pentru Coada de Staging din PostgreSQL
+   */
+  static async getStagingOffersPaginated(params: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    retailerId?: string;
+    search?: string;
+    filterType?: string;
+    documentId?: string;
+  }): Promise<{
+    offers: CatalogExtractedOffer[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+    statusCounts: Record<string, number>;
+  }> {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.max(1, Math.min(params.limit || 50, 100));
+    const offset = (page - 1) * limit;
+    const pool = getPool();
+
+    // Mapare sigură rând din PostgreSQL în CatalogExtractedOffer
+    const mapStagingRow = (r: any): CatalogExtractedOffer => {
+      const toIso = (v: unknown) => v ? new Date(v as string | number | Date).toISOString() : undefined;
+      return {
+        id: String(r.id),
+        runId: r.run_id || undefined,
+        documentId: r.document_id || undefined,
+        retailerId: r.retailer_id,
+        rawTitle: r.raw_title || 'Produs fără denumire',
+        rawBrand: r.raw_brand || undefined,
+        rawBarcode: r.raw_barcode || undefined,
+        rawCategory: r.raw_category || undefined,
+        normalPrice: parseFloat(r.normal_price) || 0,
+        promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+        loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
+        effectivePrice: parseFloat(r.effective_price) || 0,
+        currency: r.currency || 'RON',
+        packageQuantity: r.package_quantity ? parseFloat(r.package_quantity) : undefined,
+        packageUnit: r.package_unit || undefined,
+        unitPrice: r.unit_price ? parseFloat(r.unit_price) : undefined,
+        unitPriceMeasure: r.unit_price_measure || undefined,
+        isPromo: Boolean(r.is_promo),
+        promoDetails: r.promo_details || undefined,
+        loyaltyCardRequired: Boolean(r.loyalty_card_required),
+        loyaltyCardName: r.loyalty_card_name || undefined,
+        validFrom: toIso(r.valid_from)?.split('T')[0],
+        validUntil: toIso(r.valid_until)?.split('T')[0],
+        matchedProductId: r.matched_product_id || undefined,
+        matchedProductName: r.matched_product_name || r.canonical_name || undefined,
+        matchConfidence: parseFloat(r.match_confidence || '0'),
+        matchMethod: r.match_method || 'unmatched',
+        stagingStatus: String(r.staging_status || 'NEEDS_REVIEW').toUpperCase() as any,
+        validationErrors: Array.isArray(r.validation_errors)
+          ? r.validation_errors
+          : (typeof r.validation_errors === 'string'
+              ? (r.validation_errors.startsWith('[') ? JSON.parse(r.validation_errors) : [r.validation_errors])
+              : undefined),
+        reviewedBy: r.reviewed_by || undefined,
+        reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : undefined,
+        rejectionReason: r.rejection_reason || undefined,
+        createdAt: toIso(r.created_at) || new Date(0).toISOString(),
+        updatedAt: toIso(r.updated_at) || toIso(r.created_at) || new Date(0).toISOString()
+      };
+    };
+
+    if (!pool) {
+      try {
+        let query = supabase.from('catalog_extracted_offers').select('*', { count: 'exact' });
+        if (params.status && params.status !== 'toate') {
+          const targetStatus = params.status.toUpperCase();
+          if (targetStatus === 'NEEDS_REVIEW' || targetStatus === 'ALL_PENDING') {
+            query = query.in('staging_status', ['NEEDS_REVIEW', 'DISCOVERED', 'PARSED', 'needs_review']);
+          } else {
+            query = query.eq('staging_status', targetStatus);
+          }
+        }
+        if (params.retailerId && params.retailerId !== 'toate') query = query.eq('retailer_id', params.retailerId);
+        if (params.documentId && params.documentId !== 'toate') query = query.eq('document_id', params.documentId);
+        if (params.search && params.search.trim()) query = query.ilike('raw_title', `%${params.search.trim()}%`);
+        const { data, count, error } = await query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+        if (!error && data) {
+          const offers = data.map(mapStagingRow);
+          return {
+            offers,
+            total: count || offers.length,
+            page,
+            limit,
+            totalPages: Math.max(1, Math.ceil((count || offers.length) / limit)),
+            statusCounts: {
+              NEEDS_REVIEW: count || offers.length,
+              VALIDATED: 0,
+              APPROVED: 0,
+              PUBLISHED: 0,
+              REJECTED: 0,
+              NO_PRICE: 0,
+              ALL: count || offers.length
+            }
+          };
+        }
+      } catch {}
+
+      return {
+        offers: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 1,
+        statusCounts: {
+          NEEDS_REVIEW: 0,
+          VALIDATED: 0,
+          APPROVED: 0,
+          PUBLISHED: 0,
+          REJECTED: 0,
+          NO_PRICE: 0,
+          ALL: 0
+        }
+      };
+    }
+
+    try {
+      // 1. Obținere status counts într-o singură interogare agregată rapidă
+      const countsQuery = await pool.query(`
+        SELECT 
+          count(*) AS total,
+          count(*) FILTER (WHERE UPPER(COALESCE(staging_status, 'NEEDS_REVIEW')) IN ('NEEDS_REVIEW', 'DISCOVERED', 'PARSED')) AS needs_review_count,
+          count(*) FILTER (WHERE UPPER(staging_status) = 'VALIDATED') AS validated_count,
+          count(*) FILTER (WHERE UPPER(staging_status) = 'APPROVED') AS approved_count,
+          count(*) FILTER (WHERE UPPER(staging_status) = 'PUBLISHED') AS published_count,
+          count(*) FILTER (WHERE UPPER(staging_status) = 'REJECTED') AS rejected_count,
+          count(*) FILTER (WHERE effective_price IS NULL OR effective_price <= 0) AS no_price_count
+        FROM catalog_extracted_offers
+      `);
+      const rowCounts = countsQuery.rows[0] || {};
+      const statusCounts: Record<string, number> = {
+        NEEDS_REVIEW: parseInt(rowCounts.needs_review_count || '0', 10),
+        VALIDATED: parseInt(rowCounts.validated_count || '0', 10),
+        APPROVED: parseInt(rowCounts.approved_count || '0', 10),
+        PUBLISHED: parseInt(rowCounts.published_count || '0', 10),
+        REJECTED: parseInt(rowCounts.rejected_count || '0', 10),
+        NO_PRICE: parseInt(rowCounts.no_price_count || '0', 10),
+        ALL: parseInt(rowCounts.total || '0', 10)
+      };
+
+      // 2. Construire clauză WHERE parametrizată pentru căutare și filtrare
+      const conditions: string[] = ['1=1'];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (params.status && params.status !== 'toate') {
+        const targetStatus = params.status.toUpperCase();
+        if (targetStatus === 'NEEDS_REVIEW' || targetStatus === 'ALL_PENDING') {
+          conditions.push(`UPPER(COALESCE(o.staging_status, 'NEEDS_REVIEW')) IN ('NEEDS_REVIEW', 'DISCOVERED', 'PARSED')`);
+        } else {
+          conditions.push(`UPPER(o.staging_status) = $${idx}`);
+          values.push(targetStatus);
+          idx++;
+        }
+      }
+
+      if (params.retailerId && params.retailerId !== 'toate') {
+        conditions.push(`o.retailer_id = $${idx}`);
+        values.push(params.retailerId);
+        idx++;
+      }
+
+      if (params.documentId && params.documentId !== 'toate') {
+        conditions.push(`o.document_id = $${idx}`);
+        values.push(params.documentId);
+        idx++;
+      }
+
+      if (params.search && params.search.trim()) {
+        conditions.push(`(o.raw_title ILIKE $${idx} OR o.raw_brand ILIKE $${idx} OR o.raw_barcode ILIKE $${idx} OR o.matched_product_id ILIKE $${idx} OR p.name ILIKE $${idx})`);
+        values.push(`%${params.search.trim()}%`);
+        idx++;
+      }
+
+      if (params.filterType) {
+        if (params.filterType === 'no_price') {
+          conditions.push(`(o.effective_price IS NULL OR o.effective_price <= 0)`);
+        } else if (params.filterType === 'has_ean') {
+          conditions.push(`(o.raw_barcode IS NOT NULL AND length(btrim(o.raw_barcode)) >= 8)`);
+        } else if (params.filterType === 'no_ean') {
+          conditions.push(`(o.raw_barcode IS NULL OR length(btrim(o.raw_barcode)) < 8)`);
+        } else if (params.filterType === 'auto_matched') {
+          conditions.push(`(o.match_confidence >= 0.7 AND o.matched_product_id IS NOT NULL)`);
+        } else if (params.filterType === 'needs_manual_review') {
+          conditions.push(`(o.match_confidence < 0.7 OR o.matched_product_id IS NULL)`);
+        } else if (params.filterType === 'suspect_price') {
+          conditions.push(`(o.effective_price < 0.50 OR o.effective_price > 500)`);
+        }
+      }
+
+      const whereClause = conditions.join(' AND ');
+
+      // 3. Calcul total înregistrări filtrate
+      const countRes = await pool.query(
+        `SELECT count(*) FROM catalog_extracted_offers o LEFT JOIN products p ON p.id = o.matched_product_id WHERE ${whereClause}`,
+        values
+      );
+      const total = parseInt(countRes.rows[0]?.count || '0', 10);
+
+      // 4. Interogare paginată
+      const queryValues = [...values, limit, offset];
+      const dataRes = await pool.query(
+        `SELECT o.*, p.name AS canonical_name
+         FROM catalog_extracted_offers o
+         LEFT JOIN products p ON p.id = o.matched_product_id
+         WHERE ${whereClause}
+         ORDER BY o.created_at DESC
+         LIMIT $${idx} OFFSET $${idx + 1}`,
+        queryValues
+      );
+
+      const offers = dataRes.rows.map(mapStagingRow);
+
+      return {
+        offers,
+        total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        statusCounts
+      };
+    } catch (err: any) {
+      console.error('Eroare getStagingOffersPaginated:', err.message);
+      return {
+        offers: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 1,
+        statusCounts: {
+          NEEDS_REVIEW: 0,
+          VALIDATED: 0,
+          APPROVED: 0,
+          PUBLISHED: 0,
+          REJECTED: 0,
+          ALL: 0
+        }
+      };
+    }
+  }
+
+  /**
+   * Returnează ofertele aprobate cu detalii complete din PostgreSQL
+   */
+  static async getApprovedOffersDetailed(params: {
+    page?: number;
+    limit?: number;
+    retailerId?: string;
+    search?: string;
+  }): Promise<{ offers: any[]; total: number; page: number; totalPages: number }> {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.max(1, Math.min(params.limit || 50, 100));
+    const offset = (page - 1) * limit;
+    const pool = getPool();
+
+    if (!pool) {
+      try {
+        let query = supabase.from('catalog_extracted_offers').select('*', { count: 'exact' }).in('staging_status', ['APPROVED', 'VALIDATED', 'approved', 'validated']);
+        if (params.retailerId && params.retailerId !== 'toate') query = query.eq('retailer_id', params.retailerId);
+        if (params.search && params.search.trim()) query = query.ilike('raw_title', `%${params.search.trim()}%`);
+        const { data, count, error } = await query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+        if (!error && data) {
+          return {
+            offers: data.map((r: any) => ({
+              id: r.id,
+              rawTitle: r.raw_title,
+              retailerId: r.retailer_id,
+              retailerName: r.retailer_id,
+              documentId: r.document_id,
+              normalPrice: parseFloat(r.normal_price) || 0,
+              effectivePrice: parseFloat(r.effective_price) || 0,
+              matchedProductId: r.matched_product_id,
+              stagingStatus: r.staging_status,
+              reviewedBy: r.reviewed_by || 'admin@cosulmeu.ro',
+              createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
+            })),
+            total: count || data.length,
+            page,
+            totalPages: Math.max(1, Math.ceil((count || data.length) / limit))
+          };
+        }
+      } catch {}
+      return { offers: [], total: 0, page, totalPages: 1 };
+    }
+
+    try {
+      const conditions: string[] = ["UPPER(o.staging_status) IN ('APPROVED', 'VALIDATED') OR o.reviewed_by IS NOT NULL"];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (params.retailerId && params.retailerId !== 'toate') {
+        conditions.push(`o.retailer_id = $${idx}`);
+        values.push(params.retailerId);
+        idx++;
+      }
+      if (params.search && params.search.trim()) {
+        conditions.push(`(o.raw_title ILIKE $${idx} OR o.raw_brand ILIKE $${idx} OR o.raw_barcode ILIKE $${idx} OR p.name ILIKE $${idx})`);
+        values.push(`%${params.search.trim()}%`);
+        idx++;
+      }
+
+      const whereClause = conditions.join(' AND ');
+      const countRes = await pool.query(
+        `SELECT count(*) FROM catalog_extracted_offers o LEFT JOIN products p ON p.id = o.matched_product_id WHERE ${whereClause}`,
+        values
+      );
+      const total = parseInt(countRes.rows[0]?.count || '0', 10);
+
+      const queryValues = [...values, limit, offset];
+      const dataRes = await pool.query(
+        `SELECT o.*, p.name AS canonical_name, p.image_url AS canonical_image, s.name AS retailer_name, d.title AS document_title
+         FROM catalog_extracted_offers o
+         LEFT JOIN products p ON p.id = o.matched_product_id
+         LEFT JOIN stores s ON s.id = o.retailer_id
+         LEFT JOIN catalog_documents d ON d.id = o.document_id
+         WHERE ${whereClause}
+         ORDER BY o.reviewed_at DESC NULLS LAST, o.created_at DESC
+         LIMIT $${idx} OFFSET $${idx + 1}`,
+        queryValues
+      );
+
+      const offers = dataRes.rows.map(r => ({
+        id: r.id,
+        rawTitle: r.raw_title,
+        retailerId: r.retailer_id,
+        retailerName: r.retailer_name || r.retailer_id,
+        documentId: r.document_id,
+        documentTitle: r.document_title || r.document_id,
+        rawBrand: r.raw_brand,
+        rawBarcode: r.raw_barcode,
+        normalPrice: parseFloat(r.normal_price) || 0,
+        promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+        effectivePrice: parseFloat(r.effective_price) || 0,
+        discountPercent: (r.normal_price && r.effective_price && parseFloat(r.normal_price) > parseFloat(r.effective_price))
+          ? Math.round(((parseFloat(r.normal_price) - parseFloat(r.effective_price)) / parseFloat(r.normal_price)) * 100)
+          : undefined,
+        matchedProductId: r.matched_product_id,
+        canonicalName: r.canonical_name || r.raw_title,
+        canonicalImage: r.canonical_image,
+        stagingStatus: r.staging_status,
+        reviewedBy: r.reviewed_by || 'admin@cosulmeu.ro',
+        reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : undefined,
+        validFrom: r.valid_from ? String(r.valid_from).slice(0, 10) : undefined,
+        validUntil: r.valid_until ? String(r.valid_until).slice(0, 10) : undefined,
+        createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
+      }));
+
+      return { offers, total, page, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    } catch (err: any) {
+      console.error('Eroare getApprovedOffersDetailed:', err.message);
+      return { offers: [], total: 0, page, totalPages: 1 };
+    }
+  }
+
+  /**
+   * Returnează ofertele active publicate în catalog (product_offers)
+   */
+  static async getPublicOffersDetailed(params: {
+    page?: number;
+    limit?: number;
+    retailerId?: string;
+    search?: string;
+  }): Promise<{ offers: any[]; total: number; page: number; totalPages: number }> {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.max(1, Math.min(params.limit || 50, 100));
+    const offset = (page - 1) * limit;
+    const pool = getPool();
+
+    if (!pool) {
+      try {
+        let query = supabase.from('product_offers').select('*', { count: 'exact' });
+        if (params.retailerId && params.retailerId !== 'toate') query = query.eq('store_id', params.retailerId);
+        const { data, count, error } = await query.order('price', { ascending: true }).range(offset, offset + limit - 1);
+        if (!error && data) {
+          return {
+            offers: data.map((r: any) => ({
+              id: r.id,
+              productId: r.product_id,
+              productName: r.product_id,
+              storeId: r.store_id,
+              storeName: r.store_id,
+              price: parseFloat(r.price) || 0,
+              isPromo: Boolean(r.is_promo),
+              unitPrice: parseFloat(r.unit_price) || parseFloat(r.price) || 0,
+              unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+              lastChecked: new Date().toISOString()
+            })),
+            total: count || data.length,
+            page,
+            totalPages: Math.max(1, Math.ceil((count || data.length) / limit))
+          };
+        }
+      } catch {}
+      return { offers: [], total: 0, page, totalPages: 1 };
+    }
+
+    try {
+      const conditions: string[] = ['1=1'];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (params.retailerId && params.retailerId !== 'toate') {
+        conditions.push(`(po.store_id = $${idx} OR po.store_id = 'store-' || $${idx})`);
+        values.push(params.retailerId);
+        idx++;
+      }
+      if (params.search && params.search.trim()) {
+        conditions.push(`(p.name ILIKE $${idx} OR p.brand ILIKE $${idx} OR p.barcode ILIKE $${idx})`);
+        values.push(`%${params.search.trim()}%`);
+        idx++;
+      }
+
+      const whereClause = conditions.join(' AND ');
+      const countRes = await pool.query(
+        `SELECT count(*) FROM product_offers po LEFT JOIN products p ON p.id = po.product_id WHERE ${whereClause}`,
+        values
+      );
+      const total = parseInt(countRes.rows[0]?.count || '0', 10);
+
+      const queryValues = [...values, limit, offset];
+      const dataRes = await pool.query(
+        `SELECT po.*, p.name AS product_name, p.brand AS product_brand, p.category AS product_category,
+                p.barcode AS product_barcode, p.image_url AS product_image, s.name AS store_name, s.brand_color AS store_brand_color
+         FROM product_offers po
+         LEFT JOIN products p ON p.id = po.product_id
+         LEFT JOIN stores s ON s.id = po.store_id OR s.id = replace(po.store_id, 'store-', '')
+         WHERE ${whereClause}
+         ORDER BY po.price ASC
+         LIMIT $${idx} OFFSET $${idx + 1}`,
+        queryValues
+      );
+
+      const offers = dataRes.rows.map(r => ({
+        id: r.id,
+        productId: r.product_id,
+        productName: r.product_name || 'Produs fără denumire',
+        productBrand: r.product_brand,
+        productCategory: r.product_category,
+        productBarcode: r.product_barcode,
+        productImage: r.product_image,
+        storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+        storeName: r.store_name || r.store_id,
+        price: parseFloat(r.price) || 0,
+        originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+        unitPrice: parseFloat(r.unit_price) || parseFloat(r.price) || 0,
+        unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+        isPromo: Boolean(r.is_promo),
+        promoDetails: r.promo_details || undefined,
+        loyaltyCardRequired: Boolean(r.loyalty_card_required),
+        loyaltyCardName: r.loyalty_card_name || undefined,
+        validUntil: r.valid_until ? String(r.valid_until).slice(0, 10) : undefined,
+        observationDate: r.observation_date ? String(r.observation_date).slice(0, 10) : undefined,
+        isExpired: r.valid_until ? new Date(r.valid_until) < new Date() : false,
+        lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString()
+      }));
+
+      return { offers, total, page, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    } catch (err: any) {
+      console.error('Eroare getPublicOffersDetailed:', err.message);
+      return { offers: [], total: 0, page, totalPages: 1 };
+    }
+  }
+
+  /**
+   * Returnează istoricul modificărilor de preț din tabela append-only price_observations
+   */
+  static async getPriceChangesDetailed(params: {
+    page?: number;
+    limit?: number;
+    retailerId?: string;
+    search?: string;
+  }): Promise<{ changes: any[]; total: number; page: number; totalPages: number }> {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.max(1, Math.min(params.limit || 50, 100));
+    const offset = (page - 1) * limit;
+    const pool = getPool();
+
+    if (!pool) {
+      try {
+        let query = supabase.from('price_observations').select('*', { count: 'exact' });
+        if (params.retailerId && params.retailerId !== 'toate') query = query.eq('store_id', params.retailerId);
+        const { data, count, error } = await query.order('date', { ascending: false }).range(offset, offset + limit - 1);
+        if (!error && data) {
+          return {
+            changes: data.map((r: any) => ({
+              id: r.id,
+              productId: r.product_id,
+              productName: r.product_id,
+              storeId: r.store_id,
+              storeName: r.store_id,
+              price: parseFloat(r.price) || 0,
+              date: r.date,
+              source: r.source || 'verified'
+            })),
+            total: count || data.length,
+            page,
+            totalPages: Math.max(1, Math.ceil((count || data.length) / limit))
+          };
+        }
+      } catch {}
+      return { changes: [], total: 0, page, totalPages: 1 };
+    }
+
+    try {
+      const conditions: string[] = ['1=1'];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (params.retailerId && params.retailerId !== 'toate') {
+        conditions.push(`(po.store_id = $${idx} OR po.store_id = 'store-' || $${idx})`);
+        values.push(params.retailerId);
+        idx++;
+      }
+      if (params.search && params.search.trim()) {
+        conditions.push(`(p.name ILIKE $${idx} OR p.brand ILIKE $${idx} OR p.barcode ILIKE $${idx})`);
+        values.push(`%${params.search.trim()}%`);
+        idx++;
+      }
+
+      const whereClause = conditions.join(' AND ');
+      const countRes = await pool.query(
+        `SELECT count(*) FROM price_observations po LEFT JOIN products p ON p.id = po.product_id WHERE ${whereClause}`,
+        values
+      );
+      const total = parseInt(countRes.rows[0]?.count || '0', 10);
+
+      const queryValues = [...values, limit, offset];
+      const dataRes = await pool.query(
+        `SELECT po.*, p.name AS product_name, p.brand AS product_brand, p.base_reference_price,
+                s.name AS store_name, s.brand_color AS store_brand_color
+         FROM price_observations po
+         LEFT JOIN products p ON p.id = po.product_id
+         LEFT JOIN stores s ON s.id = po.store_id OR s.id = replace(po.store_id, 'store-', '')
+         WHERE ${whereClause}
+         ORDER BY po.date DESC, po.created_at DESC
+         LIMIT $${idx} OFFSET $${idx + 1}`,
+        queryValues
+      );
+
+      const changes = dataRes.rows.map(r => {
+        const curPrice = parseFloat(r.price) || 0;
+        const normPrice = r.normal_price ? parseFloat(r.normal_price) : undefined;
+        const baseRef = r.base_reference_price ? parseFloat(r.base_reference_price) : undefined;
+        const prevPrice = normPrice && normPrice !== curPrice ? normPrice : baseRef;
+        const delta = prevPrice !== undefined ? Math.round((curPrice - prevPrice) * 100) / 100 : undefined;
+        const pctChange = prevPrice && prevPrice > 0 ? Math.round(((curPrice - prevPrice) / prevPrice) * 100) : undefined;
+
+        return {
+          id: r.id,
+          productId: r.product_id,
+          productName: r.product_name || 'Produs fără denumire',
+          productBrand: r.product_brand,
+          storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+          storeName: r.store_name || r.store_id,
+          price: curPrice,
+          normalPrice: normPrice,
+          promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+          loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
+          previousPrice: prevPrice,
+          difference: delta,
+          percentChange: pctChange,
+          date: r.date ? String(r.date).slice(0, 10) : new Date().toISOString().split('T')[0],
+          source: r.source || 'official_feed',
+          loyaltyCardUsed: Boolean(r.loyalty_card_used),
+          createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
+        };
+      });
+
+      return { changes, total, page, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    } catch (err: any) {
+      console.error('Eroare getPriceChangesDetailed:', err.message);
+      return { changes: [], total: 0, page, totalPages: 1 };
+    }
+  }
+
+  /**
+   * Returnează articolele extrase fără preț valid, cu explicația tehnică a cauzei
+   */
+  static async getItemsWithoutPriceDetailed(params: {
+    page?: number;
+    limit?: number;
+    retailerId?: string;
+    search?: string;
+  }): Promise<{ items: any[]; total: number; page: number; totalPages: number }> {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.max(1, Math.min(params.limit || 50, 100));
+    const offset = (page - 1) * limit;
+    const pool = getPool();
+
+    if (!pool) {
+      try {
+        const { data, count, error } = await supabase.from('catalog_extracted_offers')
+          .select('*', { count: 'exact' })
+          .or('effective_price.is.null,effective_price.lte.0')
+          .range(offset, offset + limit - 1);
+        if (!error && data) {
+          return {
+            items: data.map((r: any) => ({
+              id: r.id,
+              rawTitle: r.raw_title,
+              retailerId: r.retailer_id,
+              retailerName: r.retailer_id,
+              reasonTitle: 'Preț lipsă în sursă',
+              reasonDescription: 'Articolul nu conține o cifră de preț validă extrasă din catalog.'
+            })),
+            total: count || data.length,
+            page,
+            totalPages: Math.max(1, Math.ceil((count || data.length) / limit))
+          };
+        }
+      } catch {}
+      return { items: [], total: 0, page, totalPages: 1 };
+    }
+
+    try {
+      const conditions: string[] = ['(o.effective_price IS NULL OR o.effective_price <= 0)'];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (params.retailerId && params.retailerId !== 'toate') {
+        conditions.push(`o.retailer_id = $${idx}`);
+        values.push(params.retailerId);
+        idx++;
+      }
+      if (params.search && params.search.trim()) {
+        conditions.push(`(o.raw_title ILIKE $${idx} OR o.raw_brand ILIKE $${idx} OR o.raw_barcode ILIKE $${idx})`);
+        values.push(`%${params.search.trim()}%`);
+        idx++;
+      }
+
+      const whereClause = conditions.join(' AND ');
+      const countRes = await pool.query(
+        `SELECT count(*) FROM catalog_extracted_offers o WHERE ${whereClause}`,
+        values
+      );
+      const total = parseInt(countRes.rows[0]?.count || '0', 10);
+
+      const queryValues = [...values, limit, offset];
+      const dataRes = await pool.query(
+        `SELECT o.*, s.name AS retailer_name, d.title AS document_title
+         FROM catalog_extracted_offers o
+         LEFT JOIN stores s ON s.id = o.retailer_id
+         LEFT JOIN catalog_documents d ON d.id = o.document_id
+         WHERE ${whereClause}
+         ORDER BY o.created_at DESC
+         LIMIT $${idx} OFFSET $${idx + 1}`,
+        queryValues
+      );
+
+      const items = dataRes.rows.map(r => {
+        let reasonTitle = 'Preț neidentificat în document';
+        let reasonDescription = 'Documentul oficial nu conține o cifră de preț asociată în mod direct acestui titlu.';
+
+        if (!r.normal_price && !r.effective_price) {
+          reasonTitle = 'Preț lipsă în sursă';
+          reasonDescription = 'Articolul a fost extras dintr-o reclamă tematică sau copertă fără mențiune de preț.';
+        } else if (parseFloat(r.effective_price) === 0) {
+          reasonTitle = 'Preț zero extras din catalog';
+          reasonDescription = 'Parserul a întâlnit valoarea 0.00 RON (probabil articol cadou, tombolă sau eroare de tipar). Prețul nu a fost promovat în catalogul public.';
+        }
+
+        return {
+          id: r.id,
+          rawTitle: r.raw_title,
+          retailerId: r.retailer_id,
+          retailerName: r.retailer_name || r.retailer_id,
+          documentId: r.document_id,
+          documentTitle: r.document_title || r.document_id,
+          rawBrand: r.raw_brand,
+          rawBarcode: r.raw_barcode,
+          rawCategory: r.raw_category,
+          reasonTitle,
+          reasonDescription,
+          validationErrors: r.validation_errors,
+          createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
+        };
+      });
+
+      return { items, total, page, totalPages: Math.max(1, Math.ceil(total / limit)) };
+    } catch (err: any) {
+      console.error('Eroare getItemsWithoutPriceDetailed:', err.message);
+      return { items: [], total: 0, page, totalPages: 1 };
+    }
+  }
+
+  /**
+   * Actualizare sau aprobare / respingere în lot a ofertelor din Staging cu tranzacție atomică și audit log
+   */
+  static async bulkReviewStagingOffers(params: {
+    offerIds: string[];
+    action: 'approve' | 'reject';
+    rejectionReason?: string;
+    userEmail?: string;
+    ipAddress?: string;
+  }): Promise<{ count: number; message: string }> {
+    const { offerIds, action, rejectionReason, userEmail = 'admin@cosulmeu.ro', ipAddress } = params;
+    if (!offerIds || offerIds.length === 0) return { count: 0, message: 'Nu au fost furnizate oferte.' };
+
+    const pool = getPool();
+    const newStatus = action === 'approve' ? 'VALIDATED' : 'REJECTED';
+
+    if (pool) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const updateRes = await client.query(
+          `UPDATE catalog_extracted_offers
+           SET staging_status = $1,
+               reviewed_by = $2,
+               reviewed_at = NOW(),
+               rejection_reason = $3,
+               updated_at = NOW()
+           WHERE id = ANY($4::varchar[])
+           RETURNING id`,
+          [newStatus, userEmail, action === 'reject' ? (rejectionReason || 'Respins manual în lot de administrator.') : null, offerIds]
+        );
+        const updatedCount = updateRes.rows.length;
+
+        await client.query(
+          `INSERT INTO admin_audit_logs (user_email, action, target_type, target_id, details, ip_address, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+          [
+            userEmail,
+            action === 'approve' ? 'bulk_approve_staging_offers' : 'bulk_reject_staging_offers',
+            'staging_offers',
+            offerIds.slice(0, 5).join(',') + (offerIds.length > 5 ? ` (+${offerIds.length - 5} others)` : ''),
+            JSON.stringify({ requestedCount: offerIds.length, updatedCount, action, rejectionReason }),
+            ipAddress || null
+          ]
+        );
+
+        await client.query('COMMIT');
+        return {
+          count: updatedCount,
+          message: `${updatedCount} oferte au fost ${action === 'approve' ? 'validate' : 'respinse'} cu succes în PostgreSQL.`
+        };
+      } catch (err: any) {
+        await client.query('ROLLBACK');
+        throw new Error(`Eroare la actualizarea în lot în PostgreSQL: ${err.message}`);
+      } finally {
+        client.release();
+      }
+    }
+
+    // Fallback Supabase
+    try {
+      await supabase.from('catalog_extracted_offers')
+        .update({
+          staging_status: newStatus,
+          reviewed_by: userEmail,
+          reviewed_at: new Date().toISOString()
+        })
+        .in('id', offerIds);
+      return { count: offerIds.length, message: `${offerIds.length} oferte au fost actualizate.` };
+    } catch {}
+    return { count: 0, message: 'Nu s-au putut actualiza ofertele.' };
+  }
 }
 
 

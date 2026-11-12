@@ -14,6 +14,7 @@ export type StagingItemStatus =
   | 'PARSED'
   | 'NEEDS_REVIEW'
   | 'VALIDATED'
+  | 'APPROVED'
   | 'PUBLISHED'
   | 'REJECTED'
   | 'EXPIRED';
@@ -97,6 +98,7 @@ export interface CatalogExtractedOffer {
   rawTitle: string;
   rawBrand?: string;
   rawBarcode?: string;
+  retailerSku?: string;
   rawCategory?: string;
   normalPrice: number;
   promoPrice?: number;
