@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Wallet,
   TrendingDown,
@@ -16,13 +16,29 @@ import {
 } from 'lucide-react';
 import { UserProfile, ShoppingList, Receipt as ReceiptType } from '../types.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
-import { STORES } from '../data/mockData.js';
+import { DashboardKpiDrilldownModal } from './DashboardKpiDrilldownModal.js';
+import type {
+  DashboardData,
+  DashboardImportResult,
+  LocalDashboardCounts
+} from '../services/DashboardDataService.js';
 
 interface DashboardViewProps {
   userProfile: UserProfile;
   activeList: ShoppingList;
   receipts: ReceiptType[];
   trackedCount: number;
+  activeAlertCount: number;
+  dataSource: 'supabase' | 'local';
+  dashboardData?: DashboardData;
+  dashboardLoading: boolean;
+  dashboardError?: string | null;
+  localImportCounts: LocalDashboardCounts;
+  canImportLocalData: boolean;
+  isImportingLocalData: boolean;
+  importError?: string | null;
+  importResult?: DashboardImportResult | null;
+  onImportLocalData: () => void;
   onNavigate: (tab: string) => void;
   onOpenReceipt: (receipt: ReceiptType) => void;
 }
@@ -32,12 +48,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   activeList,
   receipts,
   trackedCount,
+  activeAlertCount,
+  dataSource,
+  dashboardData,
+  dashboardLoading,
+  dashboardError,
+  localImportCounts,
+  canImportLocalData,
+  isImportingLocalData,
+  importError,
+  importResult,
+  onImportLocalData,
   onNavigate,
   onOpenReceipt
 }) => {
-  // Calculate potential savings for active list
-  const savingsSummary = PriceComparisonService.getPotentialSavingsForList(activeList.items);
-  const storeComparisons = PriceComparisonService.compareBasketAcrossStores(activeList.items);
+  const [activeDrilldown, setActiveDrilldown] = useState<'potential-savings' | 'tracked-products' | null>(null);
+  const customProducts = dataSource === 'supabase' ? dashboardData?.products ?? [] : undefined;
+  const customOffers = dataSource === 'supabase' ? dashboardData?.productOffers ?? [] : undefined;
+  const customStores = dataSource === 'supabase' ? dashboardData?.stores ?? [] : undefined;
+  const comparisonOptions = { useLoyaltyCards: userProfile.useLoyaltyCards };
+  const savingsSummary = PriceComparisonService.getPotentialSavingsForList(
+    activeList.items,
+    comparisonOptions,
+    customProducts,
+    customOffers,
+    customStores
+  );
+  const storeComparisons = PriceComparisonService.compareBasketAcrossStores(
+    activeList.items,
+    comparisonOptions,
+    customProducts,
+    customOffers,
+    customStores
+  );
+  const statsUnavailable = dashboardLoading || Boolean(dashboardError);
 
   // Calculate actual total saved from receipts (difference between subtotal and total after discounts)
   const totalSavedFromDiscounts = receipts.reduce((acc, r) => acc + (r.discountTotal || 0), 0);
@@ -88,6 +132,58 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 font-semibold ${
+          dataSource === 'supabase'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+            : 'border-slate-200 bg-white text-slate-600'
+        }`}>
+          <span className={`h-2 w-2 rounded-full ${dataSource === 'supabase' ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+          {dataSource === 'supabase' ? 'Date sincronizate din Supabase' : 'Date locale pe acest dispozitiv'}
+        </span>
+        {dashboardLoading && <span role="status" className="text-slate-500">Se încarcă datele contului…</span>}
+        {dashboardError && <span role="alert" className="text-rose-700">Datele Supabase nu au putut fi încărcate. Reîncarcă pagina pentru a încerca din nou.</span>}
+      </div>
+
+      {(canImportLocalData || importResult || importError) && (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4 sm:p-5" aria-labelledby="local-import-title">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <h2 id="local-import-title" className="text-sm font-bold text-slate-900">
+                {importResult ? 'Importul datelor locale a fost finalizat' : 'Ai date salvate pe acest dispozitiv'}
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-700">
+                {importResult
+                  ? `${importResult.receipts} bonuri, ${importResult.lists} liste, ${importResult.listItems} produse din liste, ${importResult.alerts} alerte și ${importResult.trackedProducts} produse urmărite au fost importate.`
+                  : `${localImportCounts.receipts} bonuri, ${localImportCounts.lists} liste, ${localImportCounts.listItems} produse din liste, ${localImportCounts.alerts} alerte și ${localImportCounts.trackedProducts} produse urmărite. Nimic nu se încarcă fără confirmarea ta.`}
+              </p>
+              {!importResult && localImportCounts.receiptsWithImages > 0 && (
+                <p className="mt-1 text-xs text-slate-600">Imaginile bonurilor rămân pe acest dispozitiv; se importă doar datele extrase.</p>
+              )}
+              {importResult && importResult.imagesLeftOnDevice > 0 && (
+                <p className="mt-1 text-xs text-slate-600">Imaginile bonurilor au rămas pe acest dispozitiv.</p>
+              )}
+              {importResult && (importResult.skippedAlerts > 0 || importResult.skippedTrackedProducts > 0) && (
+                <p className="mt-1 text-xs text-amber-800">
+                  {importResult.skippedAlerts + importResult.skippedTrackedProducts} elemente au fost omise deoarece produsele nu există în catalogul Supabase.
+                </p>
+              )}
+              {importError && <p role="alert" className="mt-2 text-xs font-semibold text-rose-700">{importError}</p>}
+            </div>
+            {canImportLocalData && !importResult && (
+              <button
+                type="button"
+                onClick={onImportLocalData}
+                disabled={isImportingLocalData}
+                className="shrink-0 rounded-xl bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-emerald-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-wait disabled:opacity-60"
+              >
+                {isImportingLocalData ? 'Se importă…' : 'Importă în contul meu'}
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Main Stats Card: Economiile Mele */}
       <div className="bg-gradient-to-br from-slate-900 via-slate-850 to-emerald-950 rounded-3xl p-5 sm:p-7 text-white shadow-xl relative overflow-hidden">
         {/* Subtle decorative background circles */}
@@ -108,58 +204,76 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mt-5">
             {/* Stat 1 */}
-            <div>
+            <button
+              type="button"
+              onClick={() => onNavigate('receipts')}
+              aria-label="Deschide bonurile pentru detalii despre economiile realizate"
+              className="w-full rounded-xl p-2 -m-2 text-left transition-colors hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300"
+            >
               <span className="text-xs text-slate-300 block mb-1">Economii realizate</span>
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                  {PriceComparisonService.formatRon(totalSavedFromDiscounts)}
-                </span>
-              </div>
-              <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1 mt-1">
-                <CheckCircle2 className="w-3 h-3" /> din bonuri & reduceri
+              <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                {statsUnavailable ? '—' : PriceComparisonService.formatRon(totalSavedFromDiscounts)}
               </span>
-            </div>
+              <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1 mt-1">
+                <CheckCircle2 className="w-3 h-3" /> din bonuri & reduceri · Vezi detalii
+              </span>
+            </button>
 
             {/* Stat 2 */}
-            <div>
+            <button
+              type="button"
+              onClick={() => dataSource === 'supabase' && dashboardData
+                ? setActiveDrilldown('potential-savings')
+                : onNavigate('compare')}
+              aria-label={dataSource === 'supabase'
+                ? 'Deschide detaliile Supabase ale economiei potențiale și ofertelor verificate'
+                : 'Deschide comparația de prețuri pentru coșul de cumpărături'}
+              className="w-full rounded-xl p-2 -m-2 text-left transition-colors hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300"
+            >
               <span className="text-xs text-slate-300 block mb-1">Economie potențială listă</span>
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-2xl sm:text-3xl font-extrabold text-emerald-400 tracking-tight">
-                  {PriceComparisonService.formatRon(activeList.items.length === 0 ? 0 : savingsSummary.maxSavings)}
-                </span>
-              </div>
-              <span className="text-[11px] text-slate-300 font-medium block mt-1">
-                Alegând cel mai ieftin magazin
+              <span className="text-2xl sm:text-3xl font-extrabold text-emerald-400 tracking-tight">
+                {statsUnavailable ? '—' : PriceComparisonService.formatRon(activeList.items.length === 0 ? 0 : savingsSummary.maxSavings)}
               </span>
-            </div>
+              <span className="text-[11px] text-slate-300 font-medium block mt-1">
+                Alegând cel mai ieftin magazin · Vezi detalii
+              </span>
+            </button>
 
             {/* Stat 3 */}
-            <div>
+            <button
+              type="button"
+              onClick={() => onNavigate('receipts')}
+              aria-label="Deschide istoricul bonurilor scanate și totalul cheltuit"
+              className="w-full rounded-xl p-2 -m-2 text-left transition-colors hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300"
+            >
               <span className="text-xs text-slate-300 block mb-1">Bonuri scanate</span>
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                  {receipts.length}
-                </span>
-                <span className="text-xs text-slate-400">bonuri</span>
-              </div>
-              <span className="text-[11px] text-slate-400 font-medium block mt-1">
-                Total cheltuit: {PriceComparisonService.formatRon(totalHistoricalReceipts)}
+              <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                {statsUnavailable ? '—' : receipts.length}
               </span>
-            </div>
+              <span className="text-[11px] text-slate-400 font-medium block mt-1">
+                Total cheltuit: {statsUnavailable ? '—' : PriceComparisonService.formatRon(totalHistoricalReceipts)} · Deschide istoricul
+              </span>
+            </button>
 
             {/* Stat 4 */}
-            <div>
+            <button
+              type="button"
+              onClick={() => dataSource === 'supabase' && dashboardData
+                ? setActiveDrilldown('tracked-products')
+                : onNavigate('price-history')}
+              aria-label={dataSource === 'supabase'
+                ? 'Deschide produsele urmărite și alertele de preț din contul Supabase'
+                : 'Deschide istoricul produselor urmărite și alertele locale'}
+              className="w-full rounded-xl p-2 -m-2 text-left transition-colors hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300"
+            >
               <span className="text-xs text-slate-300 block mb-1">Produse urmărite</span>
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-                  {trackedCount}
-                </span>
-                <span className="text-xs text-slate-400">articole</span>
-              </div>
-              <span className="text-[11px] text-emerald-400 font-medium block mt-1">
-                Alerte active la reduceri
+              <span className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                {statsUnavailable ? '—' : trackedCount}
               </span>
-            </div>
+              <span className="text-[11px] text-emerald-400 font-medium block mt-1">
+                {statsUnavailable ? '—' : `${activeAlertCount} alerte active`} · Vezi detalii
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -266,10 +380,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {storeComparisons.slice(0, 4).map(comp => (
-                  <div
+                  <button
+                    type="button"
                     key={comp.store.id}
                     onClick={() => onNavigate('compare')}
-                    className={`p-3.5 rounded-xl border transition-all cursor-pointer relative hover:shadow-md ${
+                    aria-label={`Deschide comparația completă de prețuri pentru ${comp.store.name}`}
+                    className={`w-full p-3.5 rounded-xl border text-left transition-all cursor-pointer relative hover:shadow-md ${
                       comp.isWinner
                         ? 'border-emerald-500 bg-emerald-50/40'
                         : 'border-slate-200 hover:border-slate-300 bg-slate-50/50'
@@ -309,7 +425,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         )}
                       </div>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
 
@@ -358,10 +474,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {receipts.slice(0, 4).map(receipt => (
-              <div
+              <button
+                type="button"
                 key={receipt.id}
                 onClick={() => onOpenReceipt(receipt)}
-                className="p-3.5 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/20 transition-all cursor-pointer flex items-center justify-between"
+                aria-label={`Deschide detaliile bonului de la ${receipt.storeName}, ${PriceComparisonService.formatRon(receipt.total)}`}
+                className="w-full p-3.5 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/20 transition-all cursor-pointer flex items-center justify-between text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
               >
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700">
@@ -387,11 +505,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     </span>
                   )}
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         )}
       </div>
+      {activeDrilldown && dataSource === 'supabase' && dashboardData && (
+        <DashboardKpiDrilldownModal
+          mode={activeDrilldown}
+          activeList={activeList}
+          dashboardData={dashboardData}
+          useLoyaltyCards={userProfile.useLoyaltyCards}
+          onClose={() => setActiveDrilldown(null)}
+        />
+      )}
     </div>
   );
 };

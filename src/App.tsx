@@ -1,4 +1,16 @@
 import React, { useState, useEffect } from 'react';
+import { useDashboardData } from './services/useDashboardData.js';
+import {
+  countLocalDashboardData,
+  deleteReceiptForUser,
+  importLocalDashboardData,
+  savePriceAlertsForUser,
+  saveReceiptForUser,
+  saveShoppingListsForUser,
+  saveTrackedProductsForUser,
+  type DashboardImportResult,
+  type LocalDashboardSnapshot
+} from './services/DashboardDataService.js';
 import { Navbar } from './components/Navbar.js';
 import { MobileNav } from './components/MobileNav.js';
 import { DashboardView } from './components/DashboardView.js';
@@ -22,6 +34,16 @@ import { supabase } from './lib/supabase.js';
 
 export default function App() {
   const { user, loading, signOut } = useAuth();
+  const {
+    data: dashboardData,
+    error: dashboardLoadError,
+    isLoading: dashboardLoading,
+    mutate: mutateDashboardData
+  } = useDashboardData(user?.id);
+  const [isImportingLocalData, setIsImportingLocalData] = useState(false);
+  const [dashboardImportError, setDashboardImportError] = useState<string | null>(null);
+  const [dashboardImportResult, setDashboardImportResult] = useState<DashboardImportResult | null>(null);
+  const [dataWriteError, setDataWriteError] = useState<string | null>(null);
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [productFilterCategory, setProductFilterCategory] = useState<string>('toate');
@@ -44,6 +66,13 @@ export default function App() {
   const [trackedProductIds, setTrackedProductIds] = useState<string[]>(() =>
     StorageService.getTrackedProducts()
   );
+  const localDashboardSnapshot: LocalDashboardSnapshot = {
+    receipts,
+    shoppingLists,
+    priceAlerts,
+    trackedProductIds
+  };
+  const localImportCounts = countLocalDashboardData(localDashboardSnapshot);
 
   const isAdmin = Boolean(
     userProfile.role === 'admin' ||
@@ -111,7 +140,10 @@ export default function App() {
             }
           };
 
-          await supabase.from('profiles').upsert(newProfileRow);
+          const { error: profileCreateError } = await supabase.from('profiles').insert(newProfileRow);
+          if (profileCreateError && profileCreateError.code !== '23505') {
+            setDataWriteError('Profilul nu a putut fi inițializat în Supabase.');
+          }
 
           const initialProfile: UserProfile = {
             id: userId,
@@ -155,6 +187,10 @@ export default function App() {
           preferredStores: profile.preferredStores,
           defaultTransportCostEstimate: profile.defaultTransportCostEstimate,
           useLoyaltyCards: profile.useLoyaltyCards,
+          ...(dashboardData ? {
+            trackedProductIds: dashboardData.trackedProductIds,
+            localHistoryImportedAt: dashboardData.localDataImportedAt
+          } : {})
         },
         updated_at: new Date().toISOString(),
       });
@@ -199,16 +235,118 @@ export default function App() {
     );
   }
 
-  // Sync active list
+  const emptyList: ShoppingList = {
+    id: 'list-fallback',
+    name: 'Coșul Meu',
+    items: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const dashboardLists = user ? dashboardData?.shoppingLists || [] : shoppingLists;
+  const screenShoppingLists = dashboardLists.length > 0 ? dashboardLists : [emptyList];
   const activeList =
-    shoppingLists.find(l => l.id === activeListId) ||
-    shoppingLists[0] || {
-      id: 'list-fallback',
-      name: 'Coșul Meu',
-      items: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    screenShoppingLists.find(list => list.id === activeListId && !list.isArchived) ||
+    screenShoppingLists.find(list => !list.isArchived) ||
+    screenShoppingLists[0] ||
+    emptyList;
+  const dashboardReceipts = user ? dashboardData?.receipts || [] : receipts;
+  const dashboardAlerts = user ? dashboardData?.priceAlerts || [] : priceAlerts;
+  const dashboardTrackedProductIds = user ? dashboardData?.trackedProductIds || [] : trackedProductIds;
+  const canImportLocalData = Boolean(
+    user && dashboardData && !dashboardData.localDataImportedAt && localImportCounts.total > 0
+  );
+
+  const handleImportLocalData = async () => {
+    if (!user || !dashboardData || !canImportLocalData || isImportingLocalData) return;
+    setIsImportingLocalData(true);
+    setDashboardImportError(null);
+    setDashboardImportResult(null);
+    try {
+      const result = await importLocalDashboardData(user.id, localDashboardSnapshot);
+      setDashboardImportResult(result);
+      await mutateDashboardData();
+    } catch (error) {
+      setDashboardImportError(error instanceof Error ? error.message : 'Importul nu a putut fi finalizat.');
+    } finally {
+      setIsImportingLocalData(false);
+    }
+  };
+
+  const handleUpdateShoppingLists = async (nextLists: ShoppingList[]) => {
+    if (!user) {
+      setShoppingLists(nextLists);
+      StorageService.saveShoppingLists(nextLists);
+      return;
+    }
+    if (!dashboardData) {
+      setDataWriteError('Listele nu au putut fi salvate deoarece datele contului nu sunt încărcate.');
+      return;
+    }
+    try {
+      const savedLists = await saveShoppingListsForUser(user.id, dashboardData.shoppingLists, nextLists);
+      await mutateDashboardData(current => current ? { ...current, shoppingLists: savedLists } : current, { revalidate: false });
+      setDataWriteError(null);
+      const selectedList = savedLists.find(list => list.name === activeList.name);
+      if (selectedList) setActiveListId(selectedList.id);
+    } catch (error) {
+      setDataWriteError(error instanceof Error ? error.message : 'Lista nu a putut fi sincronizată.');
+    }
+  };
+
+  const handleUpdateReceipts = async (nextReceipts: Receipt[]) => {
+    if (!user) {
+      setReceipts(nextReceipts);
+      StorageService.saveReceipts(nextReceipts);
+      return;
+    }
+    if (!dashboardData) {
+      setDataWriteError('Bonurile nu au putut fi actualizate deoarece datele contului nu sunt încărcate.');
+      return;
+    }
+    try {
+      const nextIds = new Set(nextReceipts.map(receipt => receipt.id));
+      const removed = dashboardData.receipts.filter(receipt => !nextIds.has(receipt.id));
+      await Promise.all(removed.map(receipt => deleteReceiptForUser(user.id, receipt.id)));
+      await mutateDashboardData(current => current ? { ...current, receipts: nextReceipts } : current, { revalidate: false });
+      setDataWriteError(null);
+    } catch (error) {
+      setDataWriteError(error instanceof Error ? error.message : 'Bonul nu a putut fi șters.');
+    }
+  };
+
+  const handleUpdatePriceAlerts = async (nextAlerts: PriceAlert[]) => {
+    if (!user) {
+      setPriceAlerts(nextAlerts);
+      StorageService.savePriceAlerts(nextAlerts);
+      return;
+    }
+    if (!dashboardData) {
+      setDataWriteError('Alertele nu au putut fi salvate deoarece datele contului nu sunt încărcate.');
+      return;
+    }
+    try {
+      const savedAlerts = await savePriceAlertsForUser(user.id, dashboardData.priceAlerts, nextAlerts);
+      await mutateDashboardData(current => current ? { ...current, priceAlerts: savedAlerts } : current, { revalidate: false });
+      setDataWriteError(null);
+    } catch (error) {
+      setDataWriteError(error instanceof Error ? error.message : 'Alerta nu a putut fi sincronizată.');
+    }
+  };
+
+  const handleUpdateTrackedProducts = async (nextProductIds: string[]) => {
+    if (!user) {
+      setTrackedProductIds(nextProductIds);
+      StorageService.saveTrackedProducts(nextProductIds);
+      return;
+    }
+    try {
+      const savedIds = await saveTrackedProductsForUser(user.id, nextProductIds);
+      await mutateDashboardData(current => current ? { ...current, trackedProductIds: savedIds } : current, { revalidate: false });
+      setDataWriteError(null);
+    } catch (error) {
+      setDataWriteError(error instanceof Error ? error.message : 'Lista de produse urmărite nu a putut fi sincronizată.');
+    }
+  };
 
   const handleSelectTab = (tab: string) => {
     if (tab === 'admin-sources' && !isAdmin) {
@@ -262,34 +400,34 @@ export default function App() {
   };
 
   const handleAddProductToList = (productId: string, productName: string) => {
-    const prod = StorageService.getAllProducts().find(p => p.id === productId);
-    if (!prod) return;
+    const product = StorageService.getAllProducts().find(item => item.id === productId);
+    if (!product) return;
+    if (user && !dashboardData) {
+      setDataWriteError('Așteaptă încărcarea datelor contului înainte de a modifica lista.');
+      return;
+    }
 
-    setShoppingLists(prevLists => {
-      const updated = prevLists.map(list => {
-        if (list.id === activeListId) {
-          return {
-            ...list,
-            items: [
-              ...list.items,
-              {
-                id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-                productId: prod.id,
-                name: prod.name,
-                brand: prod.brand,
-                category: prod.category,
-                quantity: 1,
-                unit: prod.defaultUnit,
-                checked: false
-              }
-            ]
-          };
-        }
-        return list;
-      });
-      StorageService.saveShoppingLists(updated);
-      return updated;
+    const updated = screenShoppingLists.map(list => {
+      if (list.id !== activeList.id) return list;
+      return {
+        ...list,
+        items: [
+          ...list.items,
+          {
+            id: crypto.randomUUID(),
+            productId: product.id,
+            name: product.name || productName,
+            brand: product.brand,
+            category: product.category,
+            quantity: 1,
+            unit: product.defaultUnit,
+            checked: false
+          }
+        ],
+        updatedAt: new Date().toISOString()
+      };
     });
+    void handleUpdateShoppingLists(updated);
   };
 
   const handleActiveListSelect = (listId: string) => {
@@ -297,9 +435,35 @@ export default function App() {
     StorageService.setActiveListId(listId);
   };
 
-  const handleReceiptSaved = (savedReceipt: Receipt) => {
-    setReceipts(StorageService.getReceipts());
-    setTrackedProductIds(StorageService.getTrackedProducts());
+  const handleReceiptSaved = async (savedReceipt: Receipt) => {
+    if (!user) {
+      StorageService.addReceipt(savedReceipt);
+      const discoveryCandidates = savedReceipt.items.map((item, index) => ({
+        id: `rec-prod-${savedReceipt.id}-${index}`,
+        receiptId: savedReceipt.id,
+        rawName: item.rawName,
+        extractedPrice: item.unitPrice,
+        extractedQuantity: item.quantity,
+        category: item.category,
+        targetSearchStatus: 'pending' as const,
+        matchedProductId: item.matchedProductId,
+        searchAttempts: 0,
+        createdAt: new Date().toISOString()
+      }));
+      StorageService.addReceiptProducts(discoveryCandidates);
+      setReceipts(StorageService.getReceipts());
+      setTrackedProductIds(StorageService.getTrackedProducts());
+      return;
+    }
+    if (!dashboardData) throw new Error('Datele contului nu sunt încărcate. Încearcă din nou.');
+
+    const saved = await saveReceiptForUser(user.id, savedReceipt, dashboardData.stores);
+    await mutateDashboardData(current => current
+      ? { ...current, receipts: [saved, ...current.receipts.filter(receipt => receipt.id !== saved.id)] }
+      : current,
+      { revalidate: false }
+    );
+    setDataWriteError(null);
   };
 
   const handleResetAllData = () => {
@@ -324,12 +488,17 @@ export default function App() {
         onSignOut={signOut}
         isAuthenticated={Boolean(user)}
         isAdmin={isAdmin}
-        alerts={priceAlerts}
+        alerts={dashboardAlerts}
         itemsCount={activeList.items.length}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8">
+        {dataWriteError && (
+          <div role="alert" className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800">
+            {dataWriteError}
+          </div>
+        )}
         {currentTab === 'auth' && (
           <AuthScreen
             onSuccess={() => handleSelectTab('dashboard')}
@@ -341,12 +510,21 @@ export default function App() {
           <DashboardView
             userProfile={userProfile}
             activeList={activeList}
-            receipts={receipts}
-            trackedCount={trackedProductIds.length}
+            receipts={dashboardReceipts}
+            trackedCount={dashboardTrackedProductIds.length}
+            activeAlertCount={dashboardAlerts.filter(alert => alert.isActive).length}
+            dataSource={user ? 'supabase' : 'local'}
+            dashboardData={dashboardData}
+            dashboardLoading={Boolean(user && dashboardLoading)}
+            dashboardError={user && dashboardLoadError ? 'Datele Supabase nu au putut fi încărcate.' : null}
+            localImportCounts={localImportCounts}
+            canImportLocalData={canImportLocalData}
+            isImportingLocalData={isImportingLocalData}
+            importError={dashboardImportError}
+            importResult={dashboardImportResult}
+            onImportLocalData={handleImportLocalData}
             onNavigate={handleSelectTab}
-            onOpenReceipt={rec => {
-              setCurrentTab('receipts');
-            }}
+            onOpenReceipt={() => handleSelectTab('receipts')}
           />
         )}
 
@@ -371,9 +549,9 @@ export default function App() {
 
         {currentTab === 'shopping-list' && (
           <ShoppingListView
-            lists={shoppingLists}
+            lists={screenShoppingLists}
             activeList={activeList}
-            onUpdateLists={setShoppingLists}
+            onUpdateLists={handleUpdateShoppingLists}
             onSelectActiveList={handleActiveListSelect}
             onCompare={() => handleSelectTab('compare')}
           />
@@ -395,16 +573,18 @@ export default function App() {
 
         {currentTab === 'receipts' && (
           <ReceiptHistoryView
-            receipts={receipts}
-            onUpdateReceipts={setReceipts}
+            receipts={dashboardReceipts}
+            onUpdateReceipts={handleUpdateReceipts}
             onNavigateToScan={() => handleSelectTab('scan-receipt')}
           />
         )}
 
         {currentTab === 'price-history' && (
           <PriceHistoryView
-            alerts={priceAlerts}
-            onUpdateAlerts={setPriceAlerts}
+            alerts={dashboardAlerts}
+            trackedProductIds={dashboardTrackedProductIds}
+            onUpdateAlerts={handleUpdatePriceAlerts}
+            onUpdateTrackedProductIds={handleUpdateTrackedProducts}
           />
         )}
 
@@ -440,7 +620,7 @@ export default function App() {
             <span>Monedă: RON (lei)</span>
             <span>• Fus orar: Europe/Bucharest</span>
             <span className="flex items-center gap-1 text-emerald-700 font-medium">
-              <ShieldCheck className="w-3.5 h-3.5" /> Date protejate local
+              <ShieldCheck className="w-3.5 h-3.5" /> {user ? 'Date protejate în cont' : 'Date locale pe dispozitiv'}
             </span>
           </div>
         </div>

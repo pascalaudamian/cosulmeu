@@ -303,6 +303,10 @@ export class StorageService {
     return isTracked;
   }
 
+  static saveTrackedProducts(productIds: string[]): void {
+    safeSetItem(KEYS.TRACKED_PRODUCTS, JSON.stringify(Array.from(new Set(productIds.filter(Boolean)))));
+  }
+
   // Custom Products
   static getCustomProducts(): Product[] {
     try {

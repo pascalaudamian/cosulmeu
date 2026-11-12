@@ -19,11 +19,10 @@ import {
 } from 'lucide-react';
 import { Receipt, ReceiptItem, ProductCategory } from '../types.js';
 import { STORES } from '../data/mockData.js';
-import { StorageService } from '../services/StorageService.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 
 interface ReceiptScanViewProps {
-  onReceiptSaved: (receipt: Receipt) => void;
+  onReceiptSaved: (receipt: Receipt) => void | Promise<void>;
   onNavigateToHistory: () => void;
 }
 
@@ -52,6 +51,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
   // Editable parsed receipt state
   const [parsedReceipt, setParsedReceipt] = useState<Receipt | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -220,27 +220,18 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
   };
 
   // Confirm & Save Receipt
-  const handleConfirmAndSave = () => {
-    if (!parsedReceipt) return;
-    StorageService.addReceipt(parsedReceipt);
-
-    // Înregistrează produsele de pe bon ca și candidați pentru motorul de căutare și indexare pe retaileri
-    const discoveryCandidates = parsedReceipt.items.map((it, idx) => ({
-      id: `rec-prod-${parsedReceipt.id}-${idx}`,
-      receiptId: parsedReceipt.id,
-      rawName: it.rawName,
-      extractedPrice: it.unitPrice,
-      extractedQuantity: it.quantity,
-      category: it.category,
-      targetSearchStatus: 'pending' as const,
-      matchedProductId: it.matchedProductId,
-      searchAttempts: 0,
-      createdAt: new Date().toISOString()
-    }));
-    StorageService.addReceiptProducts(discoveryCandidates);
-
-    onReceiptSaved(parsedReceipt);
-    setSaveSuccess(true);
+  const handleConfirmAndSave = async () => {
+    if (!parsedReceipt || isSaving) return;
+    setIsSaving(true);
+    setScanError(null);
+    try {
+      await onReceiptSaved(parsedReceipt);
+      setSaveSuccess(true);
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : 'Bonul nu a putut fi salvat.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
 
@@ -612,16 +603,18 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
           <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
             <button
               onClick={() => setParsedReceipt(null)}
-              className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-semibold transition-colors"
+              disabled={isSaving}
+              className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-semibold transition-colors disabled:opacity-50"
             >
               Anulează
             </button>
             <button
               onClick={handleConfirmAndSave}
-              className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all"
+              disabled={isSaving}
+              className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all disabled:cursor-wait disabled:opacity-60"
             >
               <Check className="w-4 h-4 stroke-[3]" />
-              <span>Confirmă și Salvează în Istoric</span>
+              <span>{isSaving ? 'Se salvează…' : 'Confirmă și Salvează în Istoric'}</span>
             </button>
           </div>
         </div>

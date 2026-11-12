@@ -13,7 +13,6 @@ import {
   ShoppingBag
 } from 'lucide-react';
 import { Receipt } from '../types.js';
-import { StorageService } from '../services/StorageService.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 import { STORES } from '../data/mockData.js';
 
@@ -44,7 +43,6 @@ export const ReceiptHistoryView: React.FC<ReceiptHistoryViewProps> = ({
   const handleDeleteReceipt = (receiptId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm('Sigur vrei să ștergi acest bon fiscal din istoric?')) {
-      StorageService.deleteReceipt(receiptId);
       const updated = receipts.filter(r => r.id !== receiptId);
       onUpdateReceipts(updated);
       if (selectedReceipt?.id === receiptId) {

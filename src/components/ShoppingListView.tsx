@@ -93,7 +93,6 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   // Helper to save current lists
   const saveLists = (updatedLists: ShoppingList[]) => {
     onUpdateLists(updatedLists);
-    StorageService.saveShoppingLists(updatedLists);
   };
 
   // Add catalog product to active list
@@ -108,7 +107,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       );
     } else {
       const newItem: ShoppingListItem = {
-        id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        id: crypto.randomUUID(),
         productId: product.id,
         name: product.name,
         brand: product.brand,
@@ -136,7 +135,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
     if (!customName.trim()) return;
 
     const newItem: ShoppingListItem = {
-      id: `item-custom-${Date.now()}`,
+      id: crypto.randomUUID(),
       name: customName.trim(),
       brand: customBrand.trim() || undefined,
       category: customCategory,
@@ -220,9 +219,9 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   // Duplicate list
   const handleDuplicateList = () => {
     const duplicated: ShoppingList = {
-      id: `list-${Date.now()}`,
+      id: crypto.randomUUID(),
       name: `${activeList.name} (Copie)`,
-      items: activeList.items.map(i => ({ ...i, id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`, checked: false })),
+      items: activeList.items.map(i => ({ ...i, id: crypto.randomUUID(), checked: false })),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -236,7 +235,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
     e.preventDefault();
     if (!newListName.trim()) return;
     const newList: ShoppingList = {
-      id: `list-${Date.now()}`,
+      id: crypto.randomUUID(),
       name: newListName.trim(),
       items: [],
       createdAt: new Date().toISOString(),

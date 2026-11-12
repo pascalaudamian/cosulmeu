@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   TrendingDown,
   TrendingUp,
@@ -23,13 +23,17 @@ import { PRODUCTS, STORES } from '../data/mockData.js';
 
 interface PriceHistoryViewProps {
   alerts: PriceAlert[];
+  trackedProductIds: string[];
   onUpdateAlerts: (alerts: PriceAlert[]) => void;
+  onUpdateTrackedProductIds: (productIds: string[]) => void;
   onSelectProductForDetails?: (product: Product) => void;
 }
 
 export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
   alerts,
+  trackedProductIds,
   onUpdateAlerts,
+  onUpdateTrackedProductIds,
   onSelectProductForDetails
 }) => {
   const [selectedProductId, setSelectedProductId] = useState<string>('prod-lapte-1');
@@ -39,7 +43,11 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
   const [targetAlertPrice, setTargetAlertPrice] = useState<number>(6.00);
 
   const allProducts = useMemo(() => StorageService.getAllProducts(), []);
-  const trackedProductIds = useMemo(() => StorageService.getTrackedProducts(), []);
+  const [trackedList, setTrackedList] = useState<string[]>(trackedProductIds);
+
+  useEffect(() => {
+    setTrackedList(trackedProductIds);
+  }, [trackedProductIds]);
 
   // Filter products by search
   const filteredProducts = useMemo(() => {
@@ -63,10 +71,12 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
   }, [stats.historyPoints, timeframeDays]);
 
   // Handle toggle tracked product
-  const [trackedList, setTrackedList] = useState<string[]>(trackedProductIds);
   const handleToggleTracked = (productId: string) => {
-    const isNowTracked = StorageService.toggleTrackedProduct(productId);
-    setTrackedList(StorageService.getTrackedProducts());
+    const nextTrackedList = trackedList.includes(productId)
+      ? trackedList.filter(id => id !== productId)
+      : [...trackedList, productId];
+    setTrackedList(nextTrackedList);
+    onUpdateTrackedProductIds(nextTrackedList);
   };
 
   // Handle add price alert
@@ -75,7 +85,7 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
     if (targetAlertPrice <= 0) return;
 
     const newAlert: PriceAlert = {
-      id: `alt-${Date.now()}`,
+      id: crypto.randomUUID(),
       productId: selectedProduct.id,
       productName: `${selectedProduct.name} (${selectedProduct.brand})`,
       targetPrice: targetAlertPrice,
@@ -87,14 +97,12 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
     const updated = [newAlert, ...alerts];
     onUpdateAlerts(updated);
-    StorageService.savePriceAlerts(updated);
     setShowAddAlertModal(false);
   };
 
   const handleDeleteAlert = (alertId: string) => {
     const updated = alerts.filter(a => a.id !== alertId);
     onUpdateAlerts(updated);
-    StorageService.savePriceAlerts(updated);
   };
 
   // SVG Chart Calculation
