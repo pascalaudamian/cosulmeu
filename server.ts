@@ -2745,6 +2745,50 @@ app.post('/api/admin/catalog-importer/publish-validated', requireAdminAuth, asyn
   }
 });
 
+// Șterge doar ofertele din staging care nu au fost publicate.
+app.post('/api/admin/catalog-importer/staging/cleanup', requireAdminAuth, async (req, res) => {
+  try {
+    const rawOfferIds = req.body?.offerIds;
+    if (!Array.isArray(rawOfferIds) || rawOfferIds.length === 0 || rawOfferIds.length > 5000) {
+      return res.status(400).json({ error: 'Selectați între 1 și 5000 de oferte pentru curățare.' });
+    }
+
+    const offerIds = Array.from(new Set(rawOfferIds.filter(
+      (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 128
+    )));
+    if (offerIds.length === 0) {
+      return res.status(400).json({ error: 'Nu au fost furnizate identificatori de ofertă valizi.' });
+    }
+
+    const databasePool = getPool();
+    const deletedIds = databasePool
+      ? await DatabaseService.deleteUnpublishedCatalogExtractedOffers(offerIds)
+      : StorageService.deleteUnpublishedCatalogExtractedOffers(offerIds);
+    if (databasePool) {
+      StorageService.removeCatalogExtractedOffersByIds(deletedIds);
+    }
+
+    await DatabaseService.logAdminActivity({
+      userEmail: (req.body?.userEmail as string) || 'admin@cosulmeu.ro',
+      action: 'cleanup_unpublished_staging_offers',
+      targetType: 'staging_offers',
+      targetId: deletedIds.slice(0, 5).join(',') || undefined,
+      details: { requestedCount: offerIds.length, removedCount: deletedIds.length },
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+    });
+
+    res.json({
+      success: true,
+      removedCount: deletedIds.length,
+      message: deletedIds.length
+        ? `${deletedIds.length} oferte nepublicate au fost eliminate doar din staging.`
+        : 'Nu au fost eliminate oferte. Înregistrările publicate sunt protejate.'
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la curățarea ofertelor nepublicate din staging.' });
+  }
+});
+
 // 12. Jurnal rulări import
 app.get('/api/admin/catalog-importer/runs', requireAdminAuth, async (req, res) => {
   try {
