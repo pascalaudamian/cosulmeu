@@ -476,18 +476,18 @@ export class DatabaseService {
         // Seed baseline stores, products, and sources if not present (ON CONFLICT DO NOTHING)
         for (const s of STORES) {
           await client.query(
-            `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, logo_url, store_type, rating, locations_count, sample_address, is_partner)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-             ON CONFLICT (id) DO NOTHING`,
+  `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, logo_url, store_type, rating, locations_count, sample_address, is_partner)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+  ON CONFLICT (id) DO NOTHING`,
             [s.id, s.name, s.slug, s.chain, s.brandColor, s.accentColor, s.logoUrl || null, s.type, s.rating, s.locationsCount, s.sampleAddress, s.isPartner || false]
           );
         }
 
         for (const p of PRODUCTS) {
             await client.query(
-              `INSERT INTO products (id, name, brand, category, default_unit, package_weight_or_volume, package_unit, normalized_unit, barcode, image_url, is_bio, is_romanian_product, base_reference_price)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-               ON CONFLICT (id) DO NOTHING`,
+  `INSERT INTO products (id, name, brand, category, default_unit, package_weight_or_volume, package_unit, normalized_unit, barcode, image_url, is_bio, is_romanian_product, base_reference_price)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+  ON CONFLICT (id) DO NOTHING`,
               [p.id, p.name, p.brand, p.category, p.defaultUnit, p.packageWeightOrVolume, p.packageUnit, p.normalizedUnit, p.barcode || null, p.imageUrl || null, p.isBio || false, p.isRomanianProduct || false, p.baseReferencePrice]
             );
           }
@@ -507,7 +507,7 @@ export class DatabaseService {
             await client.query(
               `INSERT INTO price_observations (id, product_id, store_id, price, date, receipt_id, loyalty_card_used, source)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-  ON CONFLICT (id) DO NOTHING`,
+  ON CONFLICT DO NOTHING`,
   [obs.id, obs.productId, obs.storeId, obs.price, obs.date, obs.receiptId || null, obs.loyaltyCardUsed || false, obs.source]
             );
           }
@@ -515,9 +515,9 @@ export class DatabaseService {
           // Seed data sources
           for (const src of DATA_SOURCES) {
             await client.query(
-              `INSERT INTO data_sources (id, name, type, status, store_id, format, requires_auth, auth_documentation, endpoint_url, description)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-               ON CONFLICT (id) DO NOTHING`,
+  `INSERT INTO data_sources (id, name, type, status, store_id, format, requires_auth, auth_documentation, endpoint_url, description)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  ON CONFLICT (id) DO NOTHING`,
               [src.id, src.name, src.type, src.status, src.storeId || null, src.format || 'csv', src.requiresAuth, src.authDocumentation || null, src.endpointUrl || null, src.description]
             );
           }
@@ -525,9 +525,9 @@ export class DatabaseService {
           // Seed catalog sources
           for (const csrc of INITIAL_CATALOG_SOURCES) {
             await client.query(
-              `INSERT INTO catalog_sources (id, retailer_id, name, catalog_url, format, status, update_frequency_days, auth_required, legal_status_notice)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-               ON CONFLICT (id) DO NOTHING`,
+  `INSERT INTO catalog_sources (id, retailer_id, name, catalog_url, format, status, update_frequency_days, auth_required, legal_status_notice)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+  ON CONFLICT (id) DO NOTHING`,
               [csrc.id, csrc.retailerId, csrc.name, csrc.catalogUrl, csrc.format, csrc.status, csrc.updateFrequencyDays, csrc.authRequired, csrc.legalStatusNotice]
             );
           }
@@ -1474,6 +1474,19 @@ export class DatabaseService {
     }
   }
 
+  static async deleteUnpublishedCatalogExtractedOffers(offerIds: string[]): Promise<string[]> {
+    const pool = getPool();
+    if (!pool || offerIds.length === 0) return [];
+    const result = await pool.query(
+      `DELETE FROM catalog_extracted_offers
+       WHERE id = ANY($1::varchar[])
+         AND UPPER(staging_status) <> 'PUBLISHED'
+       RETURNING id`,
+      [offerIds]
+    );
+    return result.rows.map(row => String(row.id));
+  }
+
   // ==========================================================================
   // SINCRONIZARE INCREMENTALĂ ROBUSTĂ (IDEMPOTENȚĂ, LOCK-URI & PERSISTENȚĂ REALĂ)
   // ==========================================================================
@@ -1594,7 +1607,6 @@ export class DatabaseService {
         }
 
         let canonicalProduct: Product | undefined = undefined;
-        let isNewProduct = false;
 
         // Pas 1: Căutare produs canonic
         // 1.1 După matchedProductId dacă este specificat
@@ -1672,9 +1684,7 @@ export class DatabaseService {
             stats.unchangedProductsCount++;
           }
         } else {
-          // Creare produs canonic nou
-          isNewProduct = true;
-          stats.newProductsCount++;
+          // Create a canonical product, resolving concurrent or within-batch identity collisions safely.
           const { category, subcategory } = mapRetailerCategoryToStandard(item.rawCategory || item.rawTitle);
           const normUnit: 'kg' | 'l' | 'buc' = ['kg', 'g'].includes(item.packageUnit || '')
             ? 'kg'
@@ -1705,12 +1715,13 @@ export class DatabaseService {
             isRomanianProduct: true
           };
 
-          await client.query(
+          const insertResult = await client.query(
             `INSERT INTO products (
               id, name, brand, category, default_unit, package_weight_or_volume,
               package_unit, normalized_unit, barcode, is_romanian_product, base_reference_price
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            ON CONFLICT (id) DO NOTHING`,
+            ON CONFLICT DO NOTHING
+            RETURNING id`,
             [
               newProd.id,
               safeProdTitle,
@@ -1726,8 +1737,41 @@ export class DatabaseService {
             ]
           );
 
-          canonicalProduct = newProd;
-          dbProducts.push(newProd);
+          if (insertResult.rows.length > 0) {
+            stats.newProductsCount++;
+            canonicalProduct = newProd;
+            dbProducts.push(newProd);
+          } else {
+            const existingIdentity = await client.query(
+              `SELECT * FROM products
+               WHERE canonical_product_id IS NULL
+                 AND lower(btrim(name)) = lower(btrim($1))
+                 AND lower(btrim(coalesce(brand, ''))) = lower(btrim($2))
+                 AND package_weight_or_volume = $3
+                 AND lower(btrim(coalesce(package_unit, ''))) = lower(btrim($4))
+                 AND lower(btrim(coalesce(barcode, ''))) = lower(btrim($5))
+               LIMIT 1`,
+              [safeProdTitle, safeBrand, newProd.packageWeightOrVolume, safeUnit, safeBarcode || '']
+            );
+            const existing = existingIdentity.rows[0];
+            if (!existing) throw new Error(`Nu s-a putut rezolva identitatea canonică pentru „${safeProdTitle}”.`);
+            canonicalProduct = {
+              id: existing.id,
+              name: existing.name,
+              brand: existing.brand,
+              category: existing.category,
+              defaultUnit: existing.default_unit,
+              packageWeightOrVolume: parseFloat(existing.package_weight_or_volume),
+              packageUnit: existing.package_unit,
+              normalizedUnit: existing.normalized_unit,
+              barcode: existing.barcode || undefined,
+              baseReferencePrice: parseFloat(existing.base_reference_price),
+              isRomanianProduct: existing.is_romanian_product
+            };
+            stats.identifiedExistingCount++;
+            stats.unchangedProductsCount++;
+            dbProducts.push(canonicalProduct);
+          }
         }
 
         const canonicalId = canonicalProduct.id;
@@ -1825,7 +1869,7 @@ export class DatabaseService {
               id, product_id, store_id, source_id, price, normal_price,
               promo_price, loyalty_price, date, loyalty_card_used, source
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'official_feed')
-            ON CONFLICT (id) DO NOTHING`,
+            ON CONFLICT DO NOTHING`,
             [
               obsId,
               canonicalId,
@@ -1925,7 +1969,7 @@ export class DatabaseService {
                 id, product_id, store_id, source_id, price, normal_price,
                 promo_price, loyalty_price, date, loyalty_card_used, source
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'official_feed')
-  ON CONFLICT (id) DO NOTHING`,
+  ON CONFLICT DO NOTHING`,
               [
                 obsId,
                 canonicalId,
@@ -1988,7 +2032,7 @@ export class DatabaseService {
                 id, product_id, store_id, source_id, price, normal_price,
                 promo_price, loyalty_price, date, loyalty_card_used, source
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'official_feed')
-              ON CONFLICT (id) DO NOTHING`,
+              ON CONFLICT DO NOTHING`,
               [
                 obsId,
                 canonicalId,

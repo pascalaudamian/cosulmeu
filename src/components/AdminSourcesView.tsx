@@ -191,6 +191,9 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   // Execution states
   const [isRunningActive, setIsRunningActive] = useState<boolean>(false);
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
+  const [isCleaningUnpublished, setIsCleaningUnpublished] = useState<boolean>(false);
+  const [publishErrorMessage, setPublishErrorMessage] = useState<string | null>(null);
+  const [cleanupErrorMessage, setCleanupErrorMessage] = useState<string | null>(null);
   const [reviewingOfferIds, setReviewingOfferIds] = useState<Set<string>>(new Set());
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
@@ -558,11 +561,15 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
       if (res.ok) {
         const json = await res.json();
+        setPublishErrorMessage(null);
+        setCleanupErrorMessage(null);
         setPublishPreviewData(json.preview);
         setShowPublishPreview(true);
+      } else {
+        throw new Error('Nu s-a putut genera previzualizarea de publicare.');
       }
     } catch (err: any) {
-      setActionMessage({ type: 'error', text: 'Nu s-a putut genera previzualizarea de publicare.' });
+      setActionMessage({ type: 'error', text: err.message || 'Nu s-a putut genera previzualizarea de publicare.' });
     }
   };
 
@@ -578,25 +585,60 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         method: 'POST',
         body: JSON.stringify({ offerIds: targetOfferIds })
       });
-
-      if (res.ok) {
-        const json = await res.json();
-        setShowPublishPreview(false);
-        setSelectedStagingIds(new Set());
-        setActionMessage({
-          type: 'success',
-          text: json.message || `Au fost publicate ${json.publishedCount} oferte în catalogul public.`
-        });
-        loadDashboard();
-        loadStaging();
-        loadRunsAndErrors();
-        loadAuditLogs();
-        if (onRefreshAll) onRefreshAll();
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Eroare la publicare.');
+      if (json.success !== true) {
+        const message = json.message || json.errors?.join('; ') || 'Publicarea nu a fost confirmată în baza de date.';
+        setPublishErrorMessage(message);
+        setActionMessage({ type: 'error', text: message });
+        await Promise.all([loadDashboard(), loadStaging(), loadRunsAndErrors(), loadAuditLogs()]);
+        return;
       }
+
+      setPublishErrorMessage(null);
+      setCleanupErrorMessage(null);
+      setShowPublishPreview(false);
+      setSelectedStagingIds(new Set());
+      setActionMessage({
+        type: 'success',
+        text: json.message || `Au fost publicate ${json.publishedCount} oferte în catalogul public.`
+      });
+      await Promise.all([loadDashboard(), loadStaging(), loadRunsAndErrors(), loadAuditLogs()]);
+      if (onRefreshAll) onRefreshAll();
     } catch (err: any) {
-      setActionMessage({ type: 'error', text: err.message || 'Eroare la publicare.' });
+      const message = err.message || 'Eroare la publicare.';
+      setPublishErrorMessage(message);
+      setActionMessage({ type: 'error', text: message });
     } finally {
       setIsPublishing(false);
+    }
+  };
+
+  const handleCleanUnpublished = async () => {
+    const offerIds = publishPreviewData?.cleanupOfferIds || [];
+    if (offerIds.length === 0 || isCleaningUnpublished) return;
+    setIsCleaningUnpublished(true);
+    setCleanupErrorMessage(null);
+    try {
+      const res = await fetchWithAuth('/api/admin/catalog-importer/staging/cleanup', {
+        method: 'POST',
+        body: JSON.stringify({ offerIds })
+      });
+      const json = await res.json();
+      if (!res.ok || json.success !== true) throw new Error(json.error || 'Nu s-au putut curăța ofertele din staging.');
+
+      setCleanupErrorMessage(null);
+      setShowPublishPreview(false);
+      setSelectedStagingIds(new Set());
+      setActionMessage({ type: json.removedCount > 0 ? 'success' : 'info', text: json.message });
+      await Promise.all([loadDashboard(), loadStaging(), loadRunsAndErrors(), loadAuditLogs()]);
+      if (onRefreshAll) onRefreshAll();
+    } catch (err: any) {
+      const message = err.message || 'Nu s-au putut curăța ofertele din staging.';
+      setCleanupErrorMessage(message);
+      setActionMessage({ type: 'error', text: message });
+    } finally {
+      setIsCleaningUnpublished(false);
     }
   };
 
@@ -2250,8 +2292,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         open={showPublishPreview}
         onClose={() => setShowPublishPreview(false)}
         onConfirm={handleConfirmPublish}
+        onCleanUnpublished={handleCleanUnpublished}
         preview={publishPreviewData}
         isPublishing={isPublishing}
+        isCleaning={isCleaningUnpublished}
+        publishErrorMessage={publishErrorMessage}
+        cleanupErrorMessage={cleanupErrorMessage}
       />
 
       {/* 2. Product Detail Drawer / Modal (Requirement 9) */}

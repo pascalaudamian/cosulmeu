@@ -1014,6 +1014,25 @@ export class StorageService {
     this.saveCatalogExtractedOffers(Array.from(map.values()));
   }
 
+  static removeCatalogExtractedOffersByIds(offerIds: string[]): number {
+    if (offerIds.length === 0) return 0;
+    const ids = new Set(offerIds);
+    const offers = this.getCatalogExtractedOffers();
+    const remainingOffers = offers.filter(offer => !ids.has(offer.id));
+    this.saveCatalogExtractedOffers(remainingOffers);
+    return offers.length - remainingOffers.length;
+  }
+
+  static deleteUnpublishedCatalogExtractedOffers(offerIds: string[]): string[] {
+    const ids = new Set(offerIds);
+    const offers = this.getCatalogExtractedOffers();
+    const deletedIds = offers
+      .filter(offer => ids.has(offer.id) && String(offer.stagingStatus).toUpperCase() !== 'PUBLISHED')
+      .map(offer => offer.id);
+    this.removeCatalogExtractedOffersByIds(deletedIds);
+    return deletedIds;
+  }
+
   static updateCatalogExtractedOffer(id: string, updates: Partial<CatalogExtractedOffer>): CatalogExtractedOffer | null {
     const offers = this.getCatalogExtractedOffers();
     const idx = offers.findIndex(o => o.id === id);

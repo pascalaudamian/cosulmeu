@@ -348,6 +348,7 @@ export class CatalogStagingManager {
     needsReviewCount: number;
     retailersInvolved: string[];
     sampleItems: { id: string; title: string; price: number; retailerId: string; isNewProduct: boolean }[];
+    cleanupOfferIds: string[];
     errors: string[];
   }> {
     const allStaged = isPostgresConfigured()
@@ -422,6 +423,7 @@ export class CatalogStagingManager {
         retailerId: i.retailerId,
         isNewProduct: !i.matchedProductId
       })),
+      cleanupOfferIds: toPublish.map(i => i.id),
       errors
     };
   }
@@ -452,6 +454,8 @@ export class CatalogStagingManager {
     const todayStr = new Date().toISOString().split('T')[0];
     const newOffers: ProductOffer[] = [];
     const newObservations: PriceObservation[] = [];
+    const offersByStagedId = new Map<string, ProductOffer>();
+    const observationsByStagedId = new Map<string, PriceObservation>();
     const errors: string[] = [];
 
     const memOffers = StorageService.getProductOffers();
@@ -514,15 +518,19 @@ export class CatalogStagingManager {
           isRomanianProduct: true
         };
 
-  StorageService.addCustomProduct(newProduct);
+  if (!isPostgresConfigured()) {
+    StorageService.addCustomProduct(newProduct);
+  }
   productsForMatching.push(newProduct);
   item.matchedProductId = newProductId;
         item.matchedProductName = newProduct.name;
-        StorageService.updateCatalogExtractedOffer(item.id, {
-          matchedProductId: newProductId,
-          matchedProductName: newProduct.name,
-          updatedAt: new Date().toISOString()
-        });
+        if (!isPostgresConfigured()) {
+          StorageService.updateCatalogExtractedOffer(item.id, {
+            matchedProductId: newProductId,
+            matchedProductName: newProduct.name,
+            updatedAt: new Date().toISOString()
+          });
+        }
       }
 
       const offerKey = `${item.matchedProductId}__${item.retailerId}`;
@@ -555,6 +563,7 @@ export class CatalogStagingManager {
       };
 
       newOffers.push(offer);
+      offersByStagedId.set(item.id, offer);
 
       // Adăugare observație istorică append-only
       const obs: PriceObservation = {
@@ -571,19 +580,26 @@ export class CatalogStagingManager {
       };
 
       newObservations.push(obs);
+      observationsByStagedId.set(item.id, obs);
 
-      // Marcare ofertă ca PUBLISHED
-      StorageService.updateCatalogExtractedOffer(item.id, {
-        stagingStatus: 'PUBLISHED',
-        updatedAt: new Date().toISOString()
-      });
     }
 
-    // Persistență în StorageService (memorie / local)
-    StorageService.upsertProductOffers(newOffers);
-    StorageService.addPriceObservations(newObservations);
-
     const perRetailerResults: Record<string, { published: number; errors: string[] }> = {};
+    let publishedCount = 0;
+
+    if (!isPostgresConfigured()) {
+      for (const item of toPublish) {
+        if (Number.isFinite(item.effectivePrice) && item.effectivePrice > 0) {
+          StorageService.updateCatalogExtractedOffer(item.id, {
+            stagingStatus: 'PUBLISHED',
+            updatedAt: new Date().toISOString()
+          });
+          publishedCount++;
+        }
+      }
+      StorageService.upsertProductOffers(newOffers.filter(offer => offer.price > 0));
+      StorageService.addPriceObservations(newObservations.filter(observation => observation.price > 0));
+    }
 
     // Persistență în PostgreSQL dacă este configurat și conectat
     if (isPostgresConfigured()) {
@@ -607,11 +623,38 @@ export class CatalogStagingManager {
           });
 
           perRetailerResults[retailerId] = {
-            published: syncRes.stats?.publishedCount ?? (syncRes.success ? retailerOffers.length : 0),
-            errors: syncRes.stats?.errors ?? []
+            published: syncRes.success ? syncRes.stats.publishedCount : 0,
+            errors: syncRes.stats.errors ?? []
           };
 
-          if (!syncRes.success && syncRes.stats.errors.length > 0) {
+          if (syncRes.success) {
+            const publishedItems = retailerOffers.filter(item => Number.isFinite(item.effectivePrice) && item.effectivePrice > 0);
+            publishedCount += syncRes.stats.publishedCount;
+            if (syncRes.stats.publishedCount !== publishedItems.length) {
+              errors.push(`${retailerId}: baza de date a confirmat ${syncRes.stats.publishedCount} din ${publishedItems.length} oferte eligibile.`);
+              continue;
+            }
+            const publishedOffers: ProductOffer[] = [];
+            const publishedObservations: PriceObservation[] = [];
+            for (const item of publishedItems) {
+              StorageService.updateCatalogExtractedOffer(item.id, {
+                stagingStatus: 'PUBLISHED',
+                updatedAt: new Date().toISOString()
+              });
+              if (!item.matchedProductId) continue;
+              const offer = offersByStagedId.get(item.id);
+              const observation = observationsByStagedId.get(item.id);
+              if (!offer || !observation) continue;
+              const currentOffer = existingOfferMap.get(`${item.matchedProductId}__${retailerId}`);
+              offer.productId = item.matchedProductId;
+              offer.id = currentOffer?.id || `off-${retailerId}-${item.matchedProductId}`;
+              observation.productId = item.matchedProductId;
+              publishedOffers.push(offer);
+              publishedObservations.push(observation);
+            }
+            StorageService.upsertProductOffers(publishedOffers);
+            StorageService.addPriceObservations(publishedObservations);
+          } else if (syncRes.stats.errors.length > 0) {
             errors.push(...syncRes.stats.errors);
           }
         }
@@ -620,7 +663,7 @@ export class CatalogStagingManager {
       }
     }
 
-    return { publishedCount: newOffers.length, errors, perRetailerResults };
+    return { publishedCount, errors, perRetailerResults };
   }
 
   /**
