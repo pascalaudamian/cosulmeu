@@ -109,6 +109,10 @@ export interface RetailerConfig {
   format: string;
   defaultStatus: 'ACTIVE' | 'BLOCKED';
   color: string;
+  chain?: string;
+  type?: Store['type'];
+  brandColor?: string;
+  accentColor?: string;
 }
 
 const ALL_8_RETAILERS: RetailerConfig[] = [
@@ -218,6 +222,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     retailerName: string;
   } | null>(null);
   const [showAddRetailerModal, setShowAddRetailerModal] = useState<boolean>(false);
+  const [editingRetailer, setEditingRetailer] = useState<RetailerConfig | null>(null);
 
   // Helper fetch with Bearer token
   const fetchWithAuth = useCallback(async (url: string, options: RequestInit = {}) => {
@@ -1251,7 +1256,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowAddRetailerModal(true)}
+                onClick={() => {
+                  setEditingRetailer(null);
+                  setShowAddRetailerModal(true);
+                }}
                 className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs shadow-2xs flex items-center gap-1.5 cursor-pointer transition-all hover:border-emerald-300"
               >
                 <PlusCircle className="w-3.5 h-3.5 text-emerald-600" />
@@ -1315,6 +1323,19 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     </div>
 
                     <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        aria-label={`Editează ${retailer.name}`}
+                        title={`Editează ${retailer.name}`}
+                        onClick={e => {
+                          e.stopPropagation();
+                          setEditingRetailer(retailer);
+                          setShowAddRetailerModal(true);
+                        }}
+                        className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50 transition-colors"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
                       {!isBlocked && (
                         <button
                           onClick={e => {
@@ -2384,18 +2405,28 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       {/* 6. Modal Definire Retailer Nou */}
       <AdminAddRetailerModal
         open={showAddRetailerModal}
-        onClose={() => setShowAddRetailerModal(false)}
+        retailer={editingRetailer}
+        onClose={() => {
+          setShowAddRetailerModal(false);
+          setEditingRetailer(null);
+        }}
         fetchWithAuth={fetchWithAuth}
-        onSaved={(newRetailer, _initialSource) => {
+        onSaved={(savedRetailer, _initialSource) => {
+          setRetailersList(current => current.map(retailer =>
+            retailer.id === savedRetailer.id ? { ...retailer, ...savedRetailer } : retailer
+          ));
           loadRetailers();
           loadSources();
           loadDashboard();
-          setExpandedRetailers(prev => new Set(prev).add(newRetailer.id));
+          setExpandedRetailers(prev => new Set(prev).add(savedRetailer.id));
           setActionMessage({
             type: 'success',
-            text: `Retailerul "${newRetailer.name}" a fost salvat și adăugat cu succes!`
+            text: editingRetailer
+              ? `Retailerul "${savedRetailer.name}" a fost actualizat cu succes!`
+              : `Retailerul "${savedRetailer.name}" a fost salvat și adăugat cu succes!`
           });
           setShowAddRetailerModal(false);
+          setEditingRetailer(null);
         }}
       />
 

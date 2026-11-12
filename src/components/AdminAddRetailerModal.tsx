@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   Store as StoreIcon,
@@ -13,11 +13,23 @@ import {
 } from 'lucide-react';
 import { CatalogSource } from '../indexing/catalog/catalogTypes.js';
 
+type RetailerStoreType = 'supermarket' | 'hypermarket' | 'discounter' | 'proximity';
+
+interface AdminRetailerRecord {
+  id: string;
+  name: string;
+  chain?: string;
+  type?: RetailerStoreType;
+  color?: string;
+  brandColor?: string;
+}
+
 interface AdminAddRetailerModalProps {
   open: boolean;
   onClose: () => void;
   onSaved: (retailer: any, initialSource?: CatalogSource) => void;
   fetchWithAuth: (url: string, options?: RequestInit) => Promise<Response>;
+  retailer?: AdminRetailerRecord | null;
 }
 
 const COLOR_OPTIONS = [
@@ -37,7 +49,8 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
   open,
   onClose,
   onSaved,
-  fetchWithAuth
+  fetchWithAuth,
+  retailer = null
 }) => {
   const [name, setName] = useState<string>('');
   const [id, setId] = useState<string>('');
@@ -57,11 +70,43 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!open) return;
+
+    if (retailer) {
+      const rawColor = retailer.color || retailer.brandColor?.replace(/^bg-/, '') || 'emerald';
+      const normalizedColor = rawColor.replace(/-\d{3}$/, '');
+      setName(retailer.name);
+      setId(retailer.id);
+      setIsCustomId(false);
+      setChain(retailer.chain || '');
+      setStoreType(retailer.type || 'supermarket');
+      setColor(COLOR_OPTIONS.some(option => option.id === normalizedColor) ? normalizedColor : 'emerald');
+      setHasInitialSource(false);
+    } else {
+      setName('');
+      setId('');
+      setIsCustomId(false);
+      setChain('');
+      setFormat('HTML & PDF');
+      setStoreType('supermarket');
+      setDefaultStatus('ACTIVE');
+      setColor('emerald');
+      setHasInitialSource(true);
+      setSourceName('');
+      setCatalogUrl('');
+      setSourceFormat('html');
+    }
+
+    setErrorMessage(null);
+    setIsSaving(false);
+  }, [open, retailer]);
+
   if (!open) return null;
 
   const handleNameChange = (val: string) => {
     setName(val);
-    if (!isCustomId) {
+    if (!isCustomId && !retailer) {
       const generatedSlug = val
         .toLowerCase()
         .replace(/[^a-z0-9]/g, '-')
@@ -85,7 +130,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
       return;
     }
 
-    if (hasInitialSource && catalogUrl.trim()) {
+    if (!retailer && hasInitialSource && catalogUrl.trim()) {
       try {
         new URL(catalogUrl.trim());
       } catch {
@@ -98,26 +143,37 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
     setErrorMessage(null);
 
     try {
-      const payload = {
-        id: id.trim().toLowerCase(),
-        name: name.trim(),
-        chain: chain.trim() || name.trim(),
-        format,
-        storeType,
-        defaultStatus,
-        color,
-        catalogUrl: hasInitialSource ? catalogUrl.trim() : undefined,
-        sourceName: hasInitialSource ? (sourceName.trim() || `Catalog ${name.trim()}`) : undefined
-      };
+      const payload = retailer
+        ? {
+            name: name.trim(),
+            chain: chain.trim() || name.trim(),
+            storeType,
+            color
+          }
+        : {
+            id: id.trim().toLowerCase(),
+            name: name.trim(),
+            chain: chain.trim() || name.trim(),
+            format,
+            storeType,
+            defaultStatus,
+            color,
+            catalogUrl: hasInitialSource ? catalogUrl.trim() : undefined,
+            sourceName: hasInitialSource ? (sourceName.trim() || `Catalog ${name.trim()}`) : undefined,
+            sourceFormat
+          };
 
-      const res = await fetchWithAuth('/api/admin/retailers', {
-        method: 'POST',
+      const endpoint = retailer
+        ? `/api/admin/retailers/${encodeURIComponent(retailer.id)}`
+        : '/api/admin/retailers';
+      const res = await fetchWithAuth(endpoint, {
+        method: retailer ? 'PUT' : 'POST',
         body: JSON.stringify(payload)
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || 'Eroare la crearea retailerului.');
+        throw new Error(data.error || (retailer ? 'Eroare la actualizarea retailerului.' : 'Eroare la crearea retailerului.'));
       }
 
       onSaved(data.retailer, data.source);
@@ -140,10 +196,12 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-extrabold text-slate-900">
-                Definire Retailer Nou
+                {retailer ? 'Editează Retailer' : 'Definire Retailer Nou'}
               </h3>
               <p className="text-xs text-slate-500">
-                Configurează un nou lanț de magazine pentru monitorizare și import de cataloage.
+                {retailer
+                  ? 'Actualizează datele retailerului; ID-ul rămâne neschimbat pentru a păstra ofertele și sursele existente.'
+                  : 'Configurează un nou lanț de magazine pentru monitorizare și import de cataloage.'}
               </p>
             </div>
           </div>
@@ -181,20 +239,24 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between">
+              <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between gap-2">
                 <span>Identificator (Slug) *</span>
-                <button
-                  type="button"
-                  onClick={() => setIsCustomId(!isCustomId)}
-                  className="text-[10px] text-emerald-600 hover:underline font-semibold"
-                >
-                  {isCustomId ? 'Generare auto' : 'Modifică manual'}
-                </button>
+                {retailer ? (
+                  <span className="text-[10px] font-medium text-slate-500">Păstrat pentru legăturile existente</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsCustomId(!isCustomId)}
+                    className="text-[10px] text-emerald-600 hover:underline font-semibold"
+                  >
+                    {isCustomId ? 'Generare auto' : 'Modifică manual'}
+                  </button>
+                )}
               </label>
               <input
                 type="text"
                 value={id}
-                disabled={!isCustomId}
+                disabled={!isCustomId || Boolean(retailer)}
                 onChange={e => setId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
                 placeholder="selgros"
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white disabled:bg-slate-50 text-slate-800 font-mono text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
@@ -235,6 +297,32 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             </div>
           </div>
 
+          <div>
+            <label className="block font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+              <Palette className="w-3.5 h-3.5 text-slate-500" />
+              <span>Culoare Identitate Brand</span>
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              {COLOR_OPTIONS.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setColor(c.id)}
+                  title={c.label}
+                  aria-label={c.label}
+                  aria-pressed={color === c.id}
+                  className={`w-7 h-7 rounded-xl ${c.bg} transition-all transform cursor-pointer flex items-center justify-center text-white ${
+                    color === c.id ? `ring-2 ring-offset-2 ${c.ring} scale-110 shadow-sm` : 'opacity-80 hover:opacity-100 hover:scale-105'
+                  }`}
+                >
+                  {color === c.id && <CheckCircle2 className="w-4 h-4" />}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {!retailer && (
+          <>
           {/* Format & Status */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -266,29 +354,6 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                 <option value="ACTIVE">ACTIV & OPERAȚIONAL</option>
                 <option value="BLOCKED">BLOCKED (Necesită verificare WAF)</option>
               </select>
-            </div>
-          </div>
-
-          {/* Color Palette */}
-          <div>
-            <label className="block font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-              <Palette className="w-3.5 h-3.5 text-slate-500" />
-              <span>Culoare Identitate Brand</span>
-            </label>
-            <div className="flex flex-wrap items-center gap-2">
-              {COLOR_OPTIONS.map(c => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setColor(c.id)}
-                  title={c.label}
-                  className={`w-7 h-7 rounded-xl ${c.bg} transition-all transform cursor-pointer flex items-center justify-center text-white ${
-                    color === c.id ? `ring-2 ring-offset-2 ${c.ring} scale-110 shadow-sm` : 'opacity-80 hover:opacity-100 hover:scale-105'
-                  }`}
-                >
-                  {color === c.id && <CheckCircle2 className="w-4 h-4" />}
-                </button>
-              ))}
             </div>
           </div>
 
@@ -357,6 +422,9 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             )}
           </div>
 
+          </>
+          )}
+
           {/* Footer Actions */}
           <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
             <button
@@ -372,8 +440,8 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
               disabled={isSaving}
               className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{isSaving ? 'Se creează…' : 'Creează Retailer'}</span>
+              {retailer ? <Save className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+              <span>{isSaving ? 'Se salvează…' : retailer ? 'Salvează Retailer' : 'Creează Retailer'}</span>
             </button>
           </div>
         </form>
