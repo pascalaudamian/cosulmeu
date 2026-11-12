@@ -123,12 +123,14 @@ export class PriceComparisonService {
     items: ShoppingListItem[],
     options?: { useLoyaltyCards?: boolean },
     customProducts?: Product[],
-    customOffers?: ProductOffer[]
+    customOffers?: ProductOffer[],
+    customStores?: Store[]
   ): BasketStoreComparison[] {
     if (!items || items.length === 0) return [];
 
-    const allProducts = customProducts && customProducts.length > 0 ? customProducts : StorageService.getAllProducts();
-    const allOffers = customOffers && customOffers.length > 0 ? customOffers : StorageService.getProductOffers();
+    const allProducts = customProducts ?? StorageService.getAllProducts();
+    const allOffers = customOffers ?? StorageService.getProductOffers();
+    const allStores = customStores ?? STORES;
     const userProfile = StorageService.getUserProfile();
 
     const useLoyaltyCards =
@@ -143,7 +145,7 @@ export class PriceComparisonService {
     }));
 
     // For each store, gather matching non-expired offers and calculate totals
-    const comparisons: BasketStoreComparison[] = STORES.map(store => {
+    const comparisons: BasketStoreComparison[] = allStores.map(store => {
       const availableItems: BasketStoreComparison['availableItems'] = [];
       const missingItems: ShoppingListItem[] = [];
       let availableTotal = 0;
@@ -266,12 +268,75 @@ export class PriceComparisonService {
     return comparisons;
   }
 
+  static getPotentialSavingsDetailsForList(
+    items: ShoppingListItem[],
+    customProducts: Product[],
+    customOffers: ProductOffer[],
+    customStores: Store[],
+    useLoyaltyCards = true
+  ): Array<{
+    item: ShoppingListItem;
+    product?: Product;
+    lowestOffer?: ProductOffer;
+    highestOffer?: ProductOffer;
+    lowestStoreName?: string;
+    highestStoreName?: string;
+    cheapestPrice?: number;
+    mostExpensivePrice?: number;
+    savings: number;
+    loyaltyApplied: boolean;
+  }> {
+    const productById = new Map(customProducts.map(product => [product.id, product]));
+    const storeById = new Map(customStores.map(store => [store.id, store]));
+
+    return items.map(item => {
+      const product = item.productId ? productById.get(item.productId) : undefined;
+      if (!product) return { item, savings: 0, loyaltyApplied: false };
+
+      const latestOfferByStore = new Map<string, ProductOffer>();
+      for (const offer of customOffers) {
+        if (
+          offer.productId === product.id &&
+          offer.verificationStatus === 'verified' &&
+          this.isOfferValid(offer) &&
+          !latestOfferByStore.has(offer.storeId)
+        ) {
+          latestOfferByStore.set(offer.storeId, offer);
+        }
+      }
+
+      const prices = Array.from(latestOfferByStore.values()).map(offer => ({
+        offer,
+        ...this.calculateItemCostAtStore(item, product, offer, useLoyaltyCards)
+      })).sort((left, right) => left.price - right.price);
+      if (prices.length === 0) return { item, product, savings: 0, loyaltyApplied: false };
+
+      const lowest = prices[0];
+      const highest = prices[prices.length - 1];
+      return {
+        item,
+        product,
+        lowestOffer: lowest.offer,
+        highestOffer: highest.offer,
+        lowestStoreName: storeById.get(lowest.offer.storeId)?.name || lowest.offer.storeId,
+        highestStoreName: storeById.get(highest.offer.storeId)?.name || highest.offer.storeId,
+        cheapestPrice: lowest.price,
+        mostExpensivePrice: highest.price,
+        savings: Math.max(0, Math.round((highest.price - lowest.price) * 100) / 100),
+        loyaltyApplied: prices.some(price => price.loyaltyApplied)
+      };
+    });
+  }
+
   /**
    * Calculate potential savings summary for active list
    */
   static getPotentialSavingsForList(
     items: ShoppingListItem[],
-    options?: { useLoyaltyCards?: boolean }
+    options?: { useLoyaltyCards?: boolean },
+    customProducts?: Product[],
+    customOffers?: ProductOffer[],
+    customStores?: Store[]
   ): {
     cheapestTotal: number;
     mostExpensiveTotal: number;
@@ -279,7 +344,28 @@ export class PriceComparisonService {
     bestStoreName: string;
     hasLoyaltyDiscount: boolean;
   } {
-    const comparisons = this.compareBasketAcrossStores(items, options);
+    if (customProducts !== undefined && customOffers !== undefined && customStores !== undefined) {
+      const details = this.getPotentialSavingsDetailsForList(
+        items,
+        customProducts,
+        customOffers,
+        customStores,
+        options?.useLoyaltyCards ?? true
+      );
+      const pricedItems = details.filter(detail => detail.cheapestPrice !== undefined);
+      const cheapestTotal = pricedItems.reduce((sum, detail) => sum + (detail.cheapestPrice || 0), 0);
+      const mostExpensiveTotal = pricedItems.reduce((sum, detail) => sum + (detail.mostExpensivePrice || 0), 0);
+      const bestStoreName = pricedItems.find(detail => detail.lowestStoreName)?.lowestStoreName || '-';
+      return {
+        cheapestTotal: Math.round(cheapestTotal * 100) / 100,
+        mostExpensiveTotal: Math.round(mostExpensiveTotal * 100) / 100,
+        maxSavings: Math.round(details.reduce((sum, detail) => sum + detail.savings, 0) * 100) / 100,
+        bestStoreName,
+        hasLoyaltyDiscount: details.some(detail => detail.loyaltyApplied)
+      };
+    }
+
+    const comparisons = this.compareBasketAcrossStores(items, options, customProducts, customOffers, customStores);
     if (comparisons.length === 0) {
       return {
         cheapestTotal: 0,
