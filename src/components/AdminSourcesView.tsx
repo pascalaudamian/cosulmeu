@@ -633,9 +633,9 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   };
 
   // Staging Preview and Publish (Requirement 6)
-  const handleOpenPublishPreview = async () => {
+  const handleOpenPublishPreview = async (offerIds?: string[]) => {
     try {
-      const selectedValidatedIds = stagingOffers
+      const selectedValidatedIds = offerIds ?? stagingOffers
         .filter(offer => selectedStagingIds.has(offer.id) && offer.stagingStatus === 'VALIDATED')
         .map(offer => offer.id);
       const targetOfferIds = selectedValidatedIds.length > 0 ? selectedValidatedIds : undefined;
@@ -662,10 +662,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     if (!publishPreviewData) return;
     setIsPublishing(true);
     try {
-      const selectedValidatedIds = stagingOffers
-        .filter(offer => selectedStagingIds.has(offer.id) && offer.stagingStatus === 'VALIDATED')
-        .map(offer => offer.id);
-      const targetOfferIds = selectedValidatedIds.length > 0 ? selectedValidatedIds : undefined;
+      const targetOfferIds = publishPreviewData.cleanupOfferIds;
       const res = await fetchWithAuth('/api/admin/catalog-importer/publish-validated', {
         method: 'POST',
         body: JSON.stringify({ offerIds: targetOfferIds })
@@ -769,6 +766,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       });
       await Promise.all([loadStaging(), loadDashboard(), loadRunsAndErrors()]);
       if (onRefreshAll) onRefreshAll();
+      if (action === 'approve') await handleOpenPublishPreview(offerIds);
     } catch (error: any) {
       setActionMessage({ type: 'error', text: error.message || 'Eroare la procesarea în masă a ofertelor.' });
     } finally {
@@ -2066,7 +2064,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
             <div className="flex items-center gap-2">
               <button
-                onClick={handleOpenPublishPreview}
+                onClick={() => handleOpenPublishPreview()}
                 disabled={isPublishing || validatedStagingTotal === 0}
                 className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
               >

@@ -3909,9 +3909,10 @@ export class DatabaseService {
         const sampleOfferIds = offerIds.slice(0, 5);
 
         await client.query(
-          `INSERT INTO admin_audit_logs (user_email, action, target_type, target_id, details, ip_address, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+          `INSERT INTO admin_audit_logs (id, user_email, action, target_type, target_id, details, ip_address, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
           [
+            crypto.randomUUID(),
             userEmail,
             action === 'approve' ? 'bulk_approve_staging_offers' : 'bulk_reject_staging_offers',
             'staging_offers',
