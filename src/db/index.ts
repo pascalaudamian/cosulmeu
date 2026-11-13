@@ -3905,6 +3905,8 @@ export class DatabaseService {
           [newStatus, userEmail, action === 'reject' ? (rejectionReason || 'Respins manual în lot de administrator.') : null, offerIds]
         );
         const updatedCount = updateRes.rows.length;
+        const auditTargetId = `bulk:${offerIds.length}`;
+        const sampleOfferIds = offerIds.slice(0, 5);
 
         await client.query(
           `INSERT INTO admin_audit_logs (user_email, action, target_type, target_id, details, ip_address, created_at)
@@ -3913,8 +3915,8 @@ export class DatabaseService {
             userEmail,
             action === 'approve' ? 'bulk_approve_staging_offers' : 'bulk_reject_staging_offers',
             'staging_offers',
-            offerIds.slice(0, 5).join(',') + (offerIds.length > 5 ? ` (+${offerIds.length - 5} others)` : ''),
-            JSON.stringify({ requestedCount: offerIds.length, updatedCount, action, rejectionReason }),
+            auditTargetId,
+            JSON.stringify({ requestedCount: offerIds.length, updatedCount, action, rejectionReason, sampleOfferIds }),
             ipAddress || null
           ]
         );
