@@ -411,6 +411,7 @@ export class DatabaseService {
               created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           );
 
+          ALTER TABLE stores ADD COLUMN IF NOT EXISTS official_url TEXT;
           ALTER TABLE product_offers ADD COLUMN IF NOT EXISTS freshness_score NUMERIC(5,2);
           ALTER TABLE product_offers ADD COLUMN IF NOT EXISTS quality_score NUMERIC(5,2);
           ALTER TABLE product_offers ADD COLUMN IF NOT EXISTS freshness_status VARCHAR(32) DEFAULT 'very_recent';
@@ -1244,6 +1245,117 @@ export class DatabaseService {
   // ==========================================
   // CATALOG IMPORTER DATABASE METHODS
   // ==========================================
+
+  static async getCatalogSources(retailerId?: string): Promise<CatalogSource[]> {
+    const pool = getPool();
+    if (pool) {
+      try {
+        const res = retailerId
+          ? await pool.query(
+              `SELECT cs.id, cs.retailer_id AS "retailerId", COALESCE(s.name, UPPER(cs.retailer_id)) AS "retailerName", cs.name, cs.catalog_url AS "catalogUrl", cs.format, cs.status, cs.update_frequency_days AS "updateFrequencyDays", cs.auth_required AS "authRequired", cs.legal_status_notice AS "legalStatusNotice"
+               FROM catalog_sources cs
+               LEFT JOIN stores s ON s.id = cs.retailer_id
+               WHERE cs.retailer_id = $1
+               ORDER BY cs.name`,
+              [retailerId]
+            )
+          : await pool.query(
+              `SELECT cs.id, cs.retailer_id AS "retailerId", COALESCE(s.name, UPPER(cs.retailer_id)) AS "retailerName", cs.name, cs.catalog_url AS "catalogUrl", cs.format, cs.status, cs.update_frequency_days AS "updateFrequencyDays", cs.auth_required AS "authRequired", cs.legal_status_notice AS "legalStatusNotice"
+               FROM catalog_sources cs
+               LEFT JOIN stores s ON s.id = cs.retailer_id
+               ORDER BY cs.retailer_id, cs.name`
+            );
+        return res.rows.map(r => ({
+          id: r.id,
+          retailerId: r.retailerId,
+          retailerName: r.retailerName || r.retailerId.toUpperCase(),
+          name: r.name,
+          catalogUrl: r.catalogUrl,
+          format: r.format || 'html',
+          status: r.status || 'active',
+          updateFrequencyDays: Number(r.updateFrequencyDays) || 7,
+          authRequired: Boolean(r.authRequired),
+          legalStatusNotice: r.legalStatusNotice || ''
+        }));
+      } catch {
+        // Fallback la Supabase
+      }
+    }
+
+    try {
+      let query = supabase.from('catalog_sources').select('*');
+      if (retailerId) query = query.eq('retailer_id', retailerId);
+      const { data, error } = await query.order('retailer_id', { ascending: true });
+      if (!error && Array.isArray(data) && data.length > 0) {
+        return data.map(r => ({
+          id: r.id,
+          retailerId: r.retailer_id,
+          retailerName: String(r.retailer_id || '').toUpperCase(),
+          name: r.name,
+          catalogUrl: r.catalog_url,
+          format: r.format || 'html',
+          status: r.status || 'active',
+          updateFrequencyDays: r.update_frequency_days || 7,
+          authRequired: Boolean(r.auth_required),
+          legalStatusNotice: r.legal_status_notice || ''
+        }));
+      }
+    } catch {}
+
+    return [];
+  }
+
+  static async saveCatalogSource(source: CatalogSource): Promise<boolean> {
+    const pool = getPool();
+    if (pool) {
+      try {
+        await pool.query(
+          `INSERT INTO catalog_sources (id, retailer_id, name, catalog_url, format, status, update_frequency_days, auth_required, legal_status_notice)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (id) DO UPDATE SET
+             retailer_id = EXCLUDED.retailer_id,
+             name = EXCLUDED.name,
+             catalog_url = EXCLUDED.catalog_url,
+             format = EXCLUDED.format,
+             status = EXCLUDED.status,
+             update_frequency_days = EXCLUDED.update_frequency_days,
+             auth_required = EXCLUDED.auth_required,
+             legal_status_notice = EXCLUDED.legal_status_notice`,
+          [
+            source.id,
+            source.retailerId,
+            source.name,
+            source.catalogUrl,
+            source.format,
+            source.status,
+            source.updateFrequencyDays || 7,
+            Boolean(source.authRequired),
+            source.legalStatusNotice || ''
+          ]
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    try {
+      const { error } = await supabase.from('catalog_sources').upsert({
+        id: source.id,
+        retailer_id: source.retailerId,
+        name: source.name,
+        catalog_url: source.catalogUrl,
+        format: source.format,
+        status: source.status,
+        update_frequency_days: source.updateFrequencyDays || 7,
+        auth_required: Boolean(source.authRequired),
+        legal_status_notice: source.legalStatusNotice || ''
+      }, { onConflict: 'id' });
+      return !error;
+    } catch {
+      return false;
+    }
+  }
 
   static async getCatalogDocuments(): Promise<CatalogDocument[]> {
     const pool = getPool();

@@ -9,6 +9,7 @@ export interface DownloadResult {
   data?: Buffer;
   text?: string;
   contentType?: string;
+  finalUrl?: string;
   sha256?: string;
   fileSizeBytes?: number;
   error?: string;
@@ -20,9 +21,9 @@ export class CatalogDownloader {
   public static readonly DEFAULT_TIMEOUT_MS = 20000; // 20 secunde
 
   /**
-   * Verifică dacă adresa URL este sigură împotriva atacurilor SSRF
+   * Verifică URL-urile publice HTTP(S) și blochează hosturile locale și private.
    */
-  static validateUrlSafety(inputUrl: string): { safe: boolean; reason?: string } {
+  static validatePublicUrlSafety(inputUrl: string): { safe: boolean; reason?: string; hostname?: string } {
     try {
       const parsed = new URL(inputUrl);
 
@@ -82,10 +83,19 @@ export class CatalogDownloader {
         }
       }
 
-      return { safe: true };
+      return { safe: true, hostname: normalizedHostname };
     } catch (err: any) {
       return { safe: false, reason: `URL malformat sau invalid: ${err.message}` };
     }
+  }
+
+  /**
+   * Compatibility wrapper for existing callers that pass legacy domain lists.
+   * All public HTTP(S) domains are accepted; local and private targets remain blocked.
+   */
+  static validateUrlSafety(inputUrl: string, _additionalAllowedDomains?: string[]): { safe: boolean; reason?: string } {
+    const result = this.validatePublicUrlSafety(inputUrl);
+    return result.safe ? { safe: true } : { safe: false, reason: result.reason };
   }
 
   /**
@@ -97,9 +107,10 @@ export class CatalogDownloader {
       timeoutMs?: number;
       maxRetries?: number;
       knownChecksums?: Set<string>;
+      additionalAllowedDomains?: string[];
     } = {}
   ): Promise<DownloadResult> {
-    const safety = this.validateUrlSafety(url);
+    const safety = this.validateUrlSafety(url, options.additionalAllowedDomains);
     if (!safety.safe) {
       return { ok: false, error: safety.reason };
     }
@@ -131,6 +142,14 @@ export class CatalogDownloader {
 
         clearTimeout(timeoutId);
 
+        const finalUrl = response.url || url;
+        if (finalUrl && finalUrl !== url) {
+          const redirectSafety = this.validateUrlSafety(finalUrl, options.additionalAllowedDomains);
+          if (!redirectSafety.safe) {
+            return { ok: false, error: `Redirecționare blocată SSRF: ${redirectSafety.reason}` };
+          }
+        }
+
         if (!response.ok) {
           lastError = `Răspuns HTTP necorespunzător: ${response.status} ${response.statusText}`;
           if (response.status >= 500 && attempt <= maxRetries) {
@@ -138,7 +157,7 @@ export class CatalogDownloader {
             await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500));
             continue;
           }
-          return { ok: false, statusCode: response.status, error: lastError };
+          return { ok: false, statusCode: response.status, finalUrl, error: lastError };
         }
 
         const contentLengthHeader = response.headers.get('content-length');
@@ -167,6 +186,7 @@ export class CatalogDownloader {
             ok: true,
             isDuplicate: true,
             statusCode: response.status,
+            finalUrl,
             sha256,
             fileSizeBytes: buffer.length,
             contentType: response.headers.get('content-type') || 'application/octet-stream'
@@ -179,6 +199,7 @@ export class CatalogDownloader {
         return {
           ok: true,
           statusCode: response.status,
+          finalUrl,
           data: buffer,
           text,
           contentType,
