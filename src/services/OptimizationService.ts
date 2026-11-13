@@ -1,4 +1,4 @@
-import { ShoppingListItem, MultiStoreOptimization, Store, ProductOffer, BasketStoreComparison } from '../types.js';
+import { ShoppingListItem, MultiStoreOptimization, Store, ProductOffer, BasketStoreComparison, Product } from '../types.js';
 import { STORES, PRODUCT_OFFERS, PRODUCTS } from '../data/mockData.js';
 import { PriceComparisonService } from './PriceComparisonService.js';
 import { StorageService } from './StorageService.js';
@@ -11,7 +11,10 @@ export class OptimizationService {
    */
   static optimizeBasket(
     items: ShoppingListItem[],
-    transportCost: number = 6.00
+    transportCost: number = 6.00,
+    customProducts?: Product[],
+    customOffers?: ProductOffer[],
+    customStores?: Store[]
   ): MultiStoreOptimization {
     if (!items || items.length === 0) {
       return {
@@ -26,11 +29,20 @@ export class OptimizationService {
       };
     }
 
-    const comparisons = PriceComparisonService.compareBasketAcrossStores(items);
+    const allProducts = customProducts ?? StorageService.getAllProducts();
+    const allStores = customStores ?? STORES;
+    const comparisons = PriceComparisonService.compareBasketAcrossStores(
+      items,
+      undefined,
+      allProducts,
+      customOffers,
+      allStores
+    );
     const singleStoreWinner = comparisons[0] || null;
     const singleWinnerTotal = singleStoreWinner ? singleStoreWinner.grandTotal : 0;
 
-    const allProducts = StorageService.getAllProducts();
+    const normalizeStoreKey = (val: string) =>
+      (val || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
 
     // Map each item to its absolute lowest available price store
     const itemAssignments: {
@@ -44,7 +56,7 @@ export class OptimizationService {
       const product = PriceComparisonService.findProductForListItem(item, allProducts);
       if (!product) continue;
 
-      const offers = PriceComparisonService.getOffersForProduct(product.id);
+      const offers = PriceComparisonService.getOffersForProduct(product.id, false, customOffers);
       if (offers.length === 0) continue;
 
       let bestOffer: ProductOffer | null = null;
@@ -65,7 +77,13 @@ export class OptimizationService {
       }
 
       if (bestOffer) {
-        const store = STORES.find(s => s.id === bestOffer.storeId);
+        const offerStoreKey = normalizeStoreKey(bestOffer.storeId);
+        const store = allStores.find(
+          s =>
+            s.id === bestOffer!.storeId ||
+            normalizeStoreKey(s.id) === offerStoreKey ||
+            normalizeStoreKey(s.slug || '') === offerStoreKey
+        );
         if (store) {
           itemAssignments.push({
             item,

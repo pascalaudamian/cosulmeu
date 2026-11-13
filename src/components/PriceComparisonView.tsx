@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Sparkles,
   Split,
@@ -12,7 +12,7 @@ import {
   ArrowRight,
   TrendingDown
 } from 'lucide-react';
-import { ShoppingList, BasketStoreComparison } from '../types.js';
+import { ShoppingList, BasketStoreComparison, Product, ProductOffer, Store as StoreType } from '../types.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 import { StorageService } from '../services/StorageService.js';
 import { MultiStoreOptimizationModal } from './MultiStoreOptimizationModal.js';
@@ -22,22 +22,114 @@ interface PriceComparisonViewProps {
   activeList: ShoppingList;
   onNavigateToList: () => void;
   onViewProductDetail?: (productId: string) => void;
+  catalogProducts?: Product[];
+  catalogOffers?: ProductOffer[];
+  catalogStores?: StoreType[];
 }
+
+const normalizeStoreKey = (value: string): string =>
+  (value || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+
+const canonicalizeStores = (rawStores: StoreType[]): StoreType[] => {
+  const byKey = new Map<string, StoreType>();
+  for (const store of rawStores) {
+    if (!store?.id || store.id === 'validation-only-retailer' || store.slug === 'validation-only-retailer') {
+      continue;
+    }
+    const key = normalizeStoreKey(store.slug || store.id);
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, store);
+    } else if (existing.id !== key && store.id === key) {
+      byKey.set(key, store);
+    }
+  }
+  return Array.from(byKey.values());
+};
 
 export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
   activeList,
   onNavigateToList,
-  onViewProductDetail
+  onViewProductDetail,
+  catalogProducts,
+  catalogOffers,
+  catalogStores
 }) => {
   const [showOptimizationModal, setShowOptimizationModal] = useState(false);
   const [expandedStoreId, setExpandedStoreId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'stores' | 'matrix'>('stores');
+  const [fetchedProducts, setFetchedProducts] = useState<Product[] | null>(null);
+  const [fetchedOffers, setFetchedOffers] = useState<ProductOffer[] | null>(null);
+  const [fetchedStores, setFetchedStores] = useState<StoreType[] | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
 
   const [useLoyaltyCards, setUseLoyaltyCards] = useState<boolean>(() => {
     return StorageService.getUserProfile().useLoyaltyCards ?? true;
   });
 
-  const comparisons = PriceComparisonService.compareBasketAcrossStores(activeList.items, { useLoyaltyCards });
+  const hasProvidedCatalog = Boolean(
+    catalogProducts && catalogProducts.length > 0 && catalogOffers && catalogOffers.length > 0
+  );
+
+  useEffect(() => {
+    if (hasProvidedCatalog || activeList.items.length === 0) return;
+    let cancelled = false;
+    setCatalogLoading(true);
+    Promise.all([
+      fetch('/api/catalog/products').then(r => r.json()).catch(() => null),
+      fetch('/api/catalog/offers').then(r => r.json()).catch(() => null),
+      fetch('/api/stores').then(r => r.json()).catch(() => null)
+    ])
+      .then(([prodRes, offRes, storeRes]) => {
+        if (cancelled) return;
+        if (prodRes?.success && Array.isArray(prodRes.products)) setFetchedProducts(prodRes.products);
+        if (offRes?.success && Array.isArray(offRes.offers)) setFetchedOffers(offRes.offers);
+        if (storeRes?.success && Array.isArray(storeRes.stores)) setFetchedStores(storeRes.stores);
+      })
+      .finally(() => {
+        if (!cancelled) setCatalogLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasProvidedCatalog, activeList.items.length]);
+
+  const products = useMemo(() => {
+    if (catalogProducts && catalogProducts.length > 0) return catalogProducts;
+    if (fetchedProducts && fetchedProducts.length > 0) return fetchedProducts;
+    return StorageService.getAllProducts();
+  }, [catalogProducts, fetchedProducts]);
+
+  const offers = useMemo(() => {
+    if (catalogOffers && catalogOffers.length > 0) return catalogOffers;
+    if (fetchedOffers && fetchedOffers.length > 0) return fetchedOffers;
+    return StorageService.getProductOffers();
+  }, [catalogOffers, fetchedOffers]);
+
+  const stores = useMemo(() => {
+    const raw = (catalogStores && catalogStores.length > 0)
+      ? catalogStores
+      : (fetchedStores && fetchedStores.length > 0 ? fetchedStores : STORES);
+    return canonicalizeStores(raw);
+  }, [catalogStores, fetchedStores]);
+
+  const comparisons = useMemo(
+    () => PriceComparisonService.compareBasketAcrossStores(
+      activeList.items,
+      { useLoyaltyCards },
+      products,
+      offers,
+      stores
+    ),
+    [activeList.items, useLoyaltyCards, products, offers, stores]
+  );
+
+  const matrixStores = useMemo(() => {
+    const withOffers = comparisons.filter(c => c.availableItems.length > 0);
+    const selected = (withOffers.length > 0 ? withOffers : comparisons).slice(0, 6);
+    return selected.map(c => c.store);
+  }, [comparisons]);
 
   if (activeList.items.length === 0) {
     return (
@@ -74,7 +166,11 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
               Comparație Coș Activ • {activeList.name}
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              {winner ? `${winner.store.name} are cel mai ieftin coș!` : 'Comparație prețuri'}
+              {catalogLoading
+                ? 'Se încarcă prețurile actualizate din magazine...'
+                : winner
+                ? `${winner.store.name} are cel mai ieftin coș!`
+                : 'Comparație prețuri'}
             </h1>
             <p className="text-emerald-100/80 text-sm mt-1 max-w-xl">
               Calculat pe baza a {activeList.items.length} articole. Prețurile sunt normalizate la unități de măsură echivalente (lei/kg, lei/l, lei/buc).
@@ -254,7 +350,17 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                             ) : (
                               <div className="w-2 h-2 rounded-full bg-slate-300 shrink-0"></div>
                             )}
-                            <span className="font-semibold text-slate-800 truncate">{item.name}</span>
+                            {item.productId && onViewProductDetail ? (
+                              <button
+                                type="button"
+                                onClick={() => onViewProductDetail(item.productId!)}
+                                className="font-semibold text-slate-800 hover:text-emerald-700 hover:underline truncate text-left"
+                              >
+                                {item.name}
+                              </button>
+                            ) : (
+                              <span className="font-semibold text-slate-800 truncate">{item.name}</span>
+                            )}
                             <span className="text-xs text-slate-500 shrink-0">
                               ({PriceComparisonService.formatQuantity(item.quantity, item.unit)})
                             </span>
@@ -280,7 +386,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                           {comp.missingItems.map(item => (
                             <div key={item.id} className="flex items-center justify-between">
                               <span>• {item.name} ({item.quantity} {item.unit})</span>
-                              <span>Estimat la referință: ~{PriceComparisonService.formatRon((item.estimatedPrice || 10) * item.quantity)}</span>
+                              <span>Estimat la referință: ~{PriceComparisonService.formatRon((item.estimatedPrice || item.referencePrice || 10) * item.quantity)}</span>
                             </div>
                           ))}
                         </div>
@@ -305,7 +411,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
               <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
                 <th className="p-3.5 pl-4">Produs căutat</th>
                 <th className="p-3.5 text-center">Cantitate</th>
-                {STORES.slice(0, 5).map(st => (
+                {matrixStores.map(st => (
                   <th key={st.id} className="p-3.5 text-right font-bold text-slate-800">
                     <div className="flex items-center justify-end gap-1.5">
                       <span className={`w-2.5 h-2.5 rounded-full ${st.brandColor}`}></span>
@@ -319,13 +425,23 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
               {activeList.items.map(item => (
                 <tr key={item.id} className="hover:bg-slate-50/50">
                   <td className="p-3.5 pl-4 font-semibold text-slate-800">
-                    <div>{item.name}</div>
-                    {item.brand && <span className="text-[11px] text-slate-400 font-normal">{item.brand}</span>}
+                    {item.productId && onViewProductDetail ? (
+                      <button
+                        type="button"
+                        onClick={() => onViewProductDetail(item.productId!)}
+                        className="text-left hover:text-emerald-700 hover:underline transition-colors"
+                      >
+                        {item.name}
+                      </button>
+                    ) : (
+                      <div>{item.name}</div>
+                    )}
+                    {item.brand && <span className="block text-[11px] text-slate-400 font-normal">{item.brand}</span>}
                   </td>
                   <td className="p-3.5 text-center text-xs text-slate-500">
                     {PriceComparisonService.formatQuantity(item.quantity, item.unit)}
                   </td>
-                  {STORES.slice(0, 5).map(store => {
+                  {matrixStores.map(store => {
                     const comp = comparisons.find(c => c.store.id === store.id);
                     const itemDetail = comp?.availableItems.find(ai => ai.item.id === item.id);
 
@@ -365,6 +481,9 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
         <MultiStoreOptimizationModal
           items={activeList.items}
           onClose={() => setShowOptimizationModal(false)}
+          products={products}
+          offers={offers}
+          stores={stores}
         />
       )}
     </div>

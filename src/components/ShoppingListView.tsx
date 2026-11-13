@@ -28,6 +28,7 @@ interface ShoppingListViewProps {
   onUpdateLists: (lists: ShoppingList[]) => void;
   onSelectActiveList: (listId: string) => void;
   onCompare: () => void;
+  catalogProducts?: Product[];
 }
 
 const CATEGORIES: ProductCategory[] = [
@@ -50,7 +51,8 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   activeList,
   onUpdateLists,
   onSelectActiveList,
-  onCompare
+  onCompare,
+  catalogProducts
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Toate');
@@ -70,7 +72,10 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   const [customUnit, setCustomUnit] = useState<UnitType>('buc');
   const [customEstPrice, setCustomEstPrice] = useState<number>(10);
 
-  const allCatalogProducts = useMemo(() => StorageService.getAllProducts(), []);
+  const allCatalogProducts = useMemo(
+    () => (catalogProducts && catalogProducts.length > 0 ? catalogProducts : StorageService.getAllProducts()),
+    [catalogProducts]
+  );
 
   // Filter autocomplete suggestions based on search query
   const autocompleteSuggestions = useMemo(() => {

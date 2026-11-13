@@ -26,11 +26,30 @@ import { ProductsView } from './components/ProductsView.js';
 import { ProductDetailView } from './components/ProductDetailView.js';
 
 import { StorageService } from './services/StorageService.js';
-import { ShoppingList, Receipt, UserProfile, PriceAlert } from './types.js';
+import { ShoppingList, Receipt, UserProfile, PriceAlert, Product, ProductOffer, Store } from './types.js';
 import { ShieldCheck, Heart } from 'lucide-react';
 import { useAuth } from './auth/AuthProvider.js';
 import { AuthScreen } from './components/AuthScreen.js';
 import { supabase } from './lib/supabase.js';
+
+const normalizeStoreKey = (value: string): string =>
+  (value || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+
+const canonicalizeStores = (rawStores: Store[]): Store[] => {
+  const byKey = new Map<string, Store>();
+  for (const store of rawStores) {
+    if (!store?.id || store.id === 'validation-only-retailer' || store.slug === 'validation-only-retailer') {
+      continue;
+    }
+    const key = normalizeStoreKey(store.slug || store.id);
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (!existing || (existing.id !== key && store.id === key)) {
+      byKey.set(key, store);
+    }
+  }
+  return Array.from(byKey.values());
+};
 
 export default function App() {
   const { user, loading, signOut } = useAuth();
@@ -66,6 +85,26 @@ export default function App() {
   const [trackedProductIds, setTrackedProductIds] = useState<string[]>(() =>
     StorageService.getTrackedProducts()
   );
+  const [catalogProducts, setCatalogProducts] = useState<Product[]>([]);
+  const [catalogOffers, setCatalogOffers] = useState<ProductOffer[]>([]);
+  const [catalogStores, setCatalogStores] = useState<Store[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      fetch('/api/catalog/products').then(r => r.json()).catch(() => null),
+      fetch('/api/catalog/offers').then(r => r.json()).catch(() => null),
+      fetch('/api/stores').then(r => r.json()).catch(() => null)
+    ]).then(([prodRes, offRes, storeRes]) => {
+      if (cancelled) return;
+      if (prodRes?.success && Array.isArray(prodRes.products)) setCatalogProducts(prodRes.products);
+      if (offRes?.success && Array.isArray(offRes.offers)) setCatalogOffers(offRes.offers);
+      if (storeRes?.success && Array.isArray(storeRes.stores)) setCatalogStores(canonicalizeStores(storeRes.stores));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const localDashboardSnapshot: LocalDashboardSnapshot = {
     receipts,
     shoppingLists,
@@ -272,24 +311,37 @@ export default function App() {
     }
   };
 
-  const handleUpdateShoppingLists = async (nextLists: ShoppingList[]) => {
+  const handleUpdateShoppingLists = async (nextLists: ShoppingList[]): Promise<boolean> => {
     if (!user) {
       setShoppingLists(nextLists);
       StorageService.saveShoppingLists(nextLists);
-      return;
+      if (nextLists.length > 0 && !nextLists.some(l => l.id === activeListId)) {
+        setActiveListId(nextLists[0].id);
+        StorageService.setActiveListId(nextLists[0].id);
+      }
+      return true;
     }
     if (!dashboardData) {
       setDataWriteError('Listele nu au putut fi salvate deoarece datele contului nu sunt încărcate.');
-      return;
+      return false;
     }
     try {
       const savedLists = await saveShoppingListsForUser(user.id, dashboardData.shoppingLists, nextLists);
       await mutateDashboardData(current => current ? { ...current, shoppingLists: savedLists } : current, { revalidate: false });
+      void mutateDashboardData();
       setDataWriteError(null);
-      const selectedList = savedLists.find(list => list.name === activeList.name);
-      if (selectedList) setActiveListId(selectedList.id);
+      const selectedList =
+        savedLists.find(list => list.id === activeList.id) ||
+        savedLists.find(list => list.name === activeList.name) ||
+        savedLists[0];
+      if (selectedList) {
+        setActiveListId(selectedList.id);
+        StorageService.setActiveListId(selectedList.id);
+      }
+      return true;
     } catch (error) {
       setDataWriteError(error instanceof Error ? error.message : 'Lista nu a putut fi sincronizată.');
+      return false;
     }
   };
 
@@ -399,35 +451,101 @@ export default function App() {
     window.history.pushState({}, '', url.toString());
   };
 
-  const handleAddProductToList = (productId: string, productName: string) => {
-    const product = StorageService.getAllProducts().find(item => item.id === productId);
-    if (!product) return;
+  const handleAddProductToList = async (
+    productId: string,
+    productName: string,
+    productData?: Product
+  ): Promise<boolean> => {
     if (user && !dashboardData) {
       setDataWriteError('Așteaptă încărcarea datelor contului înainte de a modifica lista.');
-      return;
+      return false;
     }
+
+    let resolvedProduct: Product | undefined =
+      productData ||
+      catalogProducts.find(item => item.id === productId) ||
+      dashboardData?.products?.find(item => item.id === productId) ||
+      StorageService.getAllProducts().find(item => item.id === productId);
+
+    if (!resolvedProduct) {
+      try {
+        const res = await fetch(`/api/products/${encodeURIComponent(productId)}`);
+        if (res.ok) {
+          const resData = await res.json();
+          if (resData?.success && resData.product) {
+            resolvedProduct = resData.product as Product;
+          }
+        }
+      } catch {
+        // Ignore and use metadata fallback below
+      }
+    }
+
+    if (!resolvedProduct) {
+      resolvedProduct = {
+        id: productId,
+        name: productName,
+        brand: '',
+        category: 'Alte produse',
+        defaultUnit: 'buc',
+        packageWeightOrVolume: 1,
+        packageUnit: 'buc',
+        normalizedUnit: 'buc',
+        baseReferencePrice: 10
+      };
+    } else if (!catalogProducts.some(item => item.id === resolvedProduct!.id)) {
+      setCatalogProducts(prev => [resolvedProduct!, ...prev]);
+    }
+
+    const targetListId = activeList.id === 'list-fallback' ? crypto.randomUUID() : activeList.id;
+    const nowIso = new Date().toISOString();
 
     const updated = screenShoppingLists.map(list => {
       if (list.id !== activeList.id) return list;
+      const existingIndex = list.items.findIndex(item => item.productId === resolvedProduct!.id);
+      const nextItems =
+        existingIndex >= 0
+          ? list.items.map((item, idx) =>
+              idx === existingIndex
+                ? {
+                    ...item,
+                    quantity: item.quantity + 1,
+                    barcode: item.barcode || resolvedProduct!.barcode,
+                    referencePrice: item.referencePrice ?? resolvedProduct!.baseReferencePrice,
+                    estimatedPrice: item.estimatedPrice ?? resolvedProduct!.baseReferencePrice
+                  }
+                : item
+            )
+          : [
+              {
+                id: crypto.randomUUID(),
+                productId: resolvedProduct!.id,
+                name: resolvedProduct!.name || productName,
+                brand: resolvedProduct!.brand,
+                category: resolvedProduct!.category || 'Alte produse',
+                quantity: 1,
+                unit: resolvedProduct!.defaultUnit || 'buc',
+                checked: false,
+                barcode: resolvedProduct!.barcode,
+                referencePrice: resolvedProduct!.baseReferencePrice,
+                estimatedPrice: resolvedProduct!.baseReferencePrice
+              },
+              ...list.items
+            ];
+
       return {
         ...list,
-        items: [
-          ...list.items,
-          {
-            id: crypto.randomUUID(),
-            productId: product.id,
-            name: product.name || productName,
-            brand: product.brand,
-            category: product.category,
-            quantity: 1,
-            unit: product.defaultUnit,
-            checked: false
-          }
-        ],
-        updatedAt: new Date().toISOString()
+        id: targetListId,
+        items: nextItems,
+        updatedAt: nowIso
       };
     });
-    void handleUpdateShoppingLists(updated);
+
+    if (targetListId !== activeList.id) {
+      handleActiveListSelect(targetListId);
+    }
+
+    return handleUpdateShoppingLists(updated);
   };
 
   const handleActiveListSelect = (listId: string) => {
@@ -554,6 +672,7 @@ export default function App() {
             onUpdateLists={handleUpdateShoppingLists}
             onSelectActiveList={handleActiveListSelect}
             onCompare={() => handleSelectTab('compare')}
+            catalogProducts={catalogProducts}
           />
         )}
 
@@ -561,6 +680,10 @@ export default function App() {
           <PriceComparisonView
             activeList={activeList}
             onNavigateToList={() => handleSelectTab('shopping-list')}
+            onViewProductDetail={handleSelectProduct}
+            catalogProducts={catalogProducts}
+            catalogOffers={catalogOffers}
+            catalogStores={catalogStores}
           />
         )}
 

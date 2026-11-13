@@ -42,7 +42,13 @@ export default function AdminPublishScheduler({ adminToken }: Props) {
     const retailerData = await retailerResponse.json();
     if (!scheduleResponse.ok) throw new Error(scheduleData.error || 'Schedulerul nu a putut fi încărcat.');
     setSchedules(scheduleData.schedules || []);
-    setRetailers((retailerData.sources || []).map((source: any) => ({ id: source.retailerId || source.id, name: source.retailerName || source.retailerId || source.id })));
+    const uniqueRetailers = new Map<string, { id: string; name: string }>();
+    for (const source of retailerData.sources || []) {
+      const id = String(source.retailerId || source.id || '').trim();
+      if (!id || uniqueRetailers.has(id)) continue;
+      uniqueRetailers.set(id, { id, name: source.retailerName || id });
+    }
+    setRetailers(Array.from(uniqueRetailers.values()));
   }, [adminToken]);
 
   useEffect(() => { load().catch(error => setMessage(error.message)); }, [load]);

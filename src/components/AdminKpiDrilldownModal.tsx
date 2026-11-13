@@ -102,7 +102,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
     setLoading(true);
     try {
       if (type === 'documents_downloaded' || type === 'documents_discovered') {
-        const url = `/api/admin/catalog-importer/documents?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}&retailer=${retailerFilter !== 'toate' ? retailerFilter : ''}`;
+        const url = `/api/admin/catalog-importer/documents?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}&retailerId=${retailerFilter !== 'toate' ? encodeURIComponent(retailerFilter) : ''}`;
         const res = await fetchAuth(url);
         if (res.ok) {
           const json = await res.json();
@@ -110,7 +110,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
           setTotalCount(json.total || 0);
         }
       } else if (type === 'approved_offers') {
-        const url = `/api/admin/catalog-importer/approved-offers?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}&retailer=${retailerFilter !== 'toate' ? retailerFilter : ''}`;
+        const url = `/api/admin/catalog-importer/approved-offers?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}&retailerId=${retailerFilter !== 'toate' ? encodeURIComponent(retailerFilter) : ''}`;
         const res = await fetchAuth(url);
         if (res.ok) {
           const json = await res.json();
@@ -118,7 +118,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
           setTotalCount(json.total || 0);
         }
       } else if (type === 'published_offers') {
-        const url = `/api/admin/catalog-importer/public-offers?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}&retailer=${retailerFilter !== 'toate' ? retailerFilter : ''}`;
+        const url = `/api/admin/catalog-importer/public-offers?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}&retailerId=${retailerFilter !== 'toate' ? encodeURIComponent(retailerFilter) : ''}`;
         const res = await fetchAuth(url);
         if (res.ok) {
           const json = await res.json();
@@ -126,7 +126,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
           setTotalCount(json.total || 0);
         }
       } else if (type === 'price_changes') {
-        const url = `/api/admin/catalog-importer/price-changes?page=${page}&limit=${limit}&retailer=${retailerFilter !== 'toate' ? retailerFilter : ''}`;
+        const url = `/api/admin/catalog-importer/price-changes?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}&retailerId=${retailerFilter !== 'toate' ? encodeURIComponent(retailerFilter) : ''}`;
         const res = await fetchAuth(url);
         if (res.ok) {
           const json = await res.json();
@@ -134,7 +134,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
           setTotalCount(json.total || 0);
         }
       } else if (type === 'items_without_price') {
-        const url = `/api/admin/catalog-importer/items-without-price?page=${page}&limit=${limit}&retailer=${retailerFilter !== 'toate' ? retailerFilter : ''}`;
+        const url = `/api/admin/catalog-importer/items-without-price?page=${page}&limit=${limit}&search=${encodeURIComponent(search)}&retailerId=${retailerFilter !== 'toate' ? encodeURIComponent(retailerFilter) : ''}`;
         const res = await fetchAuth(url);
         if (res.ok) {
           const json = await res.json();
@@ -157,7 +157,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
         }
       } else if (type === 'recent_products' || type === 'distinct_products') {
         const offset = (page - 1) * limit;
-        const res = await fetchAuth(`/api/admin/products-detailed?limit=${limit}&offset=${offset}&search=${encodeURIComponent(search)}&retailer=${retailerFilter !== 'toate' ? retailerFilter : ''}`);
+        const res = await fetchAuth(`/api/admin/products-detailed?limit=${limit}&offset=${offset}&search=${encodeURIComponent(search)}&retailer=${retailerFilter !== 'toate' ? encodeURIComponent(retailerFilter) : ''}`);
         if (res.ok) {
           const json = await res.json();
           setData(json.products || []);
@@ -205,27 +205,37 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
     }
   };
 
-  if (!open) return null;
-
-  const totalPages = Math.max(1, Math.ceil(totalCount / limit));
-
-  // Filtered in-memory views for Retailers and Sources
-  const filteredRetailers = useMemo(() => {
+  // Filtered in-memory views for Retailers and Sources (keep hooks above early returns)
+  const uniqueRetailers = useMemo(() => {
+    const seen = new Set<string>();
     return retailers.filter(r => {
+      if (!r?.id || seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
+  }, [retailers]);
+
+  const filteredRetailers = useMemo(() => {
+    return uniqueRetailers.filter(r => {
       const matchesSearch = r.name.toLowerCase().includes(search.toLowerCase()) || r.id.includes(search.toLowerCase());
       return matchesSearch;
     });
-  }, [retailers, search]);
+  }, [uniqueRetailers, search]);
 
   const filteredSources = useMemo(() => {
     return sources.filter(s => {
-      if (type === 'sources_active' && s.status !== 'active') return false;
-      if (type === 'sources_blocked' && s.status !== 'blocked') return false;
+      const isBlocked = s.status === 'disabled' || s.status === 'error' || s.retailerId === 'profi' || s.retailerId === 'metro';
+      if (type === 'sources_active' && (s.status !== 'active' || isBlocked)) return false;
+      if (type === 'sources_blocked' && !isBlocked) return false;
       if (retailerFilter !== 'toate' && s.retailerId !== retailerFilter) return false;
-      if (search && !s.name.toLowerCase().includes(search.toLowerCase()) && !s.url.toLowerCase().includes(search.toLowerCase())) return false;
+      if (search && !s.name.toLowerCase().includes(search.toLowerCase()) && !s.catalogUrl.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
     });
   }, [sources, type, retailerFilter, search]);
+
+  if (!open) return null;
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / limit));
 
   // Export CSV
   const handleExportCSV = () => {
@@ -322,7 +332,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
               className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 outline-none"
             >
               <option value="toate">Toți Retailerii</option>
-              {retailers.map(r => (
+              {uniqueRetailers.map(r => (
                 <option key={r.id} value={r.id}>
                   {r.name}
                 </option>
@@ -442,13 +452,14 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {filteredSources.map(source => {
-                        const isBlocked = source.status === 'blocked' || source.retailerId === 'profi' || source.retailerId === 'metro';
+                        const isBlocked = source.status === 'disabled' || source.status === 'error' || source.retailerId === 'profi' || source.retailerId === 'metro';
                         const blockReason =
                           source.retailerId === 'profi'
                             ? 'WAF Cloudflare / Protecție bot activă pe catalogul Profi'
                             : source.retailerId === 'metro'
                             ? 'Akamai Bot Guard pe serverele de cataloage Metro'
-                            : source.errorReason || 'Accesibil normal';
+                            : source.legalStatusNotice || source.notes || 'Accesibil normal';
+                        const lastParsedAt = source.lastCheckedAt || source.lastDiscoveredAt;
 
                         return (
                           <tr key={source.id} className="hover:bg-slate-50/70">
@@ -460,17 +471,17 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                             </td>
                             <td className="p-3">
                               <span className="font-semibold text-slate-700 uppercase text-[10px] bg-slate-100 px-2 py-0.5 rounded">
-                                {source.type || 'HTML'}
+                                {source.format || 'HTML'}
                               </span>
                             </td>
                             <td className="p-3 max-w-[220px] truncate">
                               <a
-                                href={source.url}
+                                href={source.catalogUrl}
                                 target="_blank"
                                 rel="noreferrer"
                                 className="text-emerald-700 hover:underline flex items-center gap-1 font-mono text-[11px]"
                               >
-                                <span className="truncate">{source.url}</span>
+                                <span className="truncate">{source.catalogUrl}</span>
                                 <ExternalLink className="w-3 h-3 shrink-0" />
                               </a>
                             </td>
@@ -484,7 +495,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                               </span>
                             </td>
                             <td className="p-3 text-slate-500 text-[11px]">
-                              {source.lastRunAt ? new Date(source.lastRunAt).toLocaleString('ro-RO') : 'Execuție periodică'}
+                              {lastParsedAt ? new Date(lastParsedAt).toLocaleString('ro-RO') : 'Execuție periodică'}
                             </td>
                             <td className="p-3 text-[11px]">
                               {isBlocked ? (
@@ -495,7 +506,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                             </td>
                             <td className="p-3 text-right whitespace-nowrap">
                               <a
-                                href={source.url}
+                                href={source.catalogUrl}
                                 target="_blank"
                                 rel="noreferrer"
                                 className="px-2.5 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 font-bold text-[10px] inline-flex items-center gap-1"
@@ -529,13 +540,22 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {data.map((doc: any) => (
+                        {data.map((doc: any) => {
+                          const docUrl = doc.documentUrl || doc.document_url || doc.url;
+                          const docRetailer = doc.retailerId || doc.retailer_id;
+                          const docFileSize = doc.fileSizeBytes || doc.file_size_bytes;
+                          const docParseStatus = doc.parseStatus || doc.parse_status || 'parsed';
+                          const docCreatedAt = doc.createdAt || doc.downloaded_at || doc.created_at;
+                          const docExtractedCount = doc.rawExtractedCount ?? doc.extracted_products_count ?? doc.extractedOffersCount ?? 0;
+                          const docChecksum = doc.checksum || doc.sha256Checksum || doc.sha256_checksum;
+
+                          return (
                           <tr key={doc.id} className="hover:bg-slate-50/70">
                             <td className="p-3">
                               <div className="font-extrabold text-slate-900 leading-snug">{doc.title}</div>
                               <div className="flex items-center gap-2 mt-1">
                                 <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-slate-100 text-slate-800">
-                                  {doc.retailer_id || doc.retailerId}
+                                  {docRetailer}
                                 </span>
                                 <span className="text-[10px] font-mono text-slate-400">ID: {doc.id}</span>
                               </div>
@@ -544,47 +564,43 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                               <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-blue-50 text-blue-800 border border-blue-200">
                                 {doc.format || 'HTML'}
                               </span>
-                              {doc.file_size_bytes ? (
+                              {docFileSize ? (
                                 <span className="block text-[10px] text-slate-400 mt-0.5">
-                                  {(doc.file_size_bytes / 1024).toFixed(1)} KB
+                                  {(docFileSize / 1024).toFixed(1)} KB
                                 </span>
                               ) : null}
                             </td>
                             <td className="p-3 text-[11px] text-slate-600">
                               <div className="font-medium">
-                                {doc.downloaded_at
-                                  ? new Date(doc.downloaded_at).toLocaleString('ro-RO')
-                                  : doc.created_at
-                                  ? new Date(doc.created_at).toLocaleString('ro-RO')
-                                  : 'Sincronizat'}
+                                {docCreatedAt ? new Date(docCreatedAt).toLocaleString('ro-RO') : 'Sincronizat'}
                               </div>
                             </td>
                             <td className="p-3">
                               <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  doc.parse_status === 'SUCCESS' || doc.parse_status === 'PARSED'
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                  docParseStatus.toUpperCase() === 'SUCCESS' || docParseStatus.toUpperCase() === 'PARSED'
                                     ? 'bg-emerald-100 text-emerald-800'
-                                    : doc.parse_status === 'ERROR'
+                                    : docParseStatus.toUpperCase() === 'ERROR' || docParseStatus.toUpperCase() === 'FAILED'
                                     ? 'bg-rose-100 text-rose-800'
                                     : 'bg-amber-100 text-amber-800'
                                 }`}
                               >
-                                {doc.parse_status || 'PARSED'}
+                                {docParseStatus}
                               </span>
                             </td>
                             <td className="p-3">
                               <span className="text-emerald-700 font-extrabold text-sm">
-                                {doc.extracted_products_count ?? doc.extractedOffersCount ?? 0} oferte
+                                {docExtractedCount} oferte
                               </span>
                             </td>
-                            <td className="p-3 font-mono text-[10px] text-slate-400 max-w-[120px] truncate" title={doc.checksum || doc.sha256_checksum}>
-                              {doc.checksum || doc.sha256_checksum || 'sha256-verified'}
+                            <td className="p-3 font-mono text-[10px] text-slate-400 max-w-[120px] truncate" title={docChecksum}>
+                              {docChecksum || 'sha256-verified'}
                             </td>
                             <td className="p-3 text-right whitespace-nowrap">
                               <div className="inline-flex items-center gap-1.5">
-                                {doc.url && (
+                                {docUrl && (
                                   <a
-                                    href={doc.url}
+                                    href={docUrl}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="px-2.5 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 font-bold text-[10px] inline-flex items-center gap-1"
@@ -597,7 +613,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                                 <button
                                   onClick={() => {
                                     if (onSelectDocumentFilter) {
-                                      onSelectDocumentFilter(doc.id, doc.retailer_id || doc.retailerId);
+                                      onSelectDocumentFilter(doc.id, docRetailer);
                                       onClose();
                                     }
                                   }}
@@ -619,7 +635,8 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                               </div>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -644,32 +661,34 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {data.map((off: any) => {
-                        const np = Number(off.normal_price || off.normalPrice || 0);
-                        const pp = Number(off.effective_price || off.effectivePrice || off.promo_price || 0);
+                        const np = Number(off.normalPrice ?? off.normal_price ?? 0);
+                        const pp = Number(off.effectivePrice ?? off.effective_price ?? off.promoPrice ?? off.promo_price ?? 0);
                         const disc = np > 0 && pp > 0 && pp < np ? Math.round(((np - pp) / np) * 100) : 0;
+                        const reviewedAt = off.reviewedAt || off.reviewed_at;
+                        const status = off.stagingStatus || off.staging_status || 'APPROVED';
 
                         return (
                           <tr key={off.id} className="hover:bg-slate-50/70">
                             <td className="p-3">
-                              <div className="font-extrabold text-slate-900">{off.raw_title || off.rawTitle}</div>
+                              <div className="font-extrabold text-slate-900">{off.rawTitle || off.raw_title}</div>
                               <div className="text-[10px] text-slate-400">
-                                Brand: {off.raw_brand || off.rawBrand || 'Marcă magazin'} • EAN: {off.raw_barcode || off.rawBarcode || 'Lipsă'}
+                                Brand: {off.rawBrand || off.raw_brand || 'Marcă magazin'} • EAN: {off.rawBarcode || off.raw_barcode || 'Lipsă'}
                               </div>
                             </td>
-                            <td className="p-3 font-bold uppercase text-slate-700">{off.retailer_id || off.retailerId}</td>
+                            <td className="p-3 font-bold uppercase text-slate-700">{off.retailerName || off.retailerId || off.retailer_id}</td>
                             <td className="p-3 text-slate-500">{np > 0 ? `${np.toFixed(2)} lei` : '—'}</td>
                             <td className="p-3 font-extrabold text-emerald-700">{pp > 0 ? `${pp.toFixed(2)} lei` : '—'}</td>
                             <td className="p-3 font-bold text-rose-600">{disc > 0 ? `-${disc}%` : '0%'}</td>
                             <td className="p-3 font-semibold text-slate-800">
-                              {off.matched_product_name || off.matchedProductName || 'Creat automat la aprobare'}
+                              {off.canonicalName || off.matchedProductName || off.matched_product_name || 'Creat automat la publicare'}
                             </td>
                             <td className="p-3 text-[11px] text-slate-500">
-                              {off.reviewed_by || 'admin'} (
-                              {off.reviewed_at ? new Date(off.reviewed_at).toLocaleDateString('ro-RO') : 'Recent'})
+                              {off.reviewedBy || off.reviewed_by || 'admin'} (
+                              {reviewedAt ? new Date(reviewedAt).toLocaleDateString('ro-RO') : 'Recent'})
                             </td>
                             <td className="p-3">
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
-                                {off.staging_status || 'APPROVED'}
+                                {status}
                               </span>
                             </td>
                           </tr>
@@ -680,7 +699,7 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                 </div>
               )}
 
-              {/* 5. OFERTE PUBLICATE (1.643 oferte active în product_offers) */}
+              {/* 5. OFERTE PUBLICATE (oferte active în product_offers) */}
               {type === 'published_offers' && (
                 <div className="overflow-x-auto rounded-2xl border border-slate-200">
                   <table className="w-full text-left text-xs">
@@ -696,34 +715,44 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {data.map((off: any) => (
+                      {data.map((off: any) => {
+                        const prodId = off.productId || off.product_id;
+                        const prodName = off.productName || off.product_name;
+                        const prodBrand = off.productBrand || off.product_brand;
+                        const prodCategory = off.productCategory || off.product_category;
+                        const storeName = off.storeName || off.store_name;
+                        const validUntil = off.validUntil || off.valid_to;
+                        const isPromo = Boolean(off.isPromo ?? off.is_promo);
+                        const isActive = off.isExpired !== undefined ? !off.isExpired : (off.is_active ?? true);
+
+                        return (
                         <tr key={off.id} className="hover:bg-slate-50/70">
                           <td className="p-3">
-                            <div className="font-extrabold text-slate-900">{off.product_name}</div>
+                            <div className="font-extrabold text-slate-900">{prodName}</div>
                             <div className="text-[10px] text-slate-400">
-                              {off.product_brand} • {off.product_category}
+                              {prodBrand} • {prodCategory}
                             </div>
                           </td>
-                          <td className="p-3 font-bold text-slate-700">{off.store_name}</td>
+                          <td className="p-3 font-bold text-slate-700">{storeName}</td>
                           <td className="p-3 font-black text-slate-900">{Number(off.price || 0).toFixed(2)} lei</td>
                           <td className="p-3 font-extrabold text-emerald-700">
-                            {off.is_promotional && off.promotional_price ? `${Number(off.promotional_price).toFixed(2)} lei` : '—'}
+                            {isPromo ? `${Number(off.promotional_price ?? off.price ?? 0).toFixed(2)} lei` : '—'}
                           </td>
                           <td className="p-3 text-[11px] text-slate-500">
-                            {off.valid_to ? `Până la ${new Date(off.valid_to).toLocaleDateString('ro-RO')}` : 'Ofertă curentă'}
+                            {validUntil ? `Până la ${new Date(validUntil).toLocaleDateString('ro-RO')}` : 'Ofertă curentă'}
                           </td>
                           <td className="p-3">
                             <span
                               className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                off.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+                                isActive ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
                               }`}
                             >
-                              {off.is_active ? 'ACTIVĂ' : 'EXPIRATĂ'}
+                              {isActive ? 'ACTIVĂ' : 'EXPIRATĂ'}
                             </span>
                           </td>
                           <td className="p-3 text-right">
                             <a
-                              href={`/#/products?id=${off.product_id}`}
+                              href={`/#/products?id=${prodId}`}
                               target="_blank"
                               rel="noreferrer"
                               className="px-2.5 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 font-bold text-[10px] inline-flex items-center gap-1"
@@ -733,7 +762,8 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                             </a>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -756,15 +786,19 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {data.map((obs: any) => {
-                        const pDiff = Number(obs.price_difference || 0);
+                        const prevPrice = Number(obs.previousPrice ?? obs.previous_price ?? 0);
+                        const curPrice = Number(obs.price ?? obs.observed_price ?? 0);
+                        const pDiff = Number(obs.difference ?? obs.price_difference ?? (prevPrice > 0 ? curPrice - prevPrice : 0));
+                        const pctChange = obs.percentChange ?? obs.percent_change ?? 0;
                         const isReduction = pDiff < 0;
+                        const observedDate = obs.date || obs.observed_at || obs.createdAt;
 
                         return (
                           <tr key={obs.id} className="hover:bg-slate-50/70">
-                            <td className="p-3 font-extrabold text-slate-900">{obs.product_name}</td>
-                            <td className="p-3 font-bold text-slate-700">{obs.store_name}</td>
-                            <td className="p-3 text-slate-500">{Number(obs.previous_price || 0).toFixed(2)} lei</td>
-                            <td className="p-3 font-black text-slate-900">{Number(obs.observed_price || 0).toFixed(2)} lei</td>
+                            <td className="p-3 font-extrabold text-slate-900">{obs.productName || obs.product_name}</td>
+                            <td className="p-3 font-bold text-slate-700">{obs.storeName || obs.store_name}</td>
+                            <td className="p-3 text-slate-500">{prevPrice > 0 ? `${prevPrice.toFixed(2)} lei` : '—'}</td>
+                            <td className="p-3 font-black text-slate-900">{curPrice.toFixed(2)} lei</td>
                             <td className="p-3">
                               <span
                                 className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 w-max ${
@@ -773,15 +807,14 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                               >
                                 {isReduction ? <TrendingDown className="w-3 h-3" /> : <TrendingUp className="w-3 h-3" />}
                                 <span>
-                                  {pDiff > 0 ? `+${pDiff.toFixed(2)}` : pDiff.toFixed(2)} lei (
-                                  {obs.percent_change ? `${Number(obs.percent_change).toFixed(1)}%` : '0%'})
+                                  {pDiff > 0 ? `+${pDiff.toFixed(2)}` : pDiff.toFixed(2)} lei ({Number(pctChange).toFixed(1)}%)
                                 </span>
                               </span>
                             </td>
                             <td className="p-3 text-[11px] text-slate-500">
-                              {new Date(obs.observed_at).toLocaleString('ro-RO')}
+                              {observedDate ? new Date(observedDate).toLocaleString('ro-RO') : '—'}
                             </td>
-                            <td className="p-3 text-[11px] font-mono text-slate-400">{obs.source_type}</td>
+                            <td className="p-3 text-[11px] font-mono text-slate-400">{obs.source || obs.source_type || 'official_feed'}</td>
                           </tr>
                         );
                       })}
@@ -809,23 +842,25 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {data.map((item: any) => (
+                        {data.map((item: any) => {
+                          const retId = item.retailerId || item.retailer_id;
+                          return (
                           <tr key={item.id} className="hover:bg-slate-50/70">
-                            <td className="p-3 font-extrabold text-slate-900">{item.raw_title}</td>
-                            <td className="p-3 font-bold uppercase text-slate-700">{item.retailer_id}</td>
+                            <td className="p-3 font-extrabold text-slate-900">{item.rawTitle || item.raw_title}</td>
+                            <td className="p-3 font-bold uppercase text-slate-700">{retId}</td>
                             <td className="p-3 text-slate-500">
-                              {item.raw_brand || 'Fără brand'} • {item.raw_barcode || 'Fără EAN'}
+                              {item.rawBrand || item.raw_brand || 'Fără brand'} • {item.rawBarcode || item.raw_barcode || 'Fără EAN'}
                             </td>
-                            <td className="p-3 font-mono text-[10px] text-slate-400">{item.document_id}</td>
+                            <td className="p-3 font-mono text-[10px] text-slate-400">{item.documentTitle || item.documentId || item.document_id}</td>
                             <td className="p-3 text-[11px]">
-                              <span className="text-amber-800 font-semibold">{item.reason}</span>
+                              <span className="text-amber-800 font-semibold">{item.reasonDescription || item.reasonTitle || item.reason}</span>
                             </td>
                             <td className="p-3 text-right">
                               <button
                                 onClick={() => {
                                   onClose();
                                   if (onNavigateToStagingWithFilter) {
-                                    onNavigateToStagingWithFilter('no_price', item.retailer_id);
+                                    onNavigateToStagingWithFilter('no_price', retId);
                                   }
                                 }}
                                 className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px]"
@@ -834,7 +869,8 @@ export const AdminKpiDrilldownModal: React.FC<AdminKpiDrilldownModalProps> = ({
                               </button>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

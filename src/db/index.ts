@@ -669,13 +669,54 @@ export class DatabaseService {
 
   // --- STORES ---
   static async getStores(): Promise<Store[]> {
+    const normalizeStoreKey = (value: string): string =>
+      value.toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+
+    const findFallbackStore = (id: string, slug?: string): Store | undefined => {
+      const normalizedId = normalizeStoreKey(id || '');
+      const normalizedSlug = normalizeStoreKey(slug || '');
+      return STORES.find(
+        s =>
+          s.id === id ||
+          (slug && s.slug === slug) ||
+          normalizeStoreKey(s.id) === normalizedId ||
+          (normalizedSlug && normalizeStoreKey(s.slug) === normalizedSlug)
+      );
+    };
+
+    const mergeWithFallbackStores = (rawStores: Store[]): Store[] => {
+      const uniqueById = new Map<string, Store>();
+      for (const store of rawStores) {
+        if (!store?.id || uniqueById.has(store.id)) continue;
+        uniqueById.set(store.id, store);
+      }
+
+      const deduplicated = Array.from(uniqueById.values());
+      const existingIds = new Set(deduplicated.map(s => s.id.toLowerCase()));
+      const existingSlugs = new Set(deduplicated.map(s => (s.slug || s.id).toLowerCase()));
+      const existingKeys = new Set(
+        deduplicated
+          .flatMap(s => [normalizeStoreKey(s.id), normalizeStoreKey(s.slug || '')])
+          .filter(Boolean)
+      );
+
+      const missing = STORES.filter(s => {
+        const idLower = s.id.toLowerCase();
+        const slugLower = (s.slug || s.id).toLowerCase();
+        const key = normalizeStoreKey(s.id);
+        return !existingIds.has(idLower) && !existingSlugs.has(slugLower) && !existingKeys.has(key);
+      });
+
+      return [...deduplicated, ...missing];
+    };
+
     const pool = getPool();
     if (pool) {
       try {
         const res = await pool.query('SELECT * FROM stores ORDER BY rating DESC');
         if (res.rows.length > 0) {
           const dbStores = res.rows.map(r => {
-            const fallbackStore = STORES.find(s => s.id === r.id || s.slug === r.slug);
+            const fallbackStore = findFallbackStore(r.id, r.slug);
             return {
               id: r.id,
               name: r.name,
@@ -693,9 +734,7 @@ export class DatabaseService {
               isPartner: Boolean(r.is_partner)
             };
           });
-          const existingSlugs = new Set(dbStores.map(s => (s.slug || s.id).toLowerCase()));
-          const missing = STORES.filter(s => !existingSlugs.has((s.slug || s.id).toLowerCase()));
-          return [...dbStores, ...missing];
+          return mergeWithFallbackStores(dbStores);
         }
       } catch (err: any) {
         console.warn('Postgres pool getStores failed, falling back to Supabase:', err.message);
@@ -706,7 +745,7 @@ export class DatabaseService {
       const { data, error } = await supabase.from('stores').select('*').order('rating', { ascending: false });
       if (!error && data && data.length > 0) {
         const sbStores = data.map(r => {
-          const fallbackStore = STORES.find(s => s.id === r.id || s.slug === r.slug);
+          const fallbackStore = findFallbackStore(r.id, r.slug);
           return {
             id: r.id,
             name: r.name,
@@ -724,9 +763,7 @@ export class DatabaseService {
             isPartner: Boolean(r.is_partner)
           };
         });
-        const existingSlugs = new Set(sbStores.map(s => (s.slug || s.id).toLowerCase()));
-        const missing = STORES.filter(s => !existingSlugs.has((s.slug || s.id).toLowerCase()));
-        return [...sbStores, ...missing];
+        return mergeWithFallbackStores(sbStores);
       }
     } catch {}
 
@@ -1599,7 +1636,25 @@ export class DatabaseService {
         isRomanianProduct: r.is_romanian_product
       }));
 
+      const publishedDocumentIds = new Set<string>();
+
       for (const item of params.offers) {
+        // Verificare atomică status curent în staging (protecție la dublă publicare sau oferte neaprobate)
+        const rowStateRes = await client.query(
+          'SELECT staging_status, document_id FROM catalog_extracted_offers WHERE id = $1 FOR UPDATE',
+          [item.id]
+        );
+        const dbStagingStatus = rowStateRes.rows[0]?.staging_status
+          ? String(rowStateRes.rows[0].staging_status).toUpperCase()
+          : null;
+        if (dbStagingStatus === 'PUBLISHED') {
+          continue;
+        }
+        if (dbStagingStatus && params.autoPublish && dbStagingStatus !== 'APPROVED' && dbStagingStatus !== 'VALIDATED') {
+          stats.errors.push(`Oferta "${item.rawTitle}" (${item.id}) are status ${dbStagingStatus} și nu este eligibilă pentru publicare.`);
+          continue;
+        }
+
         // Validare preț
         if (!item.effectivePrice || item.effectivePrice <= 0 || isNaN(item.effectivePrice)) {
           stats.itemsWithoutPriceCount++;
@@ -1718,8 +1773,8 @@ export class DatabaseService {
           const insertResult = await client.query(
             `INSERT INTO products (
               id, name, brand, category, default_unit, package_weight_or_volume,
-              package_unit, normalized_unit, barcode, is_romanian_product, base_reference_price
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              package_unit, normalized_unit, barcode, image_url, is_romanian_product, base_reference_price
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT DO NOTHING
             RETURNING id`,
             [
@@ -1732,6 +1787,7 @@ export class DatabaseService {
               safeUnit,
               safeNormUnit,
               safeBarcode,
+              item.imageUrl || null,
               newProd.isRomanianProduct,
               newProd.baseReferencePrice
             ]
@@ -2052,13 +2108,31 @@ export class DatabaseService {
         // Marcare ca publicat în catalog_extracted_offers
         stats.publishedCount++;
         item.stagingStatus = 'PUBLISHED';
+        const effectiveDocId = item.documentId || rowStateRes.rows[0]?.document_id;
+        if (effectiveDocId) {
+          publishedDocumentIds.add(String(effectiveDocId));
+        }
         await client.query(
           `UPDATE catalog_extracted_offers SET
             staging_status = 'PUBLISHED',
             matched_product_id = $1,
+            validation_errors = NULL,
             updated_at = NOW()
           WHERE id = $2`,
           [canonicalId, item.id]
+        );
+      }
+
+      for (const docId of publishedDocumentIds) {
+        await client.query(
+          `UPDATE catalog_documents d
+           SET published_count = (
+                 SELECT count(*) FROM catalog_extracted_offers o
+                 WHERE o.document_id = d.id AND UPPER(o.staging_status) = 'PUBLISHED'
+               ),
+               updated_at = NOW()
+           WHERE d.id = $1`,
+          [docId]
         );
       }
 
@@ -2275,9 +2349,13 @@ export class DatabaseService {
           (SELECT count(*) FROM catalog_documents) AS total_documents,
           (SELECT count(*) FROM catalog_documents WHERE download_status = 'downloaded') AS downloaded_documents,
           (SELECT count(*) FROM catalog_extracted_offers) AS total_extracted_offers,
-          (SELECT count(*) FROM catalog_extracted_offers WHERE staging_status = 'VALIDATED') AS validated_offers,
-          (SELECT count(*) FROM catalog_extracted_offers WHERE staging_status = 'NEEDS_REVIEW') AS needs_review_offers,
-          (SELECT count(*) FROM catalog_extracted_offers WHERE staging_status = 'PUBLISHED') AS published_staging_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE UPPER(staging_status) = 'VALIDATED') AS validated_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE UPPER(staging_status) = 'APPROVED') AS approved_only_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE UPPER(staging_status) IN ('APPROVED', 'VALIDATED') AND effective_price > 0) AS ready_to_publish_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE UPPER(COALESCE(staging_status, 'NEEDS_REVIEW')) IN ('NEEDS_REVIEW', 'DISCOVERED', 'PARSED')) AS needs_review_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE UPPER(staging_status) = 'PUBLISHED') AS published_staging_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE UPPER(staging_status) = 'REJECTED') AS rejected_offers,
+          (SELECT count(*) FROM catalog_extracted_offers WHERE effective_price IS NULL OR effective_price <= 0) AS items_without_price,
           (SELECT count(*) FROM catalog_import_errors) AS processing_errors,
           (SELECT count(*) FROM catalog_import_runs WHERE status = 'running' AND started_at > NOW() - interval '15 minutes') AS running_imports,
           (SELECT count(*) FROM catalog_publish_schedules WHERE enabled = true) AS active_schedules,
@@ -2347,8 +2425,12 @@ export class DatabaseService {
       const downloadedDocuments = parseInt(counts.downloaded_documents || '0', 10);
       const totalExtractedOffers = parseInt(counts.total_extracted_offers || '0', 10);
       const validatedOffers = parseInt(counts.validated_offers || '0', 10);
+      const approvedOnlyOffers = parseInt(counts.approved_only_offers || '0', 10);
+      const readyToPublishOffers = parseInt(counts.ready_to_publish_offers || '0', 10);
+      const approvedAndValidatedOffers = approvedOnlyOffers + validatedOffers;
       const needsReviewOffers = parseInt(counts.needs_review_offers || '0', 10);
       const publishedStagingOffers = parseInt(counts.published_staging_offers || '0', 10);
+      const itemsWithoutPrice = parseInt(counts.items_without_price || '0', 10);
       const processingErrors = parseInt(counts.processing_errors || '0', 10);
       const runningImports = parseInt(counts.running_imports || '0', 10);
 
@@ -2524,17 +2606,17 @@ export class DatabaseService {
             key: 'validatedOffers',
             label: 'Oferte Validate',
             value: validatedOffers,
-            period: 'Gata de publicare în staging',
+            period: 'Validate automat în staging',
             updatedAt: lastRunAt,
             status: validatedOffers > 0 ? 'positive' : 'neutral'
           },
           approvedOffers: {
             key: 'approvedOffers',
-            label: 'Oferte Aprobate',
-            value: validatedOffers + publishedStagingOffers,
-            period: 'Staging Queue',
+            label: 'Oferte Aprobate & Pregătite',
+            value: approvedAndValidatedOffers,
+            period: 'Pregătite pentru publicare',
             updatedAt: lastRunAt,
-            status: 'positive'
+            status: approvedAndValidatedOffers > 0 ? 'positive' : 'neutral'
           },
           publishedOffers: {
             key: 'publishedOffers',
@@ -2556,10 +2638,10 @@ export class DatabaseService {
           itemsWithoutPrice: {
             key: 'itemsWithoutPrice',
             label: 'Produse Fără Preț',
-            value: lastRun?.itemsWithoutPriceCount || 0,
-            period: 'Izolate la import (preț 0/nul)',
+            value: itemsWithoutPrice,
+            period: 'Izolate în staging (preț 0/nul)',
             updatedAt: lastRunAt,
-            status: (lastRun?.itemsWithoutPriceCount || 0) > 0 ? 'warning' : 'positive'
+            status: itemsWithoutPrice > 0 ? 'warning' : 'positive'
           },
           processingErrors: {
             key: 'processingErrors',
@@ -2601,8 +2683,8 @@ export class DatabaseService {
           {
             stage: 'validation',
             name: '4. Validare',
-            status: validatedOffers > 0 || needsReviewOffers > 0 ? 'PASS' : 'PENDING',
-            processedCount: validatedOffers,
+            status: (validatedOffers + approvedOnlyOffers + publishedStagingOffers) > 0 || needsReviewOffers > 0 ? 'PASS' : 'PENDING',
+            processedCount: validatedOffers + approvedOnlyOffers + publishedStagingOffers,
             pendingCount: needsReviewOffers,
             errorCount: processingErrors,
             lastExecutedAt: lastRunAt
@@ -2610,8 +2692,8 @@ export class DatabaseService {
           {
             stage: 'approval',
             name: '5. Aprobare',
-            status: validatedOffers > 0 ? 'PASS' : 'PENDING',
-            processedCount: validatedOffers,
+            status: readyToPublishOffers > 0 || publishedStagingOffers > 0 ? 'PASS' : 'PENDING',
+            processedCount: readyToPublishOffers,
             pendingCount: needsReviewOffers,
             errorCount: 0,
             lastExecutedAt: lastRunAt
@@ -2621,7 +2703,7 @@ export class DatabaseService {
             name: '6. Publicare',
             status: publishedOffers > 0 ? 'PASS' : 'PENDING',
             processedCount: publishedOffers,
-            pendingCount: validatedOffers,
+            pendingCount: readyToPublishOffers,
             errorCount: 0,
             lastExecutedAt: lastRunAt
           }
@@ -3125,10 +3207,8 @@ export class DatabaseService {
            d.valid_from AS "validFrom",
            d.valid_until AS "validUntil",
            d.file_size_bytes AS "fileSizeBytes",
-           COALESCE(d.checksum, (d as any).sha256_checksum) AS "checksum",
+           d.sha256_checksum AS "checksum",
            d.download_status AS "downloadStatus",
-           d.download_path AS "downloadPath",
-           d.download_duration_ms AS "downloadDurationMs",
            d.parse_status AS "parseStatus",
            d.raw_extracted_count AS "rawExtractedCount",
            d.matched_count AS "matchedCount",
@@ -3213,9 +3293,11 @@ export class DatabaseService {
         runId: r.run_id || undefined,
         documentId: r.document_id || undefined,
         retailerId: r.retailer_id,
+        retailerName: r.retailer_name || r.retailer_id,
         rawTitle: r.raw_title || 'Produs fără denumire',
         rawBrand: r.raw_brand || undefined,
         rawBarcode: r.raw_barcode || undefined,
+        retailerSku: r.retailer_sku || undefined,
         rawCategory: r.raw_category || undefined,
         normalPrice: parseFloat(r.normal_price) || 0,
         promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
@@ -3232,6 +3314,9 @@ export class DatabaseService {
         loyaltyCardName: r.loyalty_card_name || undefined,
         validFrom: toIso(r.valid_from)?.split('T')[0],
         validUntil: toIso(r.valid_until)?.split('T')[0],
+        imageUrl: r.canonical_image || undefined,
+        documentTitle: r.document_title || undefined,
+        documentUrl: r.document_url || undefined,
         matchedProductId: r.matched_product_id || undefined,
         matchedProductName: r.matched_product_name || r.canonical_name || undefined,
         matchConfidence: parseFloat(r.match_confidence || '0'),
@@ -3312,6 +3397,7 @@ export class DatabaseService {
           count(*) FILTER (WHERE UPPER(COALESCE(staging_status, 'NEEDS_REVIEW')) IN ('NEEDS_REVIEW', 'DISCOVERED', 'PARSED')) AS needs_review_count,
           count(*) FILTER (WHERE UPPER(staging_status) = 'VALIDATED') AS validated_count,
           count(*) FILTER (WHERE UPPER(staging_status) = 'APPROVED') AS approved_count,
+          count(*) FILTER (WHERE UPPER(staging_status) IN ('APPROVED', 'VALIDATED') AND effective_price > 0) AS ready_to_publish_count,
           count(*) FILTER (WHERE UPPER(staging_status) = 'PUBLISHED') AS published_count,
           count(*) FILTER (WHERE UPPER(staging_status) = 'REJECTED') AS rejected_count,
           count(*) FILTER (WHERE effective_price IS NULL OR effective_price <= 0) AS no_price_count
@@ -3322,6 +3408,7 @@ export class DatabaseService {
         NEEDS_REVIEW: parseInt(rowCounts.needs_review_count || '0', 10),
         VALIDATED: parseInt(rowCounts.validated_count || '0', 10),
         APPROVED: parseInt(rowCounts.approved_count || '0', 10),
+        READY_TO_PUBLISH: parseInt(rowCounts.ready_to_publish_count || '0', 10),
         PUBLISHED: parseInt(rowCounts.published_count || '0', 10),
         REJECTED: parseInt(rowCounts.rejected_count || '0', 10),
         NO_PRICE: parseInt(rowCounts.no_price_count || '0', 10),
@@ -3337,6 +3424,8 @@ export class DatabaseService {
         const targetStatus = params.status.toUpperCase();
         if (targetStatus === 'NEEDS_REVIEW' || targetStatus === 'ALL_PENDING') {
           conditions.push(`UPPER(COALESCE(o.staging_status, 'NEEDS_REVIEW')) IN ('NEEDS_REVIEW', 'DISCOVERED', 'PARSED')`);
+        } else if (targetStatus === 'READY_TO_PUBLISH') {
+          conditions.push(`UPPER(o.staging_status) IN ('APPROVED', 'VALIDATED') AND o.effective_price > 0`);
         } else {
           conditions.push(`UPPER(o.staging_status) = $${idx}`);
           values.push(targetStatus);
@@ -3390,9 +3479,28 @@ export class DatabaseService {
       // 4. Interogare paginată
       const queryValues = [...values, limit, offset];
       const dataRes = await pool.query(
-        `SELECT o.*, p.name AS canonical_name
+        `SELECT o.*,
+                p.name AS canonical_name,
+                p.image_url AS canonical_image,
+                s.name AS retailer_name,
+                d.title AS document_title,
+                d.document_url AS document_url,
+                rp.external_sku AS retailer_sku
          FROM catalog_extracted_offers o
          LEFT JOIN products p ON p.id = o.matched_product_id
+         LEFT JOIN stores s ON s.id = o.retailer_id
+         LEFT JOIN catalog_documents d ON d.id = o.document_id
+         LEFT JOIN LATERAL (
+           SELECT rp_inner.external_sku
+           FROM retailer_products rp_inner
+           WHERE rp_inner.retailer_id = o.retailer_id
+             AND (
+               (o.matched_product_id IS NOT NULL AND rp_inner.product_id = o.matched_product_id)
+               OR (o.raw_barcode IS NOT NULL AND rp_inner.barcode = o.raw_barcode)
+             )
+           ORDER BY rp_inner.last_scraped_at DESC
+           LIMIT 1
+         ) rp ON true
          WHERE ${whereClause}
          ORDER BY o.created_at DESC
          LIMIT $${idx} OFFSET $${idx + 1}`,
@@ -3421,8 +3529,10 @@ export class DatabaseService {
           NEEDS_REVIEW: 0,
           VALIDATED: 0,
           APPROVED: 0,
+          READY_TO_PUBLISH: 0,
           PUBLISHED: 0,
           REJECTED: 0,
+          NO_PRICE: 0,
           ALL: 0
         }
       };
@@ -3474,7 +3584,7 @@ export class DatabaseService {
     }
 
     try {
-      const conditions: string[] = ["UPPER(o.staging_status) IN ('APPROVED', 'VALIDATED') OR o.reviewed_by IS NOT NULL"];
+      const conditions: string[] = ["UPPER(o.staging_status) IN ('APPROVED', 'VALIDATED')"];
       const values: any[] = [];
       let idx = 1;
 
@@ -3874,7 +3984,554 @@ export class DatabaseService {
   }
 
   /**
-   * Actualizare sau aprobare / respingere în lot a ofertelor din Staging cu tranzacție atomică și audit log
+   * Returnează ofertele eligibile (APPROVED / VALIDATED, preț > 0) îmbogățite cu detalii retailer, document și imagine pentru previzualizare/publicare.
+   */
+  static async getStagingOffersEnrichedForPublish(offerIds?: string[]): Promise<{
+    eligibleOffers: CatalogExtractedOffer[];
+    needsReviewCount: number;
+    itemsWithoutPriceCount: number;
+  }> {
+    const pool = getPool();
+    if (!pool) {
+      return { eligibleOffers: [], needsReviewCount: 0, itemsWithoutPriceCount: 0 };
+    }
+
+    const toIso = (value: unknown) => value ? new Date(value as string | number | Date).toISOString() : undefined;
+    const hasFilterIds = Array.isArray(offerIds) && offerIds.length > 0;
+
+    const [eligibleRes, countsRes] = await Promise.all([
+      pool.query(
+        `SELECT o.*,
+                p.name AS canonical_name,
+                p.image_url AS canonical_image,
+                s.name AS retailer_name,
+                d.title AS document_title,
+                d.document_url AS document_url,
+                rp.external_sku AS retailer_sku
+         FROM catalog_extracted_offers o
+         LEFT JOIN products p ON p.id = o.matched_product_id
+         LEFT JOIN stores s ON s.id = o.retailer_id
+         LEFT JOIN catalog_documents d ON d.id = o.document_id
+         LEFT JOIN LATERAL (
+           SELECT rp_inner.external_sku
+           FROM retailer_products rp_inner
+           WHERE rp_inner.retailer_id = o.retailer_id
+             AND (
+               (o.matched_product_id IS NOT NULL AND rp_inner.product_id = o.matched_product_id)
+               OR (o.raw_barcode IS NOT NULL AND rp_inner.barcode = o.raw_barcode)
+             )
+           ORDER BY rp_inner.last_scraped_at DESC
+           LIMIT 1
+         ) rp ON true
+         WHERE UPPER(o.staging_status) IN ('APPROVED', 'VALIDATED')
+           AND o.effective_price > 0
+           ${hasFilterIds ? 'AND o.id = ANY($1::varchar[])' : ''}
+         ORDER BY o.reviewed_at DESC NULLS LAST, o.created_at DESC`,
+        hasFilterIds ? [offerIds] : []
+      ),
+      pool.query(
+        `SELECT
+           count(*) FILTER (WHERE UPPER(COALESCE(staging_status, 'NEEDS_REVIEW')) IN ('NEEDS_REVIEW', 'DISCOVERED', 'PARSED')) AS needs_review_count,
+           count(*) FILTER (WHERE effective_price IS NULL OR effective_price <= 0) AS items_without_price_count
+         FROM catalog_extracted_offers
+         ${hasFilterIds ? 'WHERE id = ANY($1::varchar[])' : ''}`,
+        hasFilterIds ? [offerIds] : []
+      )
+    ]);
+
+    const eligibleOffers: CatalogExtractedOffer[] = eligibleRes.rows.map(r => ({
+      id: String(r.id),
+      runId: r.run_id || '',
+      documentId: r.document_id || '',
+      retailerId: r.retailer_id,
+      retailerName: r.retailer_name || r.retailer_id,
+      rawTitle: r.raw_title || 'Produs fără denumire',
+      rawBrand: r.raw_brand || undefined,
+      rawBarcode: r.raw_barcode || undefined,
+      retailerSku: r.retailer_sku || undefined,
+      rawCategory: r.raw_category || undefined,
+      normalPrice: parseFloat(r.normal_price) || 0,
+      promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+      loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
+      effectivePrice: parseFloat(r.effective_price) || 0,
+      currency: r.currency || 'RON',
+      packageQuantity: r.package_quantity ? parseFloat(r.package_quantity) : undefined,
+      packageUnit: r.package_unit || undefined,
+      unitPrice: r.unit_price ? parseFloat(r.unit_price) : undefined,
+      unitPriceMeasure: r.unit_price_measure || undefined,
+      isPromo: Boolean(r.is_promo),
+      promoDetails: r.promo_details || undefined,
+      loyaltyCardRequired: Boolean(r.loyalty_card_required),
+      loyaltyCardName: r.loyalty_card_name || undefined,
+      validFrom: toIso(r.valid_from)?.split('T')[0],
+      validUntil: toIso(r.valid_until)?.split('T')[0],
+      imageUrl: r.canonical_image || undefined,
+      documentTitle: r.document_title || undefined,
+      documentUrl: r.document_url || undefined,
+      matchedProductId: r.matched_product_id || undefined,
+      matchedProductName: r.canonical_name || undefined,
+      matchConfidence: parseFloat(r.match_confidence || '0'),
+      matchMethod: r.match_method || 'unmatched',
+      stagingStatus: String(r.staging_status || 'APPROVED').toUpperCase() as CatalogExtractedOffer['stagingStatus'],
+      validationErrors: Array.isArray(r.validation_errors) ? r.validation_errors : undefined,
+      reviewedBy: r.reviewed_by || undefined,
+      reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : undefined,
+      rejectionReason: r.rejection_reason || undefined,
+      createdAt: toIso(r.created_at) || new Date(0).toISOString(),
+      updatedAt: toIso(r.updated_at) || toIso(r.created_at) || new Date(0).toISOString()
+    }));
+
+    return {
+      eligibleOffers,
+      needsReviewCount: parseInt(countsRes.rows[0]?.needs_review_count || '0', 10),
+      itemsWithoutPriceCount: parseInt(countsRes.rows[0]?.items_without_price_count || '0', 10)
+    };
+  }
+
+  /**
+   * Validează complet o ofertă din staging înainte de aprobare (verificare prețuri, retailer, document, produs canonic, duplicate, EAN/SKU, cantitate/unitate, valabilitate)
+   */
+  private static validateStagingOfferCandidate(params: {
+    offer: {
+      id: string;
+      retailerId: string;
+      documentId?: string | null;
+      rawTitle: string;
+      rawBrand?: string | null;
+      rawBarcode?: string | null;
+      retailerSku?: string | null;
+      rawCategory?: string | null;
+      normalPrice: number;
+      promoPrice?: number | null;
+      loyaltyPrice?: number | null;
+      effectivePrice: number;
+      packageQuantity?: number | null;
+      packageUnit?: string | null;
+      validUntil?: string | null;
+      matchedProductId?: string | null;
+      stagingStatus: string;
+    };
+    validStoreIds: Set<string>;
+    validDocumentIds: Set<string>;
+    productsById: Map<string, Product>;
+    allProducts: Product[];
+    batchSignatures: Set<string>;
+    existingApprovedSignatures: Map<string, string>;
+    requestedMatchedProductId?: string;
+    todayStr: string;
+  }): {
+    valid: boolean;
+    errors: string[];
+    resolvedProductId?: string;
+    resolvedProductName?: string;
+    resolvedMatchMethod?: 'gtin_exact' | 'name_brand_similarity' | 'manual' | 'unmatched';
+    resolvedMatchConfidence?: number;
+  } {
+    const {
+      offer,
+      validStoreIds,
+      validDocumentIds,
+      productsById,
+      allProducts,
+      batchSignatures,
+      existingApprovedSignatures,
+      requestedMatchedProductId,
+      todayStr
+    } = params;
+
+    const errors: string[] = [];
+    const currentStatus = String(offer.stagingStatus || 'NEEDS_REVIEW').toUpperCase();
+    if (currentStatus === 'PUBLISHED') {
+      errors.push('Oferta este deja publicată în catalogul public.');
+    }
+
+    const titleTrimmed = (offer.rawTitle || '').trim();
+    if (titleTrimmed.length < 2) {
+      errors.push('Denumirea produsului lipsește sau are mai puțin de 2 caractere.');
+    }
+
+    if (!Number.isFinite(offer.effectivePrice) || offer.effectivePrice <= 0) {
+      errors.push(`Prețul efectiv (${Number.isFinite(offer.effectivePrice) ? offer.effectivePrice : 0} RON) trebuie să fie pozitiv (> 0).`);
+    } else if (offer.effectivePrice > 50000) {
+      errors.push(`Prețul efectiv (${offer.effectivePrice} RON) depășește pragul maxim admis (50.000 RON).`);
+    }
+
+    if (!Number.isFinite(offer.normalPrice) || offer.normalPrice < 0) {
+      errors.push('Prețul normal este invalid (negativ sau nespecificat).');
+    } else if (offer.normalPrice > 0 && Number.isFinite(offer.effectivePrice) && offer.effectivePrice > offer.normalPrice + 0.01) {
+      errors.push(`Prețul efectiv (${offer.effectivePrice} RON) nu poate depăși prețul normal (${offer.normalPrice} RON).`);
+    }
+
+    if (offer.promoPrice !== null && offer.promoPrice !== undefined) {
+      if (!Number.isFinite(offer.promoPrice) || offer.promoPrice <= 0) {
+        errors.push('Prețul promoțional specificat trebuie să fie mai mare decât 0.');
+      } else if (offer.normalPrice > 0 && offer.promoPrice > offer.normalPrice + 0.01) {
+        errors.push(`Prețul promoțional (${offer.promoPrice} RON) depășește prețul normal (${offer.normalPrice} RON).`);
+      }
+    }
+
+    if (!offer.retailerId || !validStoreIds.has(offer.retailerId)) {
+      errors.push(`Retailerul „${offer.retailerId || 'nespecificat'}” nu este înregistrat în baza de date.`);
+    }
+
+    if (offer.documentId && !validDocumentIds.has(offer.documentId)) {
+      errors.push(`Documentul sursă „${offer.documentId}” nu există în arhiva de cataloage.`);
+    }
+
+    // EAN & SKU verification
+    const cleanBarcode = offer.rawBarcode ? offer.rawBarcode.trim() : '';
+    if (cleanBarcode.length > 0 && !/^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(cleanBarcode)) {
+      errors.push(`Codul de bare EAN „${cleanBarcode}” este invalid (trebuie să conțină 8, 12, 13 sau 14 cifre).`);
+    }
+
+    if (offer.retailerSku && offer.retailerSku.trim().length > 128) {
+      errors.push('Codul SKU al retailerului depășește lungimea maximă permisă (128 caractere).');
+    }
+
+    // Quantity & unit verification
+    if (offer.packageQuantity !== null && offer.packageQuantity !== undefined) {
+      if (!Number.isFinite(offer.packageQuantity) || offer.packageQuantity <= 0) {
+        errors.push(`Cantitatea ambalajului (${offer.packageQuantity}) trebuie să fie pozitivă.`);
+      }
+    }
+    const allowedUnits = new Set(['kg', 'g', 'l', 'ml', 'buc', 'pachet', 'set', 'cutie', 'sticla', 'sticlă', 'doza', 'doză', 'rola', 'rolă', 'role', 'capsule', 'tablete', 'plicuri']);
+    if (offer.packageUnit && offer.packageUnit.trim().length > 0) {
+      const normalizedUnit = offer.packageUnit.trim().toLowerCase();
+      if (!allowedUnits.has(normalizedUnit)) {
+        errors.push(`Unitatea de măsură „${offer.packageUnit}” nu este recunoscută.`);
+      }
+    }
+
+    // Expiry check
+    if (offer.validUntil && offer.validUntil < todayStr) {
+      errors.push(`Oferta este expirată (valabilă până la ${offer.validUntil}).`);
+    }
+
+    // Canonical product resolution
+    let resolvedProductId: string | undefined;
+    let resolvedProductName: string | undefined;
+    let resolvedMatchMethod: 'gtin_exact' | 'name_brand_similarity' | 'manual' | 'unmatched' = 'unmatched';
+    let resolvedMatchConfidence = 0;
+
+    const targetProductId = requestedMatchedProductId || offer.matchedProductId || undefined;
+    if (targetProductId) {
+      const existingProd = productsById.get(targetProductId);
+      if (!existingProd) {
+        errors.push(`Produsul canonic asociat (${targetProductId}) nu a fost găsit în catalog.`);
+      } else {
+        resolvedProductId = existingProd.id;
+        resolvedProductName = existingProd.name;
+        resolvedMatchMethod = requestedMatchedProductId ? 'manual' : 'gtin_exact';
+        resolvedMatchConfidence = 1.0;
+      }
+    } else if (titleTrimmed.length >= 2) {
+      const matchRes = ProductMatcher.matchProduct(
+        {
+          rawName: titleTrimmed,
+          barcode: cleanBarcode || undefined,
+          brand: offer.rawBrand || undefined,
+          packageWeightOrVolume: offer.packageQuantity || undefined,
+          packageUnit: (offer.packageUnit as any) || undefined,
+          category: offer.rawCategory || undefined
+        },
+        allProducts
+      );
+      if (matchRes.matchedProduct && matchRes.confidence >= 0.75) {
+        resolvedProductId = matchRes.matchedProduct.id;
+        resolvedProductName = matchRes.matchedProduct.name;
+        resolvedMatchMethod = matchRes.matchMethod;
+        resolvedMatchConfidence = matchRes.confidence;
+      }
+    }
+
+    // Duplicate detection within same batch or against already approved staging rows
+    const sigPrice = Number.isFinite(offer.effectivePrice) ? offer.effectivePrice.toFixed(2) : '0.00';
+    const sigKey = [
+      offer.retailerId,
+      cleanBarcode || titleTrimmed.toLowerCase(),
+      sigPrice,
+      offer.packageQuantity || '',
+      (offer.packageUnit || '').toLowerCase()
+    ].join('::');
+
+    if (batchSignatures.has(sigKey)) {
+      errors.push('Ofertă duplicat detectată în același lot (același retailer, produs și preț).');
+    } else {
+      const existingApprovedId = existingApprovedSignatures.get(sigKey);
+      if (existingApprovedId && existingApprovedId !== offer.id) {
+        errors.push(`Există deja o ofertă identică pregătită pentru publicare (${existingApprovedId}).`);
+      }
+    }
+
+    if (errors.length === 0) {
+      batchSignatures.add(sigKey);
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors,
+      resolvedProductId,
+      resolvedProductName,
+      resolvedMatchMethod,
+      resolvedMatchConfidence
+    };
+  }
+
+  /**
+   * Validare și aprobare / respingere individuală a unei oferte din Staging cu persistență tranzacțională și audit log
+   */
+  static async reviewSingleStagingOffer(params: {
+    offerId: string;
+    action: 'approve' | 'reject';
+    matchedProductId?: string;
+    rejectionReason?: string;
+    userEmail?: string;
+    ipAddress?: string;
+  }): Promise<{
+    success: boolean;
+    notFound?: boolean;
+    offer?: CatalogExtractedOffer;
+    validationErrors?: string[];
+    message: string;
+  }> {
+    const { offerId, action, matchedProductId, rejectionReason, userEmail = 'admin@cosulmeu.ro', ipAddress } = params;
+    const pool = getPool();
+    if (!pool) {
+      return { success: false, message: 'PostgreSQL nu este configurat.' };
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const offerRes = await client.query('SELECT * FROM catalog_extracted_offers WHERE id = $1 FOR UPDATE', [offerId]);
+      if (offerRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, notFound: true, message: 'Oferta nu a fost găsită în staging.' };
+      }
+
+      const row = offerRes.rows[0];
+      const currentStatus = String(row.staging_status || 'NEEDS_REVIEW').toUpperCase();
+
+      if (action === 'reject') {
+        if (currentStatus === 'PUBLISHED') {
+          await client.query('ROLLBACK');
+          return {
+            success: false,
+            validationErrors: ['Oferta este deja publicată și nu poate fi respinsă din staging.'],
+            message: 'Oferta este deja publicată și nu poate fi respinsă din staging.'
+          };
+        }
+
+        const reason = rejectionReason || 'Respinsă manual de administrator.';
+        await client.query(
+          `UPDATE catalog_extracted_offers
+           SET staging_status = 'REJECTED',
+               rejection_reason = $2,
+               reviewed_by = $3,
+               reviewed_at = NOW(),
+               updated_at = NOW()
+           WHERE id = $1`,
+          [offerId, reason, userEmail]
+        );
+
+        await client.query(
+          `INSERT INTO admin_audit_logs (id, user_email, action, target_type, target_id, details, ip_address, created_at)
+           VALUES ($1, $2, 'reject_staging_offer', 'staging_offer', $3, $4, $5, NOW())`,
+          [
+            `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            userEmail,
+            offerId,
+            JSON.stringify({ previousStatus: currentStatus, newStatus: 'REJECTED', rejectionReason: reason }),
+            ipAddress || null
+          ]
+        );
+
+        await client.query('COMMIT');
+        return {
+          success: true,
+          offer: {
+            id: String(row.id),
+            runId: row.run_id || '',
+            documentId: row.document_id || '',
+            retailerId: row.retailer_id,
+            rawTitle: row.raw_title,
+            normalPrice: parseFloat(row.normal_price) || 0,
+            effectivePrice: parseFloat(row.effective_price) || 0,
+            currency: row.currency || 'RON',
+            isPromo: Boolean(row.is_promo),
+            matchConfidence: parseFloat(row.match_confidence || '0'),
+            matchMethod: row.match_method || 'unmatched',
+            stagingStatus: 'REJECTED',
+            rejectionReason: reason,
+            reviewedBy: userEmail,
+            reviewedAt: new Date().toISOString(),
+            createdAt: new Date(row.created_at).toISOString(),
+            updatedAt: new Date().toISOString()
+          },
+          message: 'Oferta a fost respinsă și exclusă de la publicare.'
+        };
+      }
+
+      // Acțiune: approve -> validare completă
+      const [storesRes, docsRes, productsRes, existingApprovedRes] = await Promise.all([
+        client.query('SELECT id FROM stores'),
+        client.query('SELECT id FROM catalog_documents'),
+        client.query('SELECT * FROM products'),
+        client.query(
+          `SELECT id, retailer_id, raw_title, raw_barcode, effective_price, package_quantity, package_unit
+           FROM catalog_extracted_offers
+           WHERE UPPER(staging_status) IN ('APPROVED', 'VALIDATED') AND id <> $1`,
+          [offerId]
+        )
+      ]);
+
+      const validStoreIds = new Set(storesRes.rows.map(r => String(r.id)));
+      const validDocumentIds = new Set(docsRes.rows.map(r => String(r.id)));
+      const allProducts: Product[] = productsRes.rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        brand: r.brand,
+        category: r.category as any,
+        defaultUnit: r.default_unit,
+        packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
+        packageUnit: r.package_unit,
+        normalizedUnit: r.normalized_unit,
+        barcode: r.barcode || undefined,
+        imageUrl: r.image_url || undefined,
+        baseReferencePrice: parseFloat(r.base_reference_price),
+        isRomanianProduct: r.is_romanian_product
+      }));
+      const productsById = new Map(allProducts.map(p => [p.id, p]));
+
+      const existingApprovedSignatures = new Map<string, string>();
+      for (const er of existingApprovedRes.rows) {
+        const key = [
+          er.retailer_id,
+          (er.raw_barcode || '').trim() || (er.raw_title || '').trim().toLowerCase(),
+          Number.isFinite(parseFloat(er.effective_price)) ? parseFloat(er.effective_price).toFixed(2) : '0.00',
+          er.package_quantity ? parseFloat(er.package_quantity) : '',
+          (er.package_unit || '').toLowerCase()
+        ].join('::');
+        existingApprovedSignatures.set(key, String(er.id));
+      }
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const validUntilStr = row.valid_until ? new Date(row.valid_until).toISOString().split('T')[0] : null;
+      const validation = this.validateStagingOfferCandidate({
+        offer: {
+          id: String(row.id),
+          retailerId: row.retailer_id,
+          documentId: row.document_id,
+          rawTitle: row.raw_title,
+          rawBrand: row.raw_brand,
+          rawBarcode: row.raw_barcode,
+          rawCategory: row.raw_category,
+          normalPrice: parseFloat(row.normal_price),
+          promoPrice: row.promo_price ? parseFloat(row.promo_price) : null,
+          loyaltyPrice: row.loyalty_price ? parseFloat(row.loyalty_price) : null,
+          effectivePrice: parseFloat(row.effective_price),
+          packageQuantity: row.package_quantity ? parseFloat(row.package_quantity) : null,
+          packageUnit: row.package_unit,
+          validUntil: validUntilStr,
+          matchedProductId: row.matched_product_id,
+          stagingStatus: row.staging_status
+        },
+        validStoreIds,
+        validDocumentIds,
+        productsById,
+        allProducts,
+        batchSignatures: new Set<string>(),
+        existingApprovedSignatures,
+        requestedMatchedProductId: matchedProductId,
+        todayStr
+      });
+
+      if (!validation.valid) {
+        await client.query(
+          `UPDATE catalog_extracted_offers
+           SET staging_status = CASE WHEN UPPER(staging_status) = 'PUBLISHED' THEN 'PUBLISHED' ELSE 'NEEDS_REVIEW' END,
+               validation_errors = $2::jsonb,
+               updated_at = NOW()
+           WHERE id = $1`,
+          [offerId, JSON.stringify(validation.errors)]
+        );
+        await client.query('COMMIT');
+        return {
+          success: false,
+          validationErrors: validation.errors,
+          message: `Oferta nu a trecut validarea: ${validation.errors.join(' ')}`
+        };
+      }
+
+      const finalMatchedId = validation.resolvedProductId || row.matched_product_id || null;
+      const finalMethod = validation.resolvedProductId ? (validation.resolvedMatchMethod || row.match_method) : row.match_method;
+      const finalConfidence = validation.resolvedProductId ? (validation.resolvedMatchConfidence ?? row.match_confidence) : row.match_confidence;
+
+      await client.query(
+        `UPDATE catalog_extracted_offers
+         SET staging_status = 'APPROVED',
+             matched_product_id = $2,
+             match_method = $3,
+             match_confidence = $4,
+             validation_errors = NULL,
+             rejection_reason = NULL,
+             reviewed_by = $5,
+             reviewed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [offerId, finalMatchedId, finalMethod || 'unmatched', finalConfidence || 0, userEmail]
+      );
+
+      await client.query(
+        `INSERT INTO admin_audit_logs (id, user_email, action, target_type, target_id, details, ip_address, created_at)
+         VALUES ($1, $2, 'approve_staging_offer', 'staging_offer', $3, $4, $5, NOW())`,
+        [
+          `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          userEmail,
+          offerId,
+          JSON.stringify({ previousStatus: currentStatus, newStatus: 'APPROVED', matchedProductId: finalMatchedId }),
+          ipAddress || null
+        ]
+      );
+
+      await client.query('COMMIT');
+      return {
+        success: true,
+        offer: {
+          id: String(row.id),
+          runId: row.run_id || '',
+          documentId: row.document_id || '',
+          retailerId: row.retailer_id,
+          rawTitle: row.raw_title,
+          rawBrand: row.raw_brand || undefined,
+          rawBarcode: row.raw_barcode || undefined,
+          normalPrice: parseFloat(row.normal_price) || 0,
+          promoPrice: row.promo_price ? parseFloat(row.promo_price) : undefined,
+          effectivePrice: parseFloat(row.effective_price) || 0,
+          currency: row.currency || 'RON',
+          isPromo: Boolean(row.is_promo),
+          matchedProductId: finalMatchedId || undefined,
+          matchedProductName: validation.resolvedProductName || undefined,
+          matchConfidence: Number(finalConfidence || 0),
+          matchMethod: (finalMethod as any) || 'unmatched',
+          stagingStatus: 'APPROVED',
+          reviewedBy: userEmail,
+          reviewedAt: new Date().toISOString(),
+          createdAt: new Date(row.created_at).toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        message: 'Oferta a fost validată, aprobată și adăugată în lista de publicare.'
+      };
+    } catch (err: any) {
+      await client.query('ROLLBACK');
+      throw new Error(`Eroare la validarea ofertei în PostgreSQL: ${err.message}`);
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Actualizare sau aprobare / respingere în lot a ofertelor din Staging cu validare strictă, tranzacție atomică și audit log
    */
   static async bulkReviewStagingOffers(params: {
     offerIds: string[];
@@ -3882,50 +4539,210 @@ export class DatabaseService {
     rejectionReason?: string;
     userEmail?: string;
     ipAddress?: string;
-  }): Promise<{ count: number; message: string }> {
+  }): Promise<{
+    count: number;
+    approvedIds: string[];
+    failedCount: number;
+    failedItems: Array<{ id: string; rawTitle: string; errors: string[] }>;
+    message: string;
+  }> {
     const { offerIds, action, rejectionReason, userEmail = 'admin@cosulmeu.ro', ipAddress } = params;
-    if (!offerIds || offerIds.length === 0) return { count: 0, message: 'Nu au fost furnizate oferte.' };
+    if (!offerIds || offerIds.length === 0) {
+      return { count: 0, approvedIds: [], failedCount: 0, failedItems: [], message: 'Nu au fost furnizate oferte.' };
+    }
 
     const pool = getPool();
-    const newStatus = action === 'approve' ? 'VALIDATED' : 'REJECTED';
 
     if (pool) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
-        const updateRes = await client.query(
-          `UPDATE catalog_extracted_offers
-           SET staging_status = $1,
-               reviewed_by = $2,
-               reviewed_at = NOW(),
-               rejection_reason = $3,
-               updated_at = NOW()
-           WHERE id = ANY($4::varchar[])
-           RETURNING id`,
-          [newStatus, userEmail, action === 'reject' ? (rejectionReason || 'Respins manual în lot de administrator.') : null, offerIds]
-        );
-        const updatedCount = updateRes.rows.length;
-        const auditTargetId = `bulk:${offerIds.length}`;
-        const sampleOfferIds = offerIds.slice(0, 5);
+
+        if (action === 'reject') {
+          const reason = rejectionReason || 'Respins manual în lot de administrator.';
+          const updateRes = await client.query(
+            `UPDATE catalog_extracted_offers
+             SET staging_status = 'REJECTED',
+                 reviewed_by = $1,
+                 reviewed_at = NOW(),
+                 rejection_reason = $2,
+                 updated_at = NOW()
+             WHERE id = ANY($3::varchar[])
+               AND UPPER(staging_status) <> 'PUBLISHED'
+             RETURNING id`,
+            [userEmail, reason, offerIds]
+          );
+          const updatedIds = updateRes.rows.map(r => String(r.id));
+          await client.query(
+            `INSERT INTO admin_audit_logs (id, user_email, action, target_type, target_id, details, ip_address, created_at)
+             VALUES ($1, $2, 'bulk_reject_staging_offers', 'staging_offers', $3, $4, $5, NOW())`,
+            [
+              `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+              userEmail,
+              `bulk:${offerIds.length}`,
+              JSON.stringify({ requestedCount: offerIds.length, updatedCount: updatedIds.length, action, rejectionReason: reason, sampleOfferIds: updatedIds.slice(0, 5) }),
+              ipAddress || null
+            ]
+          );
+          await client.query('COMMIT');
+          return {
+            count: updatedIds.length,
+            approvedIds: [],
+            failedCount: Math.max(0, offerIds.length - updatedIds.length),
+            failedItems: [],
+            message: `${updatedIds.length} oferte au fost respinse cu succes în PostgreSQL.`
+          };
+        }
+
+        // Acțiune: approve -> blocăm și validăm fiecare ofertă selectată
+        const [selectedRes, storesRes, docsRes, productsRes, existingApprovedRes] = await Promise.all([
+          client.query('SELECT * FROM catalog_extracted_offers WHERE id = ANY($1::varchar[]) FOR UPDATE', [offerIds]),
+          client.query('SELECT id FROM stores'),
+          client.query('SELECT id FROM catalog_documents'),
+          client.query('SELECT * FROM products'),
+          client.query(
+            `SELECT id, retailer_id, raw_title, raw_barcode, effective_price, package_quantity, package_unit
+             FROM catalog_extracted_offers
+             WHERE UPPER(staging_status) IN ('APPROVED', 'VALIDATED') AND NOT (id = ANY($1::varchar[]))`,
+            [offerIds]
+          )
+        ]);
+
+        const validStoreIds = new Set(storesRes.rows.map(r => String(r.id)));
+        const validDocumentIds = new Set(docsRes.rows.map(r => String(r.id)));
+        const allProducts: Product[] = productsRes.rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          brand: r.brand,
+          category: r.category as any,
+          defaultUnit: r.default_unit,
+          packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
+          packageUnit: r.package_unit,
+          normalizedUnit: r.normalized_unit,
+          barcode: r.barcode || undefined,
+          imageUrl: r.image_url || undefined,
+          baseReferencePrice: parseFloat(r.base_reference_price),
+          isRomanianProduct: r.is_romanian_product
+        }));
+        const productsById = new Map(allProducts.map(p => [p.id, p]));
+
+        const existingApprovedSignatures = new Map<string, string>();
+        for (const er of existingApprovedRes.rows) {
+          const key = [
+            er.retailer_id,
+            (er.raw_barcode || '').trim() || (er.raw_title || '').trim().toLowerCase(),
+            Number.isFinite(parseFloat(er.effective_price)) ? parseFloat(er.effective_price).toFixed(2) : '0.00',
+            er.package_quantity ? parseFloat(er.package_quantity) : '',
+            (er.package_unit || '').toLowerCase()
+          ].join('::');
+          existingApprovedSignatures.set(key, String(er.id));
+        }
+
+        const batchSignatures = new Set<string>();
+        const todayStr = new Date().toISOString().split('T')[0];
+        const approvedIds: string[] = [];
+        const failedItems: Array<{ id: string; rawTitle: string; errors: string[] }> = [];
+
+        for (const row of selectedRes.rows) {
+          const validUntilStr = row.valid_until ? new Date(row.valid_until).toISOString().split('T')[0] : null;
+          const validation = this.validateStagingOfferCandidate({
+            offer: {
+              id: String(row.id),
+              retailerId: row.retailer_id,
+              documentId: row.document_id,
+              rawTitle: row.raw_title,
+              rawBrand: row.raw_brand,
+              rawBarcode: row.raw_barcode,
+              rawCategory: row.raw_category,
+              normalPrice: parseFloat(row.normal_price),
+              promoPrice: row.promo_price ? parseFloat(row.promo_price) : null,
+              loyaltyPrice: row.loyalty_price ? parseFloat(row.loyalty_price) : null,
+              effectivePrice: parseFloat(row.effective_price),
+              packageQuantity: row.package_quantity ? parseFloat(row.package_quantity) : null,
+              packageUnit: row.package_unit,
+              validUntil: validUntilStr,
+              matchedProductId: row.matched_product_id,
+              stagingStatus: row.staging_status
+            },
+            validStoreIds,
+            validDocumentIds,
+            productsById,
+            allProducts,
+            batchSignatures,
+            existingApprovedSignatures,
+            todayStr
+          });
+
+          if (validation.valid) {
+            const finalMatchedId = validation.resolvedProductId || row.matched_product_id || null;
+            const finalMethod = validation.resolvedProductId ? (validation.resolvedMatchMethod || row.match_method) : row.match_method;
+            const finalConfidence = validation.resolvedProductId ? (validation.resolvedMatchConfidence ?? row.match_confidence) : row.match_confidence;
+
+            await client.query(
+              `UPDATE catalog_extracted_offers
+               SET staging_status = 'APPROVED',
+                   matched_product_id = $2,
+                   match_method = $3,
+                   match_confidence = $4,
+                   validation_errors = NULL,
+                   rejection_reason = NULL,
+                   reviewed_by = $5,
+                   reviewed_at = NOW(),
+                   updated_at = NOW()
+               WHERE id = $1`,
+              [row.id, finalMatchedId, finalMethod || 'unmatched', finalConfidence || 0, userEmail]
+            );
+            approvedIds.push(String(row.id));
+          } else {
+            await client.query(
+              `UPDATE catalog_extracted_offers
+               SET staging_status = CASE WHEN UPPER(staging_status) = 'PUBLISHED' THEN 'PUBLISHED' ELSE 'NEEDS_REVIEW' END,
+                   validation_errors = $2::jsonb,
+                   updated_at = NOW()
+               WHERE id = $1`,
+              [row.id, JSON.stringify(validation.errors)]
+            );
+            failedItems.push({
+              id: String(row.id),
+              rawTitle: row.raw_title || 'Produs fără denumire',
+              errors: validation.errors
+            });
+          }
+        }
 
         await client.query(
           `INSERT INTO admin_audit_logs (id, user_email, action, target_type, target_id, details, ip_address, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+           VALUES ($1, $2, 'bulk_approve_staging_offers', 'staging_offers', $3, $4, $5, NOW())`,
           [
-            crypto.randomUUID(),
+            `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
             userEmail,
-            action === 'approve' ? 'bulk_approve_staging_offers' : 'bulk_reject_staging_offers',
-            'staging_offers',
-            auditTargetId,
-            JSON.stringify({ requestedCount: offerIds.length, updatedCount, action, rejectionReason, sampleOfferIds }),
+            `bulk:${offerIds.length}`,
+            JSON.stringify({
+              requestedCount: offerIds.length,
+              approvedCount: approvedIds.length,
+              failedCount: failedItems.length,
+              sampleApprovedIds: approvedIds.slice(0, 5),
+              sampleFailedIds: failedItems.slice(0, 5).map(f => ({ id: f.id, errors: f.errors }))
+            }),
             ipAddress || null
           ]
         );
 
         await client.query('COMMIT');
+
+        let message = `${approvedIds.length} oferte au fost validate, aprobate și pregătite pentru publicare.`;
+        if (failedItems.length > 0 && approvedIds.length > 0) {
+          message = `${approvedIds.length} oferte aprobate; ${failedItems.length} oferte au rămas nepublicate din cauza erorilor de validare.`;
+        } else if (failedItems.length > 0 && approvedIds.length === 0) {
+          message = `Nicio ofertă nu a trecut validarea (${failedItems.length} respinse de regulile de validare).`;
+        }
+
         return {
-          count: updatedCount,
-          message: `${updatedCount} oferte au fost ${action === 'approve' ? 'validate' : 'respinse'} cu succes în PostgreSQL.`
+          count: approvedIds.length,
+          approvedIds,
+          failedCount: failedItems.length,
+          failedItems,
+          message
         };
       } catch (err: any) {
         await client.query('ROLLBACK');
@@ -3935,18 +4752,14 @@ export class DatabaseService {
       }
     }
 
-    // Fallback Supabase
-    try {
-      await supabase.from('catalog_extracted_offers')
-        .update({
-          staging_status: newStatus,
-          reviewed_by: userEmail,
-          reviewed_at: new Date().toISOString()
-        })
-        .in('id', offerIds);
-      return { count: offerIds.length, message: `${offerIds.length} oferte au fost actualizate.` };
-    } catch {}
-    return { count: 0, message: 'Nu s-au putut actualiza ofertele.' };
+    // Fallback fără pool PostgreSQL
+    return {
+      count: 0,
+      approvedIds: [],
+      failedCount: offerIds.length,
+      failedItems: [],
+      message: 'Baza de date PostgreSQL nu este disponibilă.'
+    };
   }
 }
 

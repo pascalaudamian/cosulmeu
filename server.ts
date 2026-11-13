@@ -598,6 +598,18 @@ app.get('/api/products', async (req, res) => {
       filtered = filtered.filter(p => p.brand.toLowerCase() === brand.toLowerCase());
     }
 
+    // Filtru retailer
+    if (retailer && typeof retailer === 'string' && retailer !== 'toate') {
+      const normalizedRetailer = retailer.toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+      filtered = filtered.filter(p => {
+        const prodOffers = productOffersMap.get(p.id) || [];
+        return prodOffers.some(o => {
+          const offerStore = (o.storeId || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+          return o.storeId === retailer || offerStore === normalizedRetailer;
+        });
+      });
+    }
+
     // Filtru doar promoții active
     if (onlyPromo === 'true') {
       filtered = filtered.filter(p => p.isPromo);
@@ -1536,14 +1548,19 @@ app.post('/api/quality/config', requireAdminAuth, (req, res) => {
 app.get('/api/admin/catalog-importer/stats', requireAdminAuth, async (req, res) => {
   try {
     if (isPostgresConfigured()) {
-      const operationalData = await DatabaseService.getOperationalMetrics();
+      const [operationalData, stagingSnapshot] = await Promise.all([
+        DatabaseService.getOperationalMetrics(),
+        DatabaseService.getStagingOffersPaginated({ page: 1, limit: 1 })
+      ]);
       const stats = {
         totalSources: operationalData.configuredSourcesCount,
         activeSources: operationalData.activeSourcesCount,
         totalDocuments: operationalData.kpis.discoveredDocuments.value,
         totalExtractedOffers: operationalData.kpis.extractedOffers.value,
-        stagedPendingReview: operationalData.kpis.approvedOffers.value - operationalData.kpis.publishedOffers.value,
-        stagedValidated: operationalData.kpis.validatedOffers.value,
+        stagedPendingReview: stagingSnapshot.statusCounts.NEEDS_REVIEW ?? 0,
+        stagedValidated: stagingSnapshot.statusCounts.VALIDATED ?? operationalData.kpis.validatedOffers.value,
+        stagedApproved: stagingSnapshot.statusCounts.APPROVED ?? 0,
+        readyToPublish: stagingSnapshot.statusCounts.READY_TO_PUBLISH ?? ((stagingSnapshot.statusCounts.APPROVED ?? 0) + (stagingSnapshot.statusCounts.VALIDATED ?? 0)),
         totalPublished: operationalData.kpis.publishedOffers.value,
         lastRunAt: operationalData.lastSuccessfulSync
       };
@@ -1556,13 +1573,6 @@ app.get('/api/admin/catalog-importer/stats', requireAdminAuth, async (req, res) 
     res.status(500).json({ error: 'Eroare la obținerea statisticilor de catalog.' });
   }
 });
-
-// 1.1 Dashboard Operațional Complet (Overview, KPI-uri, Status General)
-const persistCatalogOfferReview = async (offerId: string, updates: Record<string, any>) => {
-  const pool = getPool();
-  if (!pool) return;
-  await pool.query(`UPDATE catalog_extracted_offers SET staging_status = COALESCE($2, staging_status), matched_product_id = COALESCE($3, matched_product_id), match_method = COALESCE($4, match_method), match_confidence = COALESCE($5, match_confidence), reviewed_by = COALESCE($6, reviewed_by), reviewed_at = COALESCE($7, reviewed_at), rejection_reason = COALESCE($8, rejection_reason), updated_at = NOW() WHERE id = $1`, [offerId, updates.stagingStatus || null, updates.matchedProductId || null, updates.matchMethod || null, updates.matchConfidence ?? null, updates.reviewedBy || null, updates.reviewedAt || null, updates.rejectionReason || null]);
-};
 
 // Helper pentru alerte email scheduler (Resend / SMTP configurabil prin env)
 const sendScheduleAlert = async (params: {
@@ -1664,11 +1674,11 @@ const runCatalogPublishSchedule = async (
 
     const retailerIds = Array.isArray(schedule.retailer_ids) ? schedule.retailer_ids : [];
 
-    // 4. Extragere strictly a ofertelor eligibile (VALIDATED, preț pozitiv > 0)
+    // 4. Extragere strictă a ofertelor eligibile (APPROVED sau VALIDATED, preț pozitiv > 0)
     // Condiție strictă: ofertele NEEDS_REVIEW nu sunt atinse sau convertite automat!
     const result = await client.query(
       `SELECT id FROM catalog_extracted_offers
-       WHERE staging_status = 'VALIDATED'
+       WHERE UPPER(staging_status) IN ('APPROVED', 'VALIDATED')
          AND effective_price > 0
          AND ($1::text[] = '{}' OR retailer_id = ANY($1::text[]))`,
       [retailerIds]
@@ -2021,18 +2031,25 @@ app.post('/api/admin/audit-logs', requireAdminAuth, async (req, res) => {
 app.get('/api/admin/retailers', requireAdminAuth, async (req, res) => {
   try {
     const stores = await DatabaseService.getStores();
-    const mapped = stores.map(s => ({
-      id: s.id,
-      name: s.name,
-      slug: s.slug,
-      chain: s.chain,
-      format: s.chain?.includes('PDF') ? 'PDF' : 'HTML & PDF',
-      defaultStatus: s.isPartner ? 'ACTIVE' : 'ACTIVE',
-      color: s.brandColor?.replace(/^bg-/, '')?.replace(/-\d{3}$/, '') || 'emerald',
-      brandColor: s.brandColor,
-      accentColor: s.accentColor,
-      type: s.type
-    }));
+    const seenIds = new Set<string>();
+    const mapped = stores
+      .filter(s => {
+        if (!s.id || seenIds.has(s.id)) return false;
+        seenIds.add(s.id);
+        return true;
+      })
+      .map(s => ({
+        id: s.id,
+        name: s.name,
+        slug: s.slug,
+        chain: s.chain,
+        format: s.chain?.includes('PDF') ? 'PDF' : 'HTML & PDF',
+        defaultStatus: s.isPartner ? 'ACTIVE' : 'ACTIVE',
+        color: s.brandColor?.replace(/^bg-/, '')?.replace(/-\d{3}$/, '') || 'emerald',
+        brandColor: s.brandColor,
+        accentColor: s.accentColor,
+        type: s.type
+      }));
     res.json({ success: true, retailers: mapped });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la preluarea listei de retaileri.' });
@@ -2719,7 +2736,7 @@ app.get('/api/admin/catalog-importer/staging', requireAdminAuth, async (req, res
     const page = parseInt((req.query.page as string) || '1', 10);
     const limit = parseInt((req.query.limit as string) || '50', 10);
     const status = (req.query.status as string) || 'toate';
-    const retailerId = (req.query.retailerId as string) || 'toate';
+    const retailerId = (req.query.retailerId as string) || (req.query.retailer as string) || 'toate';
     const documentId = (req.query.documentId as string) || 'toate';
     const search = (req.query.search as string) || '';
     const filterType = (req.query.filterType as string) || '';
@@ -2745,7 +2762,7 @@ app.get('/api/admin/catalog-importer/staging', requireAdminAuth, async (req, res
   }
 });
 
-// 9.1. Aprobare sau respingere în masă a ofertelor din Staging (Bulk Review)
+// 9.1. Aprobare & Validare sau respingere în masă a ofertelor din Staging (Bulk Review)
 app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, async (req, res) => {
   try {
     const { offerIds, action, rejectionReason } = req.body;
@@ -2756,18 +2773,156 @@ app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, as
       return res.status(400).json({ error: 'Acțiunea trebuie să fie "approve" sau "reject".' });
     }
 
-    const result = await DatabaseService.bulkReviewStagingOffers({
-      offerIds,
-      action,
-      rejectionReason,
-      userEmail: (req.body?.userEmail as string) || 'admin@cosulmeu.ro',
-      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
-    });
+    const userEmail = (req.body?.userEmail as string) || 'admin@cosulmeu.ro';
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
 
+    if (isPostgresConfigured() && getPool()) {
+      const result = await DatabaseService.bulkReviewStagingOffers({
+        offerIds,
+        action,
+        rejectionReason,
+        userEmail,
+        ipAddress
+      });
+
+      if (action === 'approve') {
+        for (const approvedId of result.approvedIds) {
+          StorageService.updateCatalogExtractedOffer(approvedId, {
+            stagingStatus: 'APPROVED',
+            validationErrors: undefined,
+            rejectionReason: undefined,
+            reviewedBy: userEmail,
+            reviewedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          });
+        }
+        for (const failed of result.failedItems) {
+          StorageService.updateCatalogExtractedOffer(failed.id, {
+            validationErrors: failed.errors,
+            updatedAt: new Date().toISOString()
+          });
+        }
+
+        if (result.approvedIds.length === 0 && result.failedCount > 0) {
+          return res.status(422).json({
+            success: false,
+            partial: false,
+            updatedCount: 0,
+            approvedIds: [],
+            failedCount: result.failedCount,
+            failedItems: result.failedItems,
+            error: result.message,
+            message: result.message
+          });
+        }
+      } else {
+        for (const oid of offerIds) {
+          const existing = StorageService.getCatalogExtractedOffers().find(o => o.id === oid);
+          if (existing && String(existing.stagingStatus).toUpperCase() !== 'PUBLISHED') {
+            StorageService.updateCatalogExtractedOffer(oid, {
+              stagingStatus: 'REJECTED',
+              rejectionReason: rejectionReason || 'Respins manual în lot de administrator.',
+              reviewedBy: userEmail,
+              reviewedAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            });
+          }
+        }
+      }
+
+      return res.json({
+        success: true,
+        partial: result.failedCount > 0,
+        updatedCount: result.count,
+        approvedIds: result.approvedIds,
+        failedCount: result.failedCount,
+        failedItems: result.failedItems,
+        message: result.message
+      });
+    }
+
+    // Fallback în memorie când PostgreSQL nu este activ
+    const allStaged = StorageService.getCatalogExtractedOffers();
+    const todayStr = new Date().toISOString().split('T')[0];
+    const approvedIds: string[] = [];
+    const failedItems: Array<{ id: string; rawTitle: string; errors: string[] }> = [];
+    let rejectedCount = 0;
+
+    for (const oid of offerIds) {
+      const target = allStaged.find(o => o.id === oid);
+      if (!target) continue;
+      const statusUpper = String(target.stagingStatus || 'NEEDS_REVIEW').toUpperCase();
+      if (statusUpper === 'PUBLISHED') {
+        failedItems.push({
+          id: oid,
+          rawTitle: target.rawTitle || oid,
+          errors: ['Oferta este deja publicată în catalogul public.']
+        });
+        continue;
+      }
+
+      if (action === 'reject') {
+        StorageService.updateCatalogExtractedOffer(oid, {
+          stagingStatus: 'REJECTED',
+          rejectionReason: rejectionReason || 'Respins manual în lot de administrator.',
+          reviewedBy: userEmail,
+          reviewedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+        rejectedCount++;
+      } else {
+        const errs: string[] = [];
+        if (!target.rawTitle || target.rawTitle.trim().length < 2) errs.push('Denumirea produsului lipsește.');
+        if (!Number.isFinite(target.effectivePrice) || target.effectivePrice <= 0) errs.push('Prețul efectiv trebuie să fie pozitiv (> 0).');
+        if (target.normalPrice > 0 && target.effectivePrice > target.normalPrice + 0.01) errs.push('Prețul efectiv depășește prețul normal.');
+        if (target.rawBarcode && !/^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(target.rawBarcode.trim())) errs.push('Cod EAN invalid.');
+        if (target.validUntil && target.validUntil < todayStr) errs.push(`Ofertă expirată (${target.validUntil}).`);
+
+        if (errs.length > 0) {
+          StorageService.updateCatalogExtractedOffer(oid, {
+            stagingStatus: 'NEEDS_REVIEW',
+            validationErrors: errs,
+            updatedAt: new Date().toISOString()
+          });
+          failedItems.push({ id: oid, rawTitle: target.rawTitle || oid, errors: errs });
+        } else {
+          StorageService.updateCatalogExtractedOffer(oid, {
+            stagingStatus: 'APPROVED',
+            validationErrors: undefined,
+            rejectionReason: undefined,
+            reviewedBy: userEmail,
+            reviewedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          });
+          approvedIds.push(oid);
+        }
+      }
+    }
+
+    if (action === 'approve' && approvedIds.length === 0 && failedItems.length > 0) {
+      return res.status(422).json({
+        success: false,
+        partial: false,
+        updatedCount: 0,
+        approvedIds: [],
+        failedCount: failedItems.length,
+        failedItems,
+        error: `Nicio ofertă nu a trecut validarea (${failedItems.length} cu erori).`,
+        message: `Nicio ofertă nu a trecut validarea (${failedItems.length} cu erori).`
+      });
+    }
+
+    const updatedCount = action === 'approve' ? approvedIds.length : rejectedCount;
     res.json({
       success: true,
-      updatedCount: result.count,
-      message: result.message
+      partial: failedItems.length > 0,
+      updatedCount,
+      approvedIds,
+      failedCount: failedItems.length,
+      failedItems,
+      message: action === 'approve'
+        ? `${approvedIds.length} oferte au fost validate și aprobate.${failedItems.length > 0 ? ` ${failedItems.length} au rămas cu erori de validare.` : ''}`
+        : `${rejectedCount} oferte au fost respinse.`
     });
   } catch (err: any) {
     console.error('Eroare bulk-review staging:', err.message);
@@ -2775,12 +2930,12 @@ app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, as
   }
 });
 
-// 9.2. Drill-down: Oferte Aprobate (Cele 437 de oferte din Staging)
+// 9.2. Drill-down: Oferte Aprobate
 app.get('/api/admin/catalog-importer/approved-offers', requireAdminAuth, async (req, res) => {
   try {
     const page = parseInt((req.query.page as string) || '1', 10);
     const limit = parseInt((req.query.limit as string) || '50', 10);
-    const retailerId = req.query.retailerId as string;
+    const retailerId = (req.query.retailerId as string) || (req.query.retailer as string);
     const search = req.query.search as string;
 
     const result = await DatabaseService.getApprovedOffersDetailed({ page, limit, retailerId, search });
@@ -2790,12 +2945,12 @@ app.get('/api/admin/catalog-importer/approved-offers', requireAdminAuth, async (
   }
 });
 
-// 9.3. Drill-down: Oferte Publicate (Cele 1.643 de oferte din product_offers)
+// 9.3. Drill-down: Oferte Publicate
 app.get('/api/admin/catalog-importer/public-offers', requireAdminAuth, async (req, res) => {
   try {
     const page = parseInt((req.query.page as string) || '1', 10);
     const limit = parseInt((req.query.limit as string) || '50', 10);
-    const retailerId = req.query.retailerId as string;
+    const retailerId = (req.query.retailerId as string) || (req.query.retailer as string);
     const search = req.query.search as string;
 
     const result = await DatabaseService.getPublicOffersDetailed({ page, limit, retailerId, search });
@@ -2810,7 +2965,7 @@ app.get('/api/admin/catalog-importer/price-changes', requireAdminAuth, async (re
   try {
     const page = parseInt((req.query.page as string) || '1', 10);
     const limit = parseInt((req.query.limit as string) || '50', 10);
-    const retailerId = req.query.retailerId as string;
+    const retailerId = (req.query.retailerId as string) || (req.query.retailer as string);
     const search = req.query.search as string;
 
     const result = await DatabaseService.getPriceChangesDetailed({ page, limit, retailerId, search });
@@ -2825,7 +2980,7 @@ app.get('/api/admin/catalog-importer/items-without-price', requireAdminAuth, asy
   try {
     const page = parseInt((req.query.page as string) || '1', 10);
     const limit = parseInt((req.query.limit as string) || '50', 10);
-    const retailerId = req.query.retailerId as string;
+    const retailerId = (req.query.retailerId as string) || (req.query.retailer as string);
     const search = req.query.search as string;
 
     const result = await DatabaseService.getItemsWithoutPriceDetailed({ page, limit, retailerId, search });
@@ -2835,91 +2990,178 @@ app.get('/api/admin/catalog-importer/items-without-price', requireAdminAuth, asy
   }
 });
 
-// 10. Aprobare sau respingere manuală ofertă din Staging
+// 10. Validare, aprobare sau respingere manuală ofertă individuală din Staging
 app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { action, matchedProductId, rejectionReason } = req.body;
+    const userEmail = (req.body?.userEmail as string) || 'admin@cosulmeu.ro';
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
 
     if (!['approve', 'reject'].includes(action)) {
       return res.status(400).json({ error: 'Acțiune invalidă. Este necesar "approve" sau "reject".' });
     }
 
+    if (isPostgresConfigured() && getPool()) {
+      const result = await DatabaseService.reviewSingleStagingOffer({
+        offerId: id,
+        action,
+        matchedProductId,
+        rejectionReason,
+        userEmail,
+        ipAddress
+      });
+
+      if (result.notFound) {
+        return res.status(404).json({ success: false, error: result.message });
+      }
+      if (!result.success) {
+        StorageService.updateCatalogExtractedOffer(id, {
+          validationErrors: result.validationErrors,
+          updatedAt: new Date().toISOString()
+        });
+        return res.status(422).json({
+          success: false,
+          error: result.message,
+          validationErrors: result.validationErrors || [result.message],
+          message: result.message
+        });
+      }
+
+      if (result.offer) {
+        StorageService.updateCatalogExtractedOffer(id, result.offer);
+      }
+
+      return res.json({
+        success: true,
+        offer: result.offer,
+        message: result.message
+      });
+    }
+
+    // Fallback în memorie când PostgreSQL nu este configurat
+    const existingOffers = StorageService.getCatalogExtractedOffers();
+    const targetOffer = existingOffers.find(o => o.id === id);
+    if (!targetOffer) {
+      return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
+    }
+
     if (action === 'approve') {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const errs: string[] = [];
+      if (String(targetOffer.stagingStatus || '').toUpperCase() === 'PUBLISHED') {
+        errs.push('Oferta este deja publicată în catalogul public.');
+      }
+      if (!targetOffer.rawTitle || targetOffer.rawTitle.trim().length < 2) {
+        errs.push('Denumirea produsului lipsește sau are mai puțin de 2 caractere.');
+      }
+      if (!Number.isFinite(targetOffer.effectivePrice) || targetOffer.effectivePrice <= 0) {
+        errs.push('Prețul efectiv trebuie să fie pozitiv (> 0).');
+      }
+      if (targetOffer.normalPrice > 0 && targetOffer.effectivePrice > targetOffer.normalPrice + 0.01) {
+        errs.push('Prețul efectiv nu poate depăși prețul normal.');
+      }
+      if (targetOffer.rawBarcode && !/^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(targetOffer.rawBarcode.trim())) {
+        errs.push(`Codul de bare EAN „${targetOffer.rawBarcode}” este invalid.`);
+      }
+      if (targetOffer.validUntil && targetOffer.validUntil < todayStr) {
+        errs.push(`Oferta este expirată (valabilă până la ${targetOffer.validUntil}).`);
+      }
+
+      if (errs.length > 0) {
+        StorageService.updateCatalogExtractedOffer(id, {
+          stagingStatus: String(targetOffer.stagingStatus).toUpperCase() === 'PUBLISHED' ? 'PUBLISHED' : 'NEEDS_REVIEW',
+          validationErrors: errs,
+          updatedAt: new Date().toISOString()
+        });
+        return res.status(422).json({
+          success: false,
+          error: `Oferta nu a trecut validarea: ${errs.join(' ')}`,
+          validationErrors: errs,
+          message: `Oferta nu a trecut validarea: ${errs.join(' ')}`
+        });
+      }
+
       const updateData: any = {
-        stagingStatus: 'VALIDATED',
-        reviewedBy: 'admin',
-        reviewedAt: new Date().toISOString()
+        stagingStatus: 'APPROVED',
+        validationErrors: undefined,
+        rejectionReason: undefined,
+        reviewedBy: userEmail,
+        reviewedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
 
       if (matchedProductId) {
         updateData.matchedProductId = matchedProductId;
-        const allProducts = StorageService.getAllProducts();
-        const prod = allProducts.find(p => p.id === matchedProductId);
+        const prod = StorageService.getAllProducts().find(p => p.id === matchedProductId);
         if (prod) updateData.matchedProductName = prod.name;
         updateData.matchMethod = 'manual';
         updateData.matchConfidence = 1.0;
-      } else {
-        const existingOffers = StorageService.getCatalogExtractedOffers();
-        const targetOffer = existingOffers.find(o => o.id === id);
-        if (targetOffer && !targetOffer.matchedProductId) {
-          const { category, subcategory } = mapRetailerCategoryToStandard(targetOffer.rawTitle);
-          const normUnit = ['kg', 'g'].includes(targetOffer.packageUnit || '')
-            ? 'kg'
-            : ['l', 'ml'].includes(targetOffer.packageUnit || '')
-            ? 'l'
-            : 'buc';
-          const newProd: any = {
-            id: `prod-cat-${targetOffer.retailerId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            name: targetOffer.rawTitle,
-            brand: targetOffer.rawBrand || 'Marcă Magazin',
-            category,
-            subcategory,
-            defaultUnit: targetOffer.packageUnit || 'buc',
-            packageWeightOrVolume: targetOffer.packageQuantity || 1,
-            packageUnit: targetOffer.packageUnit || 'buc',
-            normalizedUnit: normUnit,
-            barcode: targetOffer.rawBarcode || undefined,
-            baseReferencePrice: targetOffer.normalPrice || targetOffer.effectivePrice,
-            isRomanianProduct: true
-          };
-          StorageService.addCustomProduct(newProd);
-          updateData.matchedProductId = newProd.id;
-          updateData.matchedProductName = newProd.name;
-          updateData.matchMethod = 'manual';
-          updateData.matchConfidence = 1.0;
-        }
       }
 
       const updated = StorageService.updateCatalogExtractedOffer(id, updateData);
-      await persistCatalogOfferReview(id, updateData);
-      if (!updated && !getPool()) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
-
-      res.json({ success: true, offer: updated || { id, ...updateData }, message: 'Oferta a fost validată și este pregătită pentru publicare.' });
+      return res.json({
+        success: true,
+        offer: updated || { id, ...updateData },
+        message: 'Oferta a fost validată, aprobată și adăugată în lista de publicare.'
+      });
     } else {
       const rejectionUpdates = {
-        stagingStatus: 'REJECTED',
+        stagingStatus: 'REJECTED' as const,
         rejectionReason: rejectionReason || 'Respinsă manual de administrator.',
-        reviewedBy: 'admin',
-        reviewedAt: new Date().toISOString()
+        reviewedBy: userEmail,
+        reviewedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       };
-      const updated = StorageService.updateCatalogExtractedOffer(id, rejectionUpdates as any);
-      await persistCatalogOfferReview(id, rejectionUpdates);
-      if (!updated && !getPool()) return res.status(404).json({ error: 'Oferta nu a fost găsită în staging.' });
-
-      res.json({ success: true, offer: updated || { id, ...rejectionUpdates }, message: 'Oferta a fost respinsă.' });
+      const updated = StorageService.updateCatalogExtractedOffer(id, rejectionUpdates);
+      return res.json({
+        success: true,
+        offer: updated || { id, ...rejectionUpdates },
+        message: 'Oferta a fost respinsă și exclusă de la publicare.'
+      });
     }
   } catch (err: any) {
-    res.status(500).json({ error: 'Eroare la revizuirea ofertei.' });
+    res.status(500).json({ error: err.message || 'Eroare la revizuirea ofertei.' });
   }
 });
 
-
-// 11. Publicare oferte validate în catalogul public
+// 11. Publicare atomică a ofertelor validate și aprobate în catalogul public
 app.post('/api/admin/catalog-importer/publish-validated', requireAdminAuth, async (req, res) => {
   try {
-    const { offerIds } = req.body;
-    const pubResult = await CatalogStagingManager.publishValidatedOffers(offerIds);
+    const { offerIds, previewSnapshotHash, userEmail } = req.body || {};
+    const actorEmail = (userEmail as string) || 'admin@cosulmeu.ro';
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
+
+    const pubResult = await CatalogStagingManager.publishValidatedOffers(offerIds, {
+      previewSnapshotHash,
+      userEmail: actorEmail
+    });
+
+    if (pubResult.conflict) {
+      await DatabaseService.logAdminActivity({
+        userEmail: actorEmail,
+        action: 'publish_validated_conflict',
+        targetType: 'staging_offers',
+        targetId: Array.isArray(offerIds) ? offerIds.slice(0, 5).join(',') : 'all_ready_to_publish',
+        details: {
+          conflict: true,
+          errors: pubResult.errors
+        },
+        ipAddress
+      });
+
+      return res.status(409).json({
+        success: false,
+        conflict: true,
+        requiresRefreshPreview: Boolean(pubResult.requiresRefreshPreview),
+        publishedCount: 0,
+        publishedOfferIds: [],
+        errors: pubResult.errors,
+        error: pubResult.errors[0] || 'Lista ofertelor s-a modificat între previzualizare și confirmare.',
+        message: pubResult.errors[0] || 'Lista ofertelor s-a modificat între previzualizare și confirmare. Reîmprospătați previzualizarea.'
+      });
+    }
+
     const persistedProductCount = isPostgresConfigured()
       ? (await DatabaseService.getProducts()).length
       : StorageService.getAllProducts().length;
@@ -2929,23 +3171,25 @@ app.post('/api/admin/catalog-importer/publish-validated', requireAdminAuth, asyn
     const persisted = pubResult.errors.length === 0;
 
     await DatabaseService.logAdminActivity({
-      userEmail: (req.body?.userEmail as string) || 'admin@cosulmeu.ro',
+      userEmail: actorEmail,
       action: 'publish_validated_offers',
       targetType: 'staging_offers',
       targetId: offerIds ? (Array.isArray(offerIds) ? offerIds.slice(0, 5).join(',') : String(offerIds)) : 'all_validated',
       details: {
         publishedCount: pubResult.publishedCount,
+        publishedOfferIds: pubResult.publishedOfferIds.slice(0, 20),
         persistedProductCount,
         persistedOfferCount,
         errorsCount: pubResult.errors.length,
         result: persisted ? 'SUCCESS' : 'WARNINGS'
       },
-      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+      ipAddress
     });
 
     res.json({
       success: persisted,
       publishedCount: pubResult.publishedCount,
+      publishedOfferIds: pubResult.publishedOfferIds,
       persistedProductCount,
       persistedOfferCount,
       errors: pubResult.errors,
@@ -2954,7 +3198,7 @@ app.post('/api/admin/catalog-importer/publish-validated', requireAdminAuth, asyn
         : `Publicarea a fost finalizată cu avertismente: ${pubResult.errors.join('; ')}`
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'Eroare la publicarea ofertelor validate.' });
+    res.status(500).json({ error: err.message || 'Eroare la publicarea ofertelor validate.' });
   }
 });
 

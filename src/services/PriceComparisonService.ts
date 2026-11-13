@@ -36,6 +36,10 @@ export class PriceComparisonService {
       const match = allProducts.find(p => p.id === item.productId);
       if (match) return match;
     }
+    if (item.barcode) {
+      const barcodeMatch = allProducts.find(p => p.barcode && p.barcode === item.barcode);
+      if (barcodeMatch) return barcodeMatch;
+    }
     const cleanItemName = item.name.toLowerCase().trim();
     return allProducts.find(p => {
       const pName = p.name.toLowerCase();
@@ -58,8 +62,12 @@ export class PriceComparisonService {
   /**
    * Find product offers across all stores for a specific item, filtering out expired offers
    */
-  static getOffersForProduct(productId: string, includeExpired = false): ProductOffer[] {
-    const allOffers = StorageService.getProductOffers();
+  static getOffersForProduct(
+    productId: string,
+    includeExpired = false,
+    customOffers?: ProductOffer[]
+  ): ProductOffer[] {
+    const allOffers = customOffers ?? StorageService.getProductOffers();
     return allOffers.filter(
       o => o.productId === productId && (includeExpired || this.isOfferValid(o))
     );
@@ -92,22 +100,25 @@ export class PriceComparisonService {
         ? Math.round(((offer.originalPrice / offer.price) * offer.unitPrice) * 100) / 100
         : offer.unitPrice;
 
+    const itemUnit = (item.unit || 'buc').toLowerCase();
+    const normUnit = (product.normalizedUnit || 'buc').toLowerCase();
+
     let calculatedCost = 0;
     // Normalized cost calculation
-    if (item.unit === 'g' && product.normalizedUnit === 'kg') {
+    if (itemUnit === 'g' && normUnit === 'kg') {
       calculatedCost = (item.quantity / 1000) * effectiveUnitPrice;
-    } else if (item.unit === 'ml' && product.normalizedUnit === 'l') {
+    } else if (itemUnit === 'ml' && normUnit === 'l') {
       calculatedCost = (item.quantity / 1000) * effectiveUnitPrice;
-    } else if (item.unit === 'kg' && product.normalizedUnit === 'kg') {
+    } else if (itemUnit === 'kg' && normUnit === 'kg') {
       calculatedCost = item.quantity * effectiveUnitPrice;
-    } else if (item.unit === 'l' && product.normalizedUnit === 'l') {
+    } else if (itemUnit === 'l' && normUnit === 'l') {
       calculatedCost = item.quantity * effectiveUnitPrice;
     } else {
       // Per package or item count
       calculatedCost = item.quantity * effectiveOfferPrice;
     }
 
-    const unitPriceStr = `${this.formatRon(effectiveUnitPrice)} / ${product.normalizedUnit}`;
+    const unitPriceStr = `${this.formatRon(effectiveUnitPrice)} / ${normUnit}`;
     return {
       price: Math.round(calculatedCost * 100) / 100,
       unitPriceStr,
@@ -133,6 +144,9 @@ export class PriceComparisonService {
     const allStores = customStores ?? STORES;
     const userProfile = StorageService.getUserProfile();
 
+    const normalizeStoreKey = (val: string) =>
+      (val || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+
     const useLoyaltyCards =
       options?.useLoyaltyCards !== undefined
         ? options.useLoyaltyCards
@@ -146,6 +160,8 @@ export class PriceComparisonService {
 
     // For each store, gather matching non-expired offers and calculate totals
     const comparisons: BasketStoreComparison[] = allStores.map(store => {
+      const storeKey = normalizeStoreKey(store.slug || store.id);
+      const storeIdKey = normalizeStoreKey(store.id);
       const availableItems: BasketStoreComparison['availableItems'] = [];
       const missingItems: ShoppingListItem[] = [];
       let availableTotal = 0;
@@ -163,9 +179,15 @@ export class PriceComparisonService {
         }
 
         // Look for valid, non-expired offer from this store
-        const candidateOffers = allOffers.filter(
-          o => o.productId === product.id && o.storeId === store.id && this.isOfferValid(o)
-        );
+        const candidateOffers = allOffers.filter(o => {
+          if (o.productId !== product.id || !this.isOfferValid(o)) return false;
+          const offStoreKey = normalizeStoreKey(o.storeId);
+          return (
+            o.storeId === store.id ||
+            offStoreKey === storeIdKey ||
+            offStoreKey === storeKey
+          );
+        });
 
         const offer = candidateOffers[0];
 
@@ -197,7 +219,7 @@ export class PriceComparisonService {
           availableTotal += price;
         } else {
           // Missing in this store: calculate transparent estimate without treating as 0
-          const estPrice = (product.baseReferencePrice || item.referencePrice || 10) * item.quantity;
+          const estPrice = (product.baseReferencePrice || item.referencePrice || item.estimatedPrice || 10) * item.quantity;
           missingItems.push(item);
           estimatedMissingTotal += estPrice;
         }

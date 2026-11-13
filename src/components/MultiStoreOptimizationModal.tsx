@@ -10,22 +10,28 @@ import {
   AlertCircle,
   HelpCircle
 } from 'lucide-react';
-import { ShoppingListItem } from '../types.js';
+import { ShoppingListItem, Product, ProductOffer, Store as StoreType } from '../types.js';
 import { OptimizationService } from '../services/OptimizationService.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 
 interface MultiStoreOptimizationModalProps {
   items: ShoppingListItem[];
   onClose: () => void;
+  products?: Product[];
+  offers?: ProductOffer[];
+  stores?: StoreType[];
 }
 
 export const MultiStoreOptimizationModal: React.FC<MultiStoreOptimizationModalProps> = ({
   items,
-  onClose
+  onClose,
+  products,
+  offers,
+  stores
 }) => {
   const [transportCost, setTransportCost] = useState<number>(6.00); // 6 RON default travel cost
 
-  const optimization = OptimizationService.optimizeBasket(items, transportCost);
+  const optimization = OptimizationService.optimizeBasket(items, transportCost, products, offers, stores);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">

@@ -40,7 +40,7 @@ import { STORES } from '../data/mockData.js';
 interface ProductsViewProps {
   onSelectProduct: (productId: string) => void;
   activeList?: ShoppingList;
-  onAddToList?: (productId: string, productName: string) => void;
+  onAddToList?: (productId: string, productName: string, product?: Product) => Promise<boolean> | boolean | void;
   initialCategory?: string;
 }
 
@@ -249,29 +249,67 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
     setCurrentPage(1);
   };
 
-  const handleQuickAdd = (e: React.MouseEvent, p: Product) => {
+  const handleQuickAdd = async (e: React.MouseEvent, p: Product) => {
     e.stopPropagation();
+    let added: boolean | void = true;
     if (onAddToList) {
-      onAddToList(p.id, p.name);
+      added = await onAddToList(p.id, p.name, p);
     } else {
       const lists = StorageService.getShoppingLists();
-      const current = lists[0];
-      if (current) {
-        current.items.push({
-          id: `item-${Date.now()}`,
-          productId: p.id,
-          name: p.name,
-          brand: p.brand,
-          category: p.category,
-          quantity: 1,
-          unit: p.defaultUnit,
-          checked: false
-        });
+      const nowIso = new Date().toISOString();
+      const itemId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `item-${Date.now()}`;
+      if (lists.length > 0 && lists[0]) {
+        const current = lists[0];
+        const existingIdx = current.items.findIndex(item => item.productId === p.id);
+        if (existingIdx >= 0) {
+          current.items[existingIdx] = {
+            ...current.items[existingIdx],
+            quantity: current.items[existingIdx].quantity + 1
+          };
+        } else {
+          current.items.push({
+            id: itemId,
+            productId: p.id,
+            name: p.name,
+            brand: p.brand,
+            category: p.category,
+            quantity: 1,
+            unit: p.defaultUnit || 'buc',
+            checked: false,
+            barcode: p.barcode,
+            referencePrice: p.baseReferencePrice,
+            estimatedPrice: p.baseReferencePrice
+          });
+        }
+        current.updatedAt = nowIso;
         StorageService.saveShoppingLists(lists);
+      } else {
+        const listId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `list-${Date.now()}`;
+        StorageService.saveShoppingLists([{
+          id: listId,
+          name: 'Coșul Meu',
+          items: [{
+            id: itemId,
+            productId: p.id,
+            name: p.name,
+            brand: p.brand,
+            category: p.category,
+            quantity: 1,
+            unit: p.defaultUnit || 'buc',
+            checked: false,
+            barcode: p.barcode,
+            referencePrice: p.baseReferencePrice,
+            estimatedPrice: p.baseReferencePrice
+          }],
+          createdAt: nowIso,
+          updatedAt: nowIso
+        }]);
       }
     }
-    setAddedItemName(p.name);
-    setTimeout(() => setAddedItemName(null), 2500);
+    if (added !== false) {
+      setAddedItemName(p.name);
+      setTimeout(() => setAddedItemName(null), 2500);
+    }
   };
 
   // Helper icon renderer
@@ -697,19 +735,34 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                   {/* Butoane Acțiune */}
                   <div className="mt-3 flex items-center gap-2">
                     <button
-                      onClick={() => onSelectProduct(product.id)}
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        onSelectProduct(product.id);
+                      }}
                       className="flex-1 py-2 px-3 rounded-xl bg-slate-900 group-hover:bg-emerald-600 text-white text-xs font-bold transition-colors flex items-center justify-center gap-1"
                     >
                       <span>Compară prețuri</span>
                       <ChevronRight className="w-3.5 h-3.5" />
                     </button>
-                    <button
-                      onClick={e => handleQuickAdd(e, product)}
-                      className="p-2 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700 transition-colors"
-                      title="Adaugă în lista mea"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
+                    {(() => {
+                      const inList = Boolean(activeList?.items.some(item => item.productId === product.id));
+                      return (
+                        <button
+                          type="button"
+                          onClick={e => { void handleQuickAdd(e, product); }}
+                          aria-label={`Adaugă ${product.name} în lista mea`}
+                          className={`p-2 rounded-xl border transition-colors ${
+                            inList
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                              : 'border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'
+                          }`}
+                          title={inList ? 'Produs în listă (click pentru +1)' : 'Adaugă în lista mea'}
+                        >
+                          {inList ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

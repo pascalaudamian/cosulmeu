@@ -95,6 +95,7 @@ export interface CatalogExtractedOffer {
   runId: string;
   documentId: string;
   retailerId: string;
+  retailerName?: string;
   rawTitle: string;
   rawBrand?: string;
   rawBarcode?: string;
@@ -120,6 +121,8 @@ export interface CatalogExtractedOffer {
   imageUrl?: string;
   catalogUrl?: string;
   sourcePageUrl?: string;
+  documentTitle?: string;
+  documentUrl?: string;
   storeOrRegion?: string;
   targetAudience?: 'general' | 'horeca' | 'traders';
   matchedProductId?: string;

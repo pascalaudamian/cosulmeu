@@ -35,7 +35,7 @@ interface ProductDetailViewProps {
   onBack: () => void;
   onNavigateToCategory?: (category: string) => void;
   activeList?: ShoppingList;
-  onAddToList?: (productId: string, productName: string) => void;
+  onAddToList?: (productId: string, productName: string, product?: Product) => Promise<boolean> | boolean | void;
 }
 
 export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
@@ -194,30 +194,48 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     }
   };
 
-  const handleAddProductToList = () => {
+  const handleAddProductToList = async () => {
     if (!data?.product) return;
+    const p = data.product;
+    let added: boolean | void = true;
     if (onAddToList) {
-      onAddToList(data.product.id, data.product.name);
+      added = await onAddToList(p.id, p.name, p);
     } else {
       // Direct storage fallback
       const lists = StorageService.getShoppingLists();
-      const current = lists[0];
-      if (current) {
-        current.items.push({
-          id: `item-${Date.now()}`,
-          productId: data.product.id,
-          name: data.product.name,
-          brand: data.product.brand,
-          category: data.product.category,
-          quantity: 1,
-          unit: data.product.defaultUnit,
-          checked: false
-        });
+      const nowIso = new Date().toISOString();
+      const itemId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `item-${Date.now()}`;
+      if (lists.length > 0 && lists[0]) {
+        const current = lists[0];
+        const existingIdx = current.items.findIndex(item => item.productId === p.id);
+        if (existingIdx >= 0) {
+          current.items[existingIdx] = {
+            ...current.items[existingIdx],
+            quantity: current.items[existingIdx].quantity + 1
+          };
+        } else {
+          current.items.push({
+            id: itemId,
+            productId: p.id,
+            name: p.name,
+            brand: p.brand,
+            category: p.category,
+            quantity: 1,
+            unit: p.defaultUnit || 'buc',
+            checked: false,
+            barcode: p.barcode,
+            referencePrice: p.baseReferencePrice,
+            estimatedPrice: p.baseReferencePrice
+          });
+        }
+        current.updatedAt = nowIso;
         StorageService.saveShoppingLists(lists);
       }
     }
-    setAddedToast(true);
-    setTimeout(() => setAddedToast(false), 2500);
+    if (added !== false) {
+      setAddedToast(true);
+      setTimeout(() => setAddedToast(false), 2500);
+    }
   };
 
   const handleSubmitErrorReport = async (e: React.FormEvent) => {
@@ -458,11 +476,16 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               </div>
 
               <button
-                onClick={handleAddProductToList}
+                type="button"
+                onClick={() => { void handleAddProductToList(); }}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition-all hover:scale-[1.02]"
               >
                 <Plus className="w-4 h-4" />
-                <span>Adaugă în lista mea</span>
+                <span>
+                  {activeList?.items.some(item => item.productId === product.id)
+                    ? 'Adaugă încă unul în lista mea'
+                    : 'Adaugă în lista mea'}
+                </span>
               </button>
             </div>
           </div>

@@ -23,7 +23,8 @@ import {
   Clock,
   ShieldCheck,
   Edit3,
-  Plus
+  Plus,
+  Info
 } from 'lucide-react';
 import { CatalogExtractedOffer } from '../indexing/catalog/catalogTypes.js';
 
@@ -96,6 +97,7 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
 
   const handleLinkProduct = async (product: any) => {
     setIsLinkingProduct(true);
+    setMessage(null);
     try {
       const res = await fetch(`/api/admin/catalog-importer/staging/${offer.id}/review`, {
         method: 'POST',
@@ -112,11 +114,17 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
           userEmail: 'admin@cosulmeu.ro'
         })
       });
-      if (res.ok) {
-        setMessage({ type: 'success', text: `Asociat cu succes la „${product.name}”!` });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success !== false) {
+        setMessage({ type: 'success', text: `Asociat și aprobat cu succes la „${product.name}”!` });
         setTimeout(() => {
-          onApprove(offer.id);
-        }, 800);
+          onClose();
+        }, 600);
+      } else {
+        setMessage({
+          type: 'error',
+          text: json.error || (Array.isArray(json.validationErrors) ? json.validationErrors.join('; ') : 'Oferta nu a trecut validarea.')
+        });
       }
     } catch {
       setMessage({ type: 'error', text: 'Eroare la asocierea produsului canonic.' });
@@ -175,6 +183,21 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
             >
               {message.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
               <span>{message.text}</span>
+            </div>
+          )}
+
+          {/* Persisted Server Validation Errors Banner */}
+          {Array.isArray(offer.validationErrors) && offer.validationErrors.length > 0 && (
+            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 space-y-1.5">
+              <div className="font-extrabold text-rose-900 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-rose-600" />
+                <span>Erori de Validare Blocate în PostgreSQL ({offer.validationErrors.length})</span>
+              </div>
+              <ul className="list-disc list-inside space-y-1 text-rose-800 text-[11px] font-medium">
+                {offer.validationErrors.map((err, idx) => (
+                  <li key={idx}>{err}</li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -254,7 +277,7 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
                 <span className="font-semibold text-slate-500">Perioadă Valabilitate Promo:</span>
                 <span className="font-semibold text-slate-700">
                   {offer.validFrom ? new Date(offer.validFrom).toLocaleDateString('ro-RO') : 'Start catalog'} —{' '}
-                  {offer.validTo ? new Date(offer.validTo).toLocaleDateString('ro-RO') : 'Final catalog'}
+                  {offer.validUntil ? new Date(offer.validUntil).toLocaleDateString('ro-RO') : 'Final catalog'}
                 </span>
               </div>
             </div>
@@ -451,15 +474,20 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
               type="button"
               onClick={async () => {
                 setIsProcessing(true);
-                await onApprove(offer.id);
-                setIsProcessing(false);
-                onClose();
+                try {
+                  await onApprove(offer.id);
+                  onClose();
+                } catch (err: any) {
+                  setMessage({ type: 'error', text: err?.message || 'Oferta nu a trecut validarea.' });
+                } finally {
+                  setIsProcessing(false);
+                }
               }}
-              disabled={isProcessing}
+              disabled={isProcessing || offer.stagingStatus === 'PUBLISHED'}
               className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-xs hover:bg-emerald-700 shadow-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>{offer.stagingStatus === 'VALIDATED' ? 'Aprobă din nou' : 'Validează & Aprobă'}</span>
+              <span>{offer.stagingStatus === 'APPROVED' || offer.stagingStatus === 'VALIDATED' ? 'Revalidează & Aprobă' : 'Validează & Aprobă'}</span>
             </button>
           </div>
         </div>

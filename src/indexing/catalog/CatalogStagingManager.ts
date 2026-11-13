@@ -18,7 +18,72 @@ import { Product, ProductOffer, PriceObservation, UnitType } from '../../types.j
 import { PriceQualityMonitor } from '../PriceQualityMonitor.js';
 import { mapRetailerCategoryToStandard } from '../../data/categories.js';
 
+export interface PublishPreviewItem {
+  id: string;
+  title: string;
+  price: number;
+  normalPrice: number;
+  promoPrice?: number;
+  loyaltyPrice?: number;
+  discountPercentage?: number;
+  retailerId: string;
+  retailerName: string;
+  brand?: string;
+  ean?: string;
+  retailerSku?: string;
+  packageQuantity?: number;
+  packageUnit?: string;
+  imageUrl?: string;
+  matchedProductId?: string;
+  matchedProductName?: string;
+  canonicalStatus: 'PRODUS NOU' | 'PRODUS EXISTENT';
+  offerAction: 'OFERTĂ NOUĂ' | 'OFERTĂ ACTUALIZATĂ' | 'PREȚ MODIFICAT' | 'FĂRĂ SCHIMBĂRI';
+  stagingStatus: string;
+  documentId?: string;
+  documentTitle?: string;
+  documentUrl?: string;
+  validUntil?: string;
+  isNewProduct: boolean;
+}
+
+export interface PublishPreviewData {
+  toPublishCount: number;
+  newProductsCount: number;
+  existingUpdatedCount: number;
+  unchangedProductsCount: number;
+  newOffersCount: number;
+  updatedOffersCount: number;
+  existingOffersCount: number;
+  priceChangesCount: number;
+  itemsWithoutPriceCount: number;
+  needsReviewCount: number;
+  retailersInvolved: string[];
+  items: PublishPreviewItem[];
+  sampleItems: PublishPreviewItem[];
+  eligibleOfferIds: string[];
+  cleanupOfferIds: string[];
+  previewSnapshotHash: string;
+  generatedAt: string;
+  errors: string[];
+}
+
 export class CatalogStagingManager {
+  private static computePreviewSnapshotHash(offers: CatalogExtractedOffer[]): string {
+    const signature = offers
+      .map(o => [
+        o.id,
+        String(o.stagingStatus || '').toUpperCase(),
+        Number(o.effectivePrice || 0).toFixed(2),
+        Number(o.normalPrice || 0).toFixed(2),
+        o.matchedProductId || '',
+        o.validUntil || '',
+        o.updatedAt || ''
+      ].join(':'))
+      .sort()
+      .join('|');
+    return crypto.createHash('sha256').update(signature).digest('hex');
+  }
+
   /**
    * Execută fluxul complet de procesare pentru un document de catalog
    */
@@ -184,13 +249,13 @@ export class CatalogStagingManager {
     let needsReviewCount = 0;
     const nowIso = new Date().toISOString();
 
-  const productsForMatching = isPostgresConfigured()
-  ? await DatabaseService.getProducts()
-  : StorageService.getAllProducts();
+    const productsForMatching = isPostgresConfigured()
+      ? await DatabaseService.getProducts()
+      : StorageService.getAllProducts();
 
-  for (let idx = 0; idx < parseRes.offers.length; idx++) {
-  const raw = parseRes.offers[idx];
-  const offerId = `stg-${crypto.createHash('sha256').update(`${document.retailerId}:${document.id}:${runId}:${idx + 1}`).digest('hex').slice(0, 48)}`;
+    for (let idx = 0; idx < parseRes.offers.length; idx++) {
+      const raw = parseRes.offers[idx];
+      const offerId = `stg-${crypto.createHash('sha256').update(`${document.retailerId}:${document.id}:${runId}:${idx + 1}`).digest('hex').slice(0, 48)}`;
 
       // Normalizare gramaj și calcul preț unitar
       const { unitPrice, unitPriceMeasure, packageUnit, packageWeight } = this.normalizePackaging(
@@ -207,8 +272,8 @@ export class CatalogStagingManager {
         brand: raw.rawBrand,
         packageWeightOrVolume: packageWeight,
         packageUnit,
-  category: raw.rawCategory
-  }, productsForMatching);
+        category: raw.rawCategory
+      }, productsForMatching);
 
       const validationErrors: string[] = [];
 
@@ -290,6 +355,13 @@ export class CatalogStagingManager {
     // Salvare oferte extrase în stocare
     StorageService.addCatalogExtractedOffers(stagedOffers);
 
+    // Persistență în PostgreSQL înainte de autoPublish pentru ca statusul să fie consistent în DB
+    if (isPostgresConfigured()) {
+      await DatabaseService.saveCatalogDocument(document);
+      await DatabaseService.saveCatalogImportRun(importRun);
+      await DatabaseService.saveCatalogExtractedOffers(stagedOffers);
+    }
+
     // 5. Publicare automată pentru ofertele validate (dacă este activată opțiunea)
     let publishedCount = 0;
     if (options.autoPublishValidated) {
@@ -327,174 +399,361 @@ export class CatalogStagingManager {
         await DatabaseService.saveCatalogDocument(updatedDoc);
       }
       await DatabaseService.saveCatalogImportRun(importRun);
-      await DatabaseService.saveCatalogExtractedOffers(stagedOffers);
     }
 
     return { run: importRun, offers: stagedOffers };
   }
 
   /**
-   * Generează rezumatul detaliat înainte de publicarea ofertelor validate (cerința 6 din Admin Dashboard)
+   * Generează rezumatul complet înainte de publicare pentru TOATE ofertele validate și aprobate (APPROVED + VALIDATED), fără trunchiere.
    */
-  static async previewPublishValidated(offerIds?: string[]): Promise<{
-    toPublishCount: number;
-    newProductsCount: number;
-    existingUpdatedCount: number;
-    unchangedProductsCount: number;
-    newOffersCount: number;
-    updatedOffersCount: number;
-    priceChangesCount: number;
-    itemsWithoutPriceCount: number;
-    needsReviewCount: number;
-    retailersInvolved: string[];
-    items: { id: string; title: string; price: number; retailerId: string; isNewProduct: boolean }[];
-    cleanupOfferIds: string[];
-    errors: string[];
-  }> {
-    const allStaged = isPostgresConfigured()
-      ? await DatabaseService.getCatalogExtractedOffers()
-      : StorageService.getCatalogExtractedOffers();
+  static async previewPublishValidated(offerIds?: string[]): Promise<PublishPreviewData> {
+    const cleanFilterIds = Array.isArray(offerIds) && offerIds.length > 0 ? offerIds : undefined;
+    const usePostgres = isPostgresConfigured() && Boolean(getPool());
 
-    const existingOffers = isPostgresConfigured()
-      ? await DatabaseService.getOffers()
-      : StorageService.getProductOffers();
+    let toPublish: CatalogExtractedOffer[] = [];
+    let needsReviewCount = 0;
+    let itemsWithoutPriceCount = 0;
 
+    if (usePostgres) {
+      const enriched = await DatabaseService.getStagingOffersEnrichedForPublish(cleanFilterIds);
+      toPublish = enriched.eligibleOffers;
+      needsReviewCount = enriched.needsReviewCount;
+      itemsWithoutPriceCount = enriched.itemsWithoutPriceCount;
+    } else {
+      const allStaged = StorageService.getCatalogExtractedOffers();
+      const targetOffers = cleanFilterIds
+        ? allStaged.filter(o => cleanFilterIds.includes(o.id))
+        : allStaged;
+      toPublish = targetOffers.filter(o => {
+        const st = String(o.stagingStatus || '').toUpperCase();
+        return (st === 'APPROVED' || st === 'VALIDATED') && Number.isFinite(o.effectivePrice) && o.effectivePrice > 0;
+      });
+      needsReviewCount = targetOffers.filter(o =>
+        ['NEEDS_REVIEW', 'DISCOVERED', 'PARSED'].includes(String(o.stagingStatus || '').toUpperCase())
+      ).length;
+      itemsWithoutPriceCount = targetOffers.filter(o => !o.effectivePrice || o.effectivePrice <= 0 || isNaN(o.effectivePrice)).length;
+    }
+
+    const [existingProducts, existingOffers] = usePostgres
+      ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers()])
+      : [StorageService.getAllProducts(), StorageService.getProductOffers()];
+
+    const productsById = new Map(existingProducts.map(p => [p.id, p]));
+    const productsByBarcode = new Map<string, Product>();
+    for (const prod of existingProducts) {
+      if (prod.barcode && prod.barcode.trim().length >= 8) {
+        productsByBarcode.set(prod.barcode.trim(), prod);
+      }
+    }
     const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
-
-    const targetOffers = offerIds && offerIds.length > 0
-      ? allStaged.filter(o => offerIds.includes(o.id))
-      : allStaged.filter(o => o.stagingStatus === 'VALIDATED');
-
-    const toPublish = targetOffers.filter(o => o.stagingStatus === 'VALIDATED');
-    const needsReview = targetOffers.filter(o => o.stagingStatus === 'NEEDS_REVIEW');
 
     let newProductsCount = 0;
     let existingUpdatedCount = 0;
     let unchangedProductsCount = 0;
     let newOffersCount = 0;
     let updatedOffersCount = 0;
+    let existingOffersCount = 0;
     let priceChangesCount = 0;
-    let itemsWithoutPriceCount = 0;
     const retailers = new Set<string>();
     const errors: string[] = [];
+    const items: PublishPreviewItem[] = [];
 
     for (const item of toPublish) {
       retailers.add(item.retailerId);
-      if (!item.effectivePrice || item.effectivePrice <= 0 || isNaN(item.effectivePrice)) {
-        itemsWithoutPriceCount++;
-        errors.push(`Produsul "${item.rawTitle}" are preț invalid (${item.effectivePrice}).`);
+
+      let resolvedProduct: Product | undefined;
+      if (item.matchedProductId) {
+        resolvedProduct = productsById.get(item.matchedProductId);
+      }
+      if (!resolvedProduct && item.rawBarcode && item.rawBarcode.trim().length >= 8) {
+        resolvedProduct = productsByBarcode.get(item.rawBarcode.trim());
+      }
+      if (!resolvedProduct) {
+        const matchRes = ProductMatcher.matchProduct(
+          {
+            rawName: item.rawTitle,
+            barcode: item.rawBarcode,
+            brand: item.rawBrand,
+            packageWeightOrVolume: item.packageQuantity,
+            packageUnit: item.packageUnit as UnitType,
+            category: item.rawCategory
+          },
+          existingProducts
+        );
+        if (matchRes.matchedProduct && matchRes.confidence >= 0.75) {
+          resolvedProduct = matchRes.matchedProduct;
+        }
       }
 
-      if (!item.matchedProductId) {
+      const isNewProduct = !resolvedProduct;
+      if (isNewProduct) {
         newProductsCount++;
       } else {
         existingUpdatedCount++;
       }
 
-      const offerKey = `${item.matchedProductId}__${item.retailerId}`;
-      const existing = existingOfferMap.get(offerKey);
+      let offerAction: PublishPreviewItem['offerAction'] = 'OFERTĂ NOUĂ';
+      const existing = resolvedProduct ? existingOfferMap.get(`${resolvedProduct.id}__${item.retailerId}`) : undefined;
       if (!existing) {
         newOffersCount++;
       } else {
+        existingOffersCount++;
         updatedOffersCount++;
-        if (Number(existing.price) !== Number(item.effectivePrice)) {
+        const priceDiff = Math.abs(Number(existing.price) - Number(item.effectivePrice)) > 0.001;
+        if (priceDiff) {
           priceChangesCount++;
+          offerAction = 'PREȚ MODIFICAT';
+        } else if (
+          Boolean(existing.isPromo) !== Boolean(item.isPromo) ||
+          (existing.validUntil || '') !== (item.validUntil || '')
+        ) {
+          offerAction = 'OFERTĂ ACTUALIZATĂ';
         } else {
           unchangedProductsCount++;
+          offerAction = 'FĂRĂ SCHIMBĂRI';
         }
       }
+
+      const np = Number(item.normalPrice || 0);
+      const ep = Number(item.effectivePrice || 0);
+      const computedDiscount =
+        item.discountPercentage !== undefined
+          ? item.discountPercentage
+          : np > 0 && ep > 0 && ep < np
+          ? Math.round(((np - ep) / np) * 100)
+          : undefined;
+
+      items.push({
+        id: item.id,
+        title: item.rawTitle,
+        price: ep,
+        normalPrice: np > 0 ? np : ep,
+        promoPrice: item.promoPrice,
+        loyaltyPrice: item.loyaltyPrice,
+        discountPercentage: computedDiscount,
+        retailerId: item.retailerId,
+        retailerName: item.retailerName || item.retailerId,
+        brand: item.rawBrand,
+        ean: item.rawBarcode,
+        retailerSku: item.retailerSku,
+        packageQuantity: item.packageQuantity,
+        packageUnit: item.packageUnit,
+        imageUrl: item.imageUrl || resolvedProduct?.imageUrl,
+        matchedProductId: resolvedProduct?.id || item.matchedProductId,
+        matchedProductName: resolvedProduct?.name || item.matchedProductName,
+        canonicalStatus: isNewProduct ? 'PRODUS NOU' : 'PRODUS EXISTENT',
+        offerAction,
+        stagingStatus: String(item.stagingStatus || 'APPROVED').toUpperCase(),
+        documentId: item.documentId || undefined,
+        documentTitle: item.documentTitle,
+        documentUrl: item.documentUrl,
+        validUntil: item.validUntil,
+        isNewProduct
+      });
     }
 
+    const previewSnapshotHash = this.computePreviewSnapshotHash(toPublish);
+
     return {
-      toPublishCount: toPublish.length,
+      toPublishCount: items.length,
       newProductsCount,
       existingUpdatedCount,
       unchangedProductsCount,
       newOffersCount,
       updatedOffersCount,
+      existingOffersCount,
       priceChangesCount,
       itemsWithoutPriceCount,
-      needsReviewCount: needsReview.length,
+      needsReviewCount,
       retailersInvolved: Array.from(retailers),
-      items: toPublish.map(i => ({
-        id: i.id,
-        title: i.rawTitle,
-        price: i.effectivePrice,
-        retailerId: i.retailerId,
-        isNewProduct: !i.matchedProductId
-      })),
-      cleanupOfferIds: toPublish.map(i => i.id),
+      items,
+      sampleItems: items,
+      eligibleOfferIds: items.map(i => i.id),
+      cleanupOfferIds: items.map(i => i.id),
+      previewSnapshotHash,
+      generatedAt: new Date().toISOString(),
       errors
     };
   }
 
   /**
-   * Publică ofertele validate direct în catalogul public de produse (product_offers și price_observations)
+   * Publică atomic ofertele validate și aprobate (APPROVED + VALIDATED) în catalogul public (product_offers și price_observations)
    */
-  static async publishValidatedOffers(offerIds?: string[]): Promise<{
+  static async publishValidatedOffers(
+    offerIds?: string[],
+    options?: { previewSnapshotHash?: string; userEmail?: string }
+  ): Promise<{
     publishedCount: number;
+    publishedOfferIds: string[];
+    conflict?: boolean;
+    requiresRefreshPreview?: boolean;
     errors: string[];
     perRetailerResults?: Record<string, { published: number; errors: string[] }>;
   }> {
-    const memStaged = StorageService.getCatalogExtractedOffers();
-    const dbStaged = isPostgresConfigured() ? await DatabaseService.getCatalogExtractedOffers() : [];
-    const stagedMap = new Map<string, CatalogExtractedOffer>();
-    memStaged.forEach(o => stagedMap.set(o.id, o));
-    dbStaged.forEach(o => stagedMap.set(o.id, o));
-    const allStaged = Array.from(stagedMap.values());
+    const cleanFilterIds = Array.isArray(offerIds) && offerIds.length > 0 ? offerIds : undefined;
+    const pool = isPostgresConfigured() ? getPool() : null;
 
-    const toPublish = offerIds
-      ? allStaged.filter(o => offerIds.includes(o.id) && o.stagingStatus === 'VALIDATED')
-      : allStaged.filter(o => o.stagingStatus === 'VALIDATED');
+    if (pool) {
+      const lockClient = await pool.connect();
+      let lockAcquired = false;
+      try {
+        const lockRes = await lockClient.query(
+          "SELECT pg_try_advisory_lock(hashtext('catalog_publish_validated')) AS acquired"
+        );
+        lockAcquired = Boolean(lockRes.rows[0]?.acquired);
+        if (!lockAcquired) {
+          return {
+            publishedCount: 0,
+            publishedOfferIds: [],
+            conflict: true,
+            requiresRefreshPreview: true,
+            errors: ['O altă operațiune de publicare în catalog rulează deja. Încercați din nou în câteva secunde.'],
+            perRetailerResults: {}
+          };
+        }
+
+        const { eligibleOffers: toPublish } = await DatabaseService.getStagingOffersEnrichedForPublish(cleanFilterIds);
+
+        if (options?.previewSnapshotHash) {
+          const currentSnapshotHash = this.computePreviewSnapshotHash(toPublish);
+          if (currentSnapshotHash !== options.previewSnapshotHash) {
+            return {
+              publishedCount: 0,
+              publishedOfferIds: [],
+              conflict: true,
+              requiresRefreshPreview: true,
+              errors: ['Lista ofertelor eligibile s-a modificat între previzualizare și confirmare. Reîmprospătați previzualizarea înainte de publicare.'],
+              perRetailerResults: {}
+            };
+          }
+        }
+
+        if (toPublish.length === 0) {
+          return { publishedCount: 0, publishedOfferIds: [], errors: [], perRetailerResults: {} };
+        }
+
+        const perRetailerResults: Record<string, { published: number; errors: string[] }> = {};
+        const errors: string[] = [];
+        const publishedOfferIds: string[] = [];
+        let publishedCount = 0;
+
+        const offersByRetailer = new Map<string, CatalogExtractedOffer[]>();
+        for (const offer of toPublish) {
+          const retailerOffers = offersByRetailer.get(offer.retailerId) || [];
+          retailerOffers.push(offer);
+          offersByRetailer.set(offer.retailerId, retailerOffers);
+        }
+
+        for (const [retailerId, retailerOffers] of offersByRetailer) {
+          const runId = retailerOffers[0]?.runId || `run-pub-${retailerId}-${Date.now()}`;
+          const syncRes = await DatabaseService.syncBatchIncremental({
+            runId,
+            documentId: retailerOffers[0]?.documentId,
+            sourceId: `src-${retailerId}-catalog`,
+            retailerId,
+            offers: retailerOffers,
+            autoPublish: true
+          });
+
+          perRetailerResults[retailerId] = {
+            published: syncRes.success ? syncRes.stats.publishedCount : 0,
+            errors: syncRes.stats.errors ?? []
+          };
+
+          if (syncRes.success) {
+            publishedCount += syncRes.stats.publishedCount;
+            for (const item of retailerOffers) {
+              if (item.stagingStatus === 'PUBLISHED') {
+                publishedOfferIds.push(item.id);
+                StorageService.updateCatalogExtractedOffer(item.id, {
+                  stagingStatus: 'PUBLISHED',
+                  matchedProductId: item.matchedProductId,
+                  matchedProductName: item.matchedProductName,
+                  updatedAt: new Date().toISOString()
+                });
+              }
+            }
+          }
+          if (syncRes.stats.errors.length > 0) {
+            errors.push(...syncRes.stats.errors);
+          }
+        }
+
+        return { publishedCount, publishedOfferIds, errors, perRetailerResults };
+      } catch (pgErr: any) {
+        return {
+          publishedCount: 0,
+          publishedOfferIds: [],
+          errors: [`Eroare publicare PostgreSQL: ${pgErr.message}`],
+          perRetailerResults: {}
+        };
+      } finally {
+        if (lockAcquired) {
+          try {
+            await lockClient.query("SELECT pg_advisory_unlock(hashtext('catalog_publish_validated'))");
+          } catch {}
+        }
+        lockClient.release();
+      }
+    }
+
+    // Fallback în memorie (fără PostgreSQL configurat)
+    const allStaged = StorageService.getCatalogExtractedOffers();
+    const toPublish = allStaged.filter(o => {
+      if (cleanFilterIds && !cleanFilterIds.includes(o.id)) return false;
+      const st = String(o.stagingStatus || '').toUpperCase();
+      return (st === 'APPROVED' || st === 'VALIDATED') && Number.isFinite(o.effectivePrice) && o.effectivePrice > 0;
+    });
+
+    if (options?.previewSnapshotHash) {
+      const currentSnapshotHash = this.computePreviewSnapshotHash(toPublish);
+      if (currentSnapshotHash !== options.previewSnapshotHash) {
+        return {
+          publishedCount: 0,
+          publishedOfferIds: [],
+          conflict: true,
+          requiresRefreshPreview: true,
+          errors: ['Lista ofertelor eligibile s-a modificat între previzualizare și confirmare. Reîmprospătați previzualizarea.'],
+          perRetailerResults: {}
+        };
+      }
+    }
 
     if (toPublish.length === 0) {
-      return { publishedCount: 0, errors: [], perRetailerResults: {} };
+      return { publishedCount: 0, publishedOfferIds: [], errors: [], perRetailerResults: {} };
     }
 
     const todayStr = new Date().toISOString().split('T')[0];
     const newOffers: ProductOffer[] = [];
     const newObservations: PriceObservation[] = [];
-    const offersByStagedId = new Map<string, ProductOffer>();
-    const observationsByStagedId = new Map<string, PriceObservation>();
-    const errors: string[] = [];
-
-    const memOffers = StorageService.getProductOffers();
-    const dbOffers = isPostgresConfigured() ? await DatabaseService.getOffers() : [];
-    const offerMap = new Map<string, ProductOffer>();
-    memOffers.forEach(o => offerMap.set(o.id, o));
-    dbOffers.forEach(o => offerMap.set(o.id, o));
-    const existingOffers = Array.from(offerMap.values());
-
-    const memProducts = StorageService.getAllProducts();
-    const dbProducts = isPostgresConfigured() ? await DatabaseService.getProducts() : [];
-    const prodMap = new Map<string, Product>();
-    memProducts.forEach(p => prodMap.set(p.id, p));
-    dbProducts.forEach(p => prodMap.set(p.id, p));
-    const productsForMatching = Array.from(prodMap.values());
+    const publishedOfferIds: string[] = [];
+    const perRetailerResults: Record<string, { published: number; errors: string[] }> = {};
+    const existingOffers = StorageService.getProductOffers();
+    const productsForMatching = [...StorageService.getAllProducts()];
     const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
 
-  for (const item of toPublish) {
-  const persistedMatch = productsForMatching.find(product => product.id === item.matchedProductId);
-  if (persistedMatch) {
-  item.matchedProductName = persistedMatch.name;
-  } else {
-  const matchResult = ProductMatcher.matchProduct({
-  rawName: item.rawTitle,
-  barcode: item.rawBarcode,
-  brand: item.rawBrand,
-  packageWeightOrVolume: item.packageQuantity,
-  packageUnit: item.packageUnit as UnitType,
-  category: item.rawCategory
-  }, productsForMatching);
-  item.matchedProductId = matchResult.matchedProduct?.id;
-  item.matchedProductName = matchResult.matchedProduct?.name;
-  if (matchResult.matchedProduct) {
-  item.matchConfidence = matchResult.confidence;
-  }
-  }
+    for (const item of toPublish) {
+      const persistedMatch = productsForMatching.find(product => product.id === item.matchedProductId);
+      if (persistedMatch) {
+        item.matchedProductName = persistedMatch.name;
+      } else {
+        const matchResult = ProductMatcher.matchProduct({
+          rawName: item.rawTitle,
+          barcode: item.rawBarcode,
+          brand: item.rawBrand,
+          packageWeightOrVolume: item.packageQuantity,
+          packageUnit: item.packageUnit as UnitType,
+          category: item.rawCategory
+        }, productsForMatching);
+        item.matchedProductId = matchResult.matchedProduct?.id;
+        item.matchedProductName = matchResult.matchedProduct?.name;
+        if (matchResult.matchedProduct) {
+          item.matchConfidence = matchResult.confidence;
+        }
+      }
 
-  // If no catalog product matches, create a new canonical product.
-  if (!item.matchedProductId) {
+      if (!item.matchedProductId) {
         const { category, subcategory } = mapRetailerCategoryToStandard(item.rawTitle);
         const normUnit: 'kg' | 'l' | 'buc' = ['kg', 'g'].includes(item.packageUnit || '')
           ? 'kg'
@@ -514,23 +773,14 @@ export class CatalogStagingManager {
           packageUnit: (item.packageUnit as any) || 'buc',
           normalizedUnit: normUnit,
           barcode: item.rawBarcode || undefined,
+          imageUrl: item.imageUrl,
           baseReferencePrice: item.normalPrice || item.effectivePrice,
           isRomanianProduct: true
         };
-
-  if (!isPostgresConfigured()) {
-    StorageService.addCustomProduct(newProduct);
-  }
-  productsForMatching.push(newProduct);
-  item.matchedProductId = newProductId;
+        StorageService.addCustomProduct(newProduct);
+        productsForMatching.push(newProduct);
+        item.matchedProductId = newProductId;
         item.matchedProductName = newProduct.name;
-        if (!isPostgresConfigured()) {
-          StorageService.updateCatalogExtractedOffer(item.id, {
-            matchedProductId: newProductId,
-            matchedProductName: newProduct.name,
-            updatedAt: new Date().toISOString()
-          });
-        }
       }
 
       const offerKey = `${item.matchedProductId}__${item.retailerId}`;
@@ -563,10 +813,9 @@ export class CatalogStagingManager {
       };
 
       newOffers.push(offer);
-      offersByStagedId.set(item.id, offer);
+      existingOfferMap.set(offerKey, offer);
 
-      // Adăugare observație istorică append-only
-      const obs: PriceObservation = {
+      newObservations.push({
         id: `obs-cat-${crypto.createHash('sha256').update(item.id).digest('hex').slice(0, 48)}`,
         productId: item.matchedProductId,
         storeId: item.retailerId,
@@ -577,93 +826,31 @@ export class CatalogStagingManager {
         date: todayStr,
         source: 'official_feed',
         loyaltyCardUsed: item.loyaltyCardRequired
-      };
+      });
 
-      newObservations.push(obs);
-      observationsByStagedId.set(item.id, obs);
+      StorageService.updateCatalogExtractedOffer(item.id, {
+        stagingStatus: 'PUBLISHED',
+        matchedProductId: item.matchedProductId,
+        matchedProductName: item.matchedProductName,
+        validationErrors: undefined,
+        updatedAt: new Date().toISOString()
+      });
+      publishedOfferIds.push(item.id);
 
+      const rEntry = perRetailerResults[item.retailerId] || { published: 0, errors: [] };
+      rEntry.published++;
+      perRetailerResults[item.retailerId] = rEntry;
     }
 
-    const perRetailerResults: Record<string, { published: number; errors: string[] }> = {};
-    let publishedCount = 0;
+    StorageService.upsertProductOffers(newOffers.filter(offer => offer.price > 0));
+    StorageService.addPriceObservations(newObservations.filter(observation => observation.price > 0));
 
-    if (!isPostgresConfigured()) {
-      for (const item of toPublish) {
-        if (Number.isFinite(item.effectivePrice) && item.effectivePrice > 0) {
-          StorageService.updateCatalogExtractedOffer(item.id, {
-            stagingStatus: 'PUBLISHED',
-            updatedAt: new Date().toISOString()
-          });
-          publishedCount++;
-        }
-      }
-      StorageService.upsertProductOffers(newOffers.filter(offer => offer.price > 0));
-      StorageService.addPriceObservations(newObservations.filter(observation => observation.price > 0));
-    }
-
-    // Persistență în PostgreSQL dacă este configurat și conectat
-    if (isPostgresConfigured()) {
-      try {
-        const offersByRetailer = new Map<string, CatalogExtractedOffer[]>();
-        for (const offer of toPublish) {
-          const retailerOffers = offersByRetailer.get(offer.retailerId) || [];
-          retailerOffers.push(offer);
-          offersByRetailer.set(offer.retailerId, retailerOffers);
-        }
-
-        for (const [retailerId, retailerOffers] of offersByRetailer) {
-          const runId = retailerOffers[0]?.runId || `run-pub-${retailerId}-${Date.now()}`;
-          const syncRes = await DatabaseService.syncBatchIncremental({
-            runId,
-            documentId: retailerOffers[0]?.documentId,
-            sourceId: `src-${retailerId}-catalog`,
-            retailerId,
-            offers: retailerOffers,
-            autoPublish: true
-          });
-
-          perRetailerResults[retailerId] = {
-            published: syncRes.success ? syncRes.stats.publishedCount : 0,
-            errors: syncRes.stats.errors ?? []
-          };
-
-          if (syncRes.success) {
-            const publishedItems = retailerOffers.filter(item => Number.isFinite(item.effectivePrice) && item.effectivePrice > 0);
-            publishedCount += syncRes.stats.publishedCount;
-            if (syncRes.stats.publishedCount !== publishedItems.length) {
-              errors.push(`${retailerId}: baza de date a confirmat ${syncRes.stats.publishedCount} din ${publishedItems.length} oferte eligibile.`);
-              continue;
-            }
-            const publishedOffers: ProductOffer[] = [];
-            const publishedObservations: PriceObservation[] = [];
-            for (const item of publishedItems) {
-              StorageService.updateCatalogExtractedOffer(item.id, {
-                stagingStatus: 'PUBLISHED',
-                updatedAt: new Date().toISOString()
-              });
-              if (!item.matchedProductId) continue;
-              const offer = offersByStagedId.get(item.id);
-              const observation = observationsByStagedId.get(item.id);
-              if (!offer || !observation) continue;
-              const currentOffer = existingOfferMap.get(`${item.matchedProductId}__${retailerId}`);
-              offer.productId = item.matchedProductId;
-              offer.id = currentOffer?.id || `off-${retailerId}-${item.matchedProductId}`;
-              observation.productId = item.matchedProductId;
-              publishedOffers.push(offer);
-              publishedObservations.push(observation);
-            }
-            StorageService.upsertProductOffers(publishedOffers);
-            StorageService.addPriceObservations(publishedObservations);
-          } else if (syncRes.stats.errors.length > 0) {
-            errors.push(...syncRes.stats.errors);
-          }
-        }
-      } catch (pgErr: any) {
-        errors.push(`Avertisment salvare PostgreSQL: ${pgErr.message}`);
-      }
-    }
-
-    return { publishedCount, errors, perRetailerResults };
+    return {
+      publishedCount: publishedOfferIds.length,
+      publishedOfferIds,
+      errors: [],
+      perRetailerResults
+    };
   }
 
   /**

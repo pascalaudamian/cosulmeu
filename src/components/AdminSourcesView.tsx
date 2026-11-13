@@ -199,23 +199,24 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   // Documents and Staging
   const [documents, setDocuments] = useState<CatalogDocument[]>([]);
   const [stagingOffers, setStagingOffers] = useState<CatalogExtractedOffer[]>([]);
-  const [validatedStagingTotal, setValidatedStagingTotal] = useState(3);
+  const [validatedStagingTotal, setValidatedStagingTotal] = useState(0);
   const [stagingPage, setStagingPage] = useState<number>(1);
   const [stagingLimit, setStagingLimit] = useState<number>(25);
   const [stagingTotal, setStagingTotal] = useState<number>(0);
   const [stagingTotalPages, setStagingTotalPages] = useState<number>(1);
-  const [stagingFilter, setStagingFilter] = useState<'toate' | 'NEEDS_REVIEW' | 'VALIDATED' | 'APPROVED' | 'PUBLISHED' | 'REJECTED'>('NEEDS_REVIEW');
+  const [stagingFilter, setStagingFilter] = useState<'toate' | 'NEEDS_REVIEW' | 'READY_TO_PUBLISH' | 'VALIDATED' | 'APPROVED' | 'PUBLISHED' | 'REJECTED'>('NEEDS_REVIEW');
   const [stagingRetailerFilter, setStagingRetailerFilter] = useState<string>('toate');
   const [stagingDocumentFilter, setStagingDocumentFilter] = useState<string>('toate');
   const [stagingQuickFilter, setStagingQuickFilter] = useState<string>('toate');
   const [stagingSearch, setStagingSearch] = useState<string>('');
   const [stagingStatusCounts, setStagingStatusCounts] = useState<Record<string, number>>({
-    NEEDS_REVIEW: 2389,
-    VALIDATED: 3,
-    APPROVED: 437,
-    PUBLISHED: 1643,
+    NEEDS_REVIEW: 0,
+    VALIDATED: 0,
+    APPROVED: 0,
+    READY_TO_PUBLISH: 0,
+    PUBLISHED: 0,
     REJECTED: 0,
-    ALL: 3326
+    ALL: 0
   });
   const [isLoadingStaging, setIsLoadingStaging] = useState<boolean>(false);
   const [selectedStagingIds, setSelectedStagingIds] = useState<Set<string>>(new Set());
@@ -267,6 +268,8 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   // Modals
   const [showPublishPreview, setShowPublishPreview] = useState<boolean>(false);
   const [publishPreviewData, setPublishPreviewData] = useState<PublishPreviewData | null>(null);
+  const [publishPreviewHasConflict, setPublishPreviewHasConflict] = useState<boolean>(false);
+  const [isRefreshingPreview, setIsRefreshingPreview] = useState<boolean>(false);
   const [showImportConfirmModal, setShowImportConfirmModal] = useState<{
     open: boolean;
     title: string;
@@ -331,7 +334,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       if (res.ok) {
         const json = await res.json();
         if (Array.isArray(json.retailers) && json.retailers.length > 0) {
-          setRetailersList(json.retailers);
+          const uniqueRetailers = new Map<string, RetailerConfig>();
+          for (const retailer of json.retailers as RetailerConfig[]) {
+            if (!retailer?.id || uniqueRetailers.has(retailer.id)) continue;
+            uniqueRetailers.set(retailer.id, retailer);
+          }
+          setRetailersList(Array.from(uniqueRetailers.values()));
         }
       }
     } catch (err) {
@@ -367,7 +375,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     try {
       let url = `/api/admin/catalog-importer/staging?page=${stagingPage}&limit=${stagingLimit}`;
       if (stagingFilter !== 'toate') url += `&status=${encodeURIComponent(stagingFilter)}`;
-      if (stagingRetailerFilter !== 'toate') url += `&retailer=${encodeURIComponent(stagingRetailerFilter)}`;
+      if (stagingRetailerFilter !== 'toate') url += `&retailerId=${encodeURIComponent(stagingRetailerFilter)}`;
       if (stagingDocumentFilter !== 'toate') url += `&documentId=${encodeURIComponent(stagingDocumentFilter)}`;
       if (stagingQuickFilter !== 'toate') url += `&filterType=${encodeURIComponent(stagingQuickFilter)}`;
       if (stagingSearch.trim()) url += `&search=${encodeURIComponent(stagingSearch.trim())}`;
@@ -380,7 +388,11 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         setStagingTotalPages(json.totalPages || 1);
         if (json.statusCounts) {
           setStagingStatusCounts(json.statusCounts);
-          setValidatedStagingTotal(Number(json.statusCounts.VALIDATED ?? 0));
+          const readyCount =
+            json.statusCounts.READY_TO_PUBLISH !== undefined
+              ? Number(json.statusCounts.READY_TO_PUBLISH)
+              : Number(json.statusCounts.APPROVED ?? 0) + Number(json.statusCounts.VALIDATED ?? 0);
+          setValidatedStagingTotal(readyCount);
         }
       }
     } catch (err) {
@@ -633,28 +645,60 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   };
 
   // Staging Preview and Publish (Requirement 6)
-  const handleOpenPublishPreview = async (offerIds?: string[]) => {
-    try {
-      const selectedValidatedIds = offerIds ?? stagingOffers
-        .filter(offer => selectedStagingIds.has(offer.id) && offer.stagingStatus === 'VALIDATED')
-        .map(offer => offer.id);
-      const targetOfferIds = selectedValidatedIds.length > 0 ? selectedValidatedIds : undefined;
-      const res = await fetchWithAuth('/api/admin/staging/preview-publish', {
-        method: 'POST',
-        body: JSON.stringify({ offerIds: targetOfferIds })
-      });
+  const fetchPublishPreview = useCallback(async (overrideOfferIds?: string[]) => {
+    const selectedPublishableIds = stagingOffers
+      .filter(
+        offer =>
+          selectedStagingIds.has(offer.id) &&
+          ['APPROVED', 'VALIDATED'].includes(String(offer.stagingStatus || '').toUpperCase())
+      )
+      .map(offer => offer.id);
+    const targetOfferIds =
+      overrideOfferIds && overrideOfferIds.length > 0
+        ? overrideOfferIds
+        : selectedPublishableIds.length > 0
+        ? selectedPublishableIds
+        : undefined;
 
-      if (res.ok) {
-        const json = await res.json();
-        setPublishErrorMessage(null);
-        setCleanupErrorMessage(null);
-        setPublishPreviewData(json.preview);
-        setShowPublishPreview(true);
-      } else {
-        throw new Error('Nu s-a putut genera previzualizarea de publicare.');
-      }
+    const res = await fetchWithAuth('/api/admin/staging/preview-publish', {
+      method: 'POST',
+      body: JSON.stringify({ offerIds: targetOfferIds })
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || 'Nu s-a putut genera previzualizarea de publicare.');
+    }
+    const json = await res.json();
+    return json.preview as PublishPreviewData;
+  }, [fetchWithAuth, stagingOffers, selectedStagingIds]);
+
+  const handleOpenPublishPreview = async () => {
+    try {
+      setIsRefreshingPreview(true);
+      const preview = await fetchPublishPreview();
+      setPublishErrorMessage(null);
+      setCleanupErrorMessage(null);
+      setPublishPreviewHasConflict(false);
+      setPublishPreviewData(preview);
+      setShowPublishPreview(true);
     } catch (err: any) {
       setActionMessage({ type: 'error', text: err.message || 'Nu s-a putut genera previzualizarea de publicare.' });
+    } finally {
+      setIsRefreshingPreview(false);
+    }
+  };
+
+  const handleRefreshPublishPreview = async () => {
+    try {
+      setIsRefreshingPreview(true);
+      const preview = await fetchPublishPreview();
+      setPublishErrorMessage(null);
+      setPublishPreviewHasConflict(false);
+      setPublishPreviewData(preview);
+    } catch (err: any) {
+      setPublishErrorMessage(err.message || 'Nu s-a putut reîncărca previzualizarea.');
+    } finally {
+      setIsRefreshingPreview(false);
     }
   };
 
@@ -662,33 +706,57 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
     if (!publishPreviewData) return;
     setIsPublishing(true);
     try {
-      const targetOfferIds = publishPreviewData.cleanupOfferIds;
+      const targetOfferIds =
+        Array.isArray(publishPreviewData.eligibleOfferIds) && publishPreviewData.eligibleOfferIds.length > 0
+          ? publishPreviewData.eligibleOfferIds
+          : undefined;
+
       const res = await fetchWithAuth('/api/admin/catalog-importer/publish-validated', {
         method: 'POST',
-        body: JSON.stringify({ offerIds: targetOfferIds })
+        body: JSON.stringify({
+          offerIds: targetOfferIds,
+          previewSnapshotHash: publishPreviewData.previewSnapshotHash,
+          userEmail: 'admin@cosulmeu.ro'
+        })
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Eroare la publicare.');
-      if (json.success !== true) {
-        const message = json.message || json.errors?.join('; ') || 'Publicarea nu a fost confirmată în baza de date.';
+      const json = await res.json().catch(() => ({}));
+
+      if (res.status === 409 || json.conflict) {
+        const message =
+          json.message ||
+          json.error ||
+          'Lista ofertelor eligibile s-a modificat între previzualizare și confirmare. Reîmprospătați previzualizarea.';
+        setPublishPreviewHasConflict(true);
         setPublishErrorMessage(message);
         setActionMessage({ type: 'error', text: message });
-        await Promise.all([loadDashboard(), loadStaging(), loadRunsAndErrors(), loadAuditLogs()]);
+        await Promise.all([loadDashboard(), loadStaging(), loadAuditLogs(), loadDocuments()]);
+        return;
+      }
+
+      if (!res.ok) throw new Error(json.error || json.message || 'Eroare la publicare.');
+      if (json.success !== true) {
+        const message = json.message || json.errors?.join('; ') || 'Publicarea nu a fost confirmată în baza de date.';
+        setPublishPreviewHasConflict(false);
+        setPublishErrorMessage(message);
+        setActionMessage({ type: 'error', text: message });
+        await Promise.all([loadDashboard(), loadStaging(), loadRunsAndErrors(), loadAuditLogs(), loadDocuments()]);
         return;
       }
 
       setPublishErrorMessage(null);
       setCleanupErrorMessage(null);
+      setPublishPreviewHasConflict(false);
       setShowPublishPreview(false);
       setSelectedStagingIds(new Set());
       setActionMessage({
         type: 'success',
         text: json.message || `Au fost publicate ${json.publishedCount} oferte în catalogul public.`
       });
-      await Promise.all([loadDashboard(), loadStaging(), loadRunsAndErrors(), loadAuditLogs()]);
+      await Promise.all([loadDashboard(), loadStaging(), loadRunsAndErrors(), loadAuditLogs(), loadDocuments()]);
       if (onRefreshAll) onRefreshAll();
     } catch (err: any) {
       const message = err.message || 'Eroare la publicare.';
+      setPublishPreviewHasConflict(false);
       setPublishErrorMessage(message);
       setActionMessage({ type: 'error', text: message });
     } finally {
@@ -755,18 +823,47 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           userEmail: 'admin@cosulmeu.ro'
         })
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Ofertele nu au putut fi procesate în masă.');
+      const payload = await response.json().catch(() => ({}));
 
-      setSelectedStagingIds(new Set());
+      if (!response.ok || payload.success === false) {
+        const firstError =
+          Array.isArray(payload.failedItems) && payload.failedItems.length > 0
+            ? `${payload.failedItems[0].rawTitle}: ${(payload.failedItems[0].errors || []).join(' ')}`
+            : '';
+        setBulkReviewConfirmModal(null);
+        await Promise.all([loadStaging(), loadDashboard(), loadRunsAndErrors(), loadAuditLogs()]);
+        throw new Error(
+          [payload.error || payload.message || 'Ofertele nu au trecut validarea.', firstError]
+            .filter(Boolean)
+            .join(' ')
+        );
+      }
+
+      const failedIds = new Set<string>(
+        Array.isArray(payload.failedItems) ? payload.failedItems.map((f: any) => String(f.id)) : []
+      );
+      setSelectedStagingIds(failedIds);
       setBulkReviewConfirmModal(null);
-      setActionMessage({
-        type: 'success',
-        text: payload.message || `${payload.updatedCount || offerIds.length} oferte au fost ${action === 'approve' ? 'validate' : 'respinse'} cu succes.`
-      });
-      await Promise.all([loadStaging(), loadDashboard(), loadRunsAndErrors()]);
+
+      if (payload.partial && payload.failedCount > 0) {
+        const sampleErr = payload.failedItems?.[0]
+          ? ` Exemplu (${payload.failedItems[0].rawTitle}): ${(payload.failedItems[0].errors || []).join(' ')}`
+          : '';
+        setActionMessage({
+          type: 'info',
+          text: `${payload.message || `${payload.updatedCount} oferte aprobate; ${payload.failedCount} au erori de validare.`}${sampleErr}`
+        });
+      } else {
+        setActionMessage({
+          type: 'success',
+          text:
+            payload.message ||
+            `${payload.updatedCount || offerIds.length} oferte au fost ${action === 'approve' ? 'validate și aprobate' : 'respinse'} cu succes.`
+        });
+      }
+
+      await Promise.all([loadStaging(), loadDashboard(), loadRunsAndErrors(), loadAuditLogs(), loadDocuments()]);
       if (onRefreshAll) onRefreshAll();
-      if (action === 'approve') await handleOpenPublishPreview(offerIds);
     } catch (error: any) {
       setActionMessage({ type: 'error', text: error.message || 'Eroare la procesarea în masă a ofertelor.' });
     } finally {
@@ -785,13 +882,23 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           userEmail: 'admin@cosulmeu.ro'
         })
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Oferta nu a putut fi actualizată.');
-      setActionMessage({ type: 'success', text: payload.message || (action === 'approve' ? 'Oferta a fost validată.' : 'Oferta a fost respinsă.') });
-      await Promise.all([loadStaging(), loadDashboard(), loadRunsAndErrors()]);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.success === false) {
+        const valErrors = Array.isArray(payload.validationErrors) ? payload.validationErrors.join(' ') : '';
+        const errMessage = valErrors || payload.error || payload.message || 'Oferta nu a putut fi validată.';
+        await Promise.all([loadStaging(), loadDashboard()]);
+        throw new Error(errMessage);
+      }
+      setActionMessage({
+        type: 'success',
+        text: payload.message || (action === 'approve' ? 'Oferta a fost validată și aprobată pentru publicare.' : 'Oferta a fost respinsă.')
+      });
+      await Promise.all([loadStaging(), loadDashboard(), loadRunsAndErrors(), loadAuditLogs(), loadDocuments()]);
       if (onRefreshAll) onRefreshAll();
     } catch (error: any) {
-      setActionMessage({ type: 'error', text: error.message || 'Eroare la actualizarea ofertei.' });
+      const errText = error.message || 'Eroare la actualizarea ofertei.';
+      setActionMessage({ type: 'error', text: errText });
+      throw error;
     } finally {
       setReviewingOfferIds(previous => {
         const next = new Set(previous);
@@ -808,7 +915,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         setKpiDrilldown({
           open: true,
           type: 'retailers',
-          title: 'Retaileri Configurați (8 Retaileri)',
+          title: `Retaileri Configurați (${operationalData?.configuredRetailersCount ?? retailersList.length} Retaileri)`,
           subtitle: 'Rețeaua de retaileri oficiali monitorizați cu surse și cataloage active.'
         });
         break;
@@ -816,7 +923,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         setKpiDrilldown({
           open: true,
           type: 'sources_all',
-          title: 'Surse Configurate (12 Surse)',
+          title: `Surse Configurate (${operationalData?.configuredSourcesCount ?? sources.length} Surse)`,
           subtitle: 'Toate sursele de cataloage, reviste și API-uri configurate în platformă.'
         });
         break;
@@ -824,7 +931,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         setKpiDrilldown({
           open: true,
           type: 'sources_active',
-          title: 'Surse Active & Funcționale (10 Surse)',
+          title: `Surse Active & Funcționale (${operationalData?.activeSourcesCount ?? 0} Surse)`,
           subtitle: 'Surse operaționale fără erori de acces sau blocaje WAF.'
         });
         break;
@@ -832,7 +939,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         setKpiDrilldown({
           open: true,
           type: 'sources_blocked',
-          title: 'Surse Blocate (2 Surse: Profi & METRO)',
+          title: `Surse Blocate (${operationalData?.blockedSourcesCount ?? 0} Surse)`,
           subtitle: 'Surse restricționate prin protecții WAF/Bot (Cloudflare / Akamai). Acces restricționat conform politicilor de securitate.'
         });
         break;
@@ -840,7 +947,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         setKpiDrilldown({
           open: true,
           type: 'documents_discovered',
-          title: 'Documente Descoperite (26 Documente)',
+          title: `Documente Descoperite (${(operationalData?.kpis?.discoveredDocuments?.value ?? documents.length).toLocaleString('ro-RO')} Documente)`,
           subtitle: 'Cataloage și reviste promoționale identificate prin crawler.'
         });
         break;
@@ -848,8 +955,8 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         setKpiDrilldown({
           open: true,
           type: 'documents_downloaded',
-          title: 'Documente Descărcate cu Succes (26 Documente)',
-          subtitle: 'Arhiva completă a celor 26 documente descărcate, procesate și indexate în Supabase PostgreSQL.'
+          title: `Documente Descărcate cu Succes (${(operationalData?.kpis?.downloadedDocuments?.value ?? documents.length).toLocaleString('ro-RO')} Documente)`,
+          subtitle: 'Arhiva completă a documentelor descărcate, procesate și indexate în Supabase PostgreSQL.'
         });
         break;
       case 'extractedProducts':
@@ -872,22 +979,22 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         break;
       case 'validatedOffers':
         setActiveTab('staging');
-        setStagingFilter('VALIDATED');
+        setStagingFilter('READY_TO_PUBLISH');
         setStagingPage(1);
         break;
       case 'approvedOffers':
         setKpiDrilldown({
           open: true,
           type: 'approved_offers',
-          title: 'Oferte Aprobate de Administrator (437 Oferte)',
-          subtitle: 'Oferte din staging validate și aprobate, pregătite pentru sincronizare.'
+          title: `Oferte Aprobate pentru Publicare (${(operationalData?.kpis?.approvedOffers?.value ?? validatedStagingTotal).toLocaleString('ro-RO')} Oferte)`,
+          subtitle: 'Oferte din staging validate și aprobate, pregătite pentru publicare în catalogul public.'
         });
         break;
       case 'publishedOffers':
         setKpiDrilldown({
           open: true,
           type: 'published_offers',
-          title: 'Oferte Publicate în Catalogul Public (1.643 Oferte)',
+          title: `Oferte Publicate în Catalogul Public (${(operationalData?.kpis?.publishedOffers?.value ?? 0).toLocaleString('ro-RO')} Oferte)`,
           subtitle: 'Oferte curente active în tabela product_offers accesibile utilizatorilor.'
         });
         break;
@@ -1054,9 +1161,9 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               >
                 <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-slate-400'}`} />
                 <span>{tab.label}</span>
-                {tab.id === 'staging' && stagingOffers.filter(o => o.stagingStatus === 'NEEDS_REVIEW').length > 0 && (
+                {tab.id === 'staging' && (stagingStatusCounts.NEEDS_REVIEW ?? 0) > 0 && (
                   <span className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded-full ${isActive ? 'bg-white text-emerald-700' : 'bg-amber-100 text-amber-900'}`}>
-                    {stagingOffers.filter(o => o.stagingStatus === 'NEEDS_REVIEW').length}
+                    {(stagingStatusCounts.NEEDS_REVIEW ?? 0).toLocaleString('ro-RO')}
                   </span>
                 )}
                 {tab.id === 'logs' && errors.length > 0 && (
@@ -1151,7 +1258,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 >
                   <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
                   <span>
-                    Staging Queue ({(stagingStatusCounts.NEEDS_REVIEW ?? operationalData?.kpis?.extractedOffers?.value ?? 2389).toLocaleString('ro-RO')})
+                    Staging Queue ({(stagingStatusCounts.NEEDS_REVIEW ?? 0).toLocaleString('ro-RO')})
                   </span>
                 </button>
               </div>
@@ -1164,7 +1271,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 onClick={() => handleKpiClick('retailersConfigured')}
                 className="hover:text-emerald-700 hover:underline cursor-pointer flex items-center gap-1"
               >
-                Retaileri Configurați: <strong className="text-slate-900 font-extrabold">{retailersList.length}</strong> (8 Mari Rețele)
+                Retaileri Configurați: <strong className="text-slate-900 font-extrabold">{operationalData?.configuredRetailersCount ?? retailersList.length}</strong>
               </button>
               <div>•</div>
               <button
@@ -1172,7 +1279,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 onClick={() => handleKpiClick('sourcesFunctional')}
                 className="hover:text-emerald-700 hover:underline cursor-pointer flex items-center gap-1"
               >
-                Surse Active: <strong className="text-emerald-700 font-extrabold">{operationalData?.activeSourcesCount || 10}</strong> din {operationalData?.configuredSourcesCount || 12}
+                Surse Active: <strong className="text-emerald-700 font-extrabold">{operationalData?.activeSourcesCount ?? 0}</strong> din {operationalData?.configuredSourcesCount ?? sources.length}
               </button>
               <div>•</div>
               <button
@@ -1180,7 +1287,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 onClick={() => handleKpiClick('sourcesBlocked')}
                 className="hover:text-rose-700 hover:underline cursor-pointer flex items-center gap-1"
               >
-                Surse Blocate: <strong className="text-rose-700 font-extrabold">{operationalData?.blockedSourcesCount || 2}</strong> (Profi, METRO)
+                Surse Blocate: <strong className="text-rose-700 font-extrabold">{operationalData?.blockedSourcesCount ?? 0}</strong>
               </button>
               <div>•</div>
               <button
@@ -1188,7 +1295,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 onClick={() => handleKpiClick('documentsDownloaded')}
                 className="hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1"
               >
-                Documente Descărcate: <strong className="text-blue-700 font-extrabold">26</strong>
+                Documente Descărcate: <strong className="text-blue-700 font-extrabold">{(operationalData?.kpis?.downloadedDocuments?.value ?? documents.length ?? 0).toLocaleString('ro-RO')}</strong>
               </button>
               <div>•</div>
               <div>
@@ -2062,28 +2169,38 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col items-end gap-1">
               <button
-                onClick={() => handleOpenPublishPreview()}
-                disabled={isPublishing || validatedStagingTotal === 0}
-                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+                type="button"
+                onClick={handleOpenPublishPreview}
+                disabled={isPublishing || isRefreshingPreview || validatedStagingTotal === 0}
+                title={validatedStagingTotal === 0 ? 'Nu există oferte validate și aprobate pentru publicare' : 'Deschide previzualizarea înainte de publicare'}
+                className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>
-                  Publică Ofertele Validate ({validatedStagingTotal.toLocaleString('ro-RO')})
+                  {isRefreshingPreview
+                    ? 'Se încarcă previzualizarea...'
+                    : `Publică Ofertele Validate (${validatedStagingTotal.toLocaleString('ro-RO')})`}
                 </span>
               </button>
+              {validatedStagingTotal === 0 && (
+                <span className="text-[11px] font-medium text-slate-500">
+                  Nu există oferte validate și aprobate pentru publicare
+                </span>
+              )}
             </div>
           </div>
 
           {/* Status Tabs Navigation */}
           <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-slate-100 rounded-2xl border border-slate-200 text-xs font-bold">
             <button
+              type="button"
               onClick={() => {
                 setStagingFilter('NEEDS_REVIEW');
                 setStagingPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'NEEDS_REVIEW'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
@@ -2091,16 +2208,35 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             >
               <span>În așteptare</span>
               <span className="px-1.5 py-0.2 rounded-md bg-amber-100 text-amber-900 text-[10px] font-black">
-                {(stagingStatusCounts.NEEDS_REVIEW ?? 2389).toLocaleString('ro-RO')}
+                {(stagingStatusCounts.NEEDS_REVIEW ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
 
             <button
+              type="button"
+              onClick={() => {
+                setStagingFilter('READY_TO_PUBLISH');
+                setStagingPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
+                stagingFilter === 'READY_TO_PUBLISH'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+              }`}
+            >
+              <span>Pregătite pt. Publicare</span>
+              <span className="px-1.5 py-0.2 rounded-md bg-teal-100 text-teal-900 text-[10px] font-black">
+                {validatedStagingTotal.toLocaleString('ro-RO')}
+              </span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => {
                 setStagingFilter('VALIDATED');
                 setStagingPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'VALIDATED'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
@@ -2108,16 +2244,17 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             >
               <span>Validate</span>
               <span className="px-1.5 py-0.2 rounded-md bg-emerald-100 text-emerald-900 text-[10px] font-black">
-                {(stagingStatusCounts.VALIDATED ?? 3).toLocaleString('ro-RO')}
+                {(stagingStatusCounts.VALIDATED ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 setStagingFilter('APPROVED');
                 setStagingPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'APPROVED'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
@@ -2125,16 +2262,17 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             >
               <span>Aprobate</span>
               <span className="px-1.5 py-0.2 rounded-md bg-blue-100 text-blue-900 text-[10px] font-black">
-                {(stagingStatusCounts.APPROVED ?? 437).toLocaleString('ro-RO')}
+                {(stagingStatusCounts.APPROVED ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 setStagingFilter('PUBLISHED');
                 setStagingPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'PUBLISHED'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
@@ -2142,16 +2280,17 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             >
               <span>Publicate</span>
               <span className="px-1.5 py-0.2 rounded-md bg-purple-100 text-purple-900 text-[10px] font-black">
-                {(stagingStatusCounts.PUBLISHED ?? 1643).toLocaleString('ro-RO')}
+                {(stagingStatusCounts.PUBLISHED ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 setStagingFilter('REJECTED');
                 setStagingPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'REJECTED'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
@@ -2164,11 +2303,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 setStagingFilter('toate');
                 setStagingPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'toate'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
@@ -2176,7 +2316,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             >
               <span>Toate Ofertele</span>
               <span className="px-1.5 py-0.2 rounded-md bg-slate-200 text-slate-800 text-[10px] font-black">
-                {(stagingStatusCounts.ALL ?? 3326).toLocaleString('ro-RO')}
+                {(stagingStatusCounts.ALL ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
           </div>
@@ -2454,13 +2594,18 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                           >
                             {off.stagingStatus}
                           </span>
+                          {Array.isArray(off.validationErrors) && off.validationErrors.length > 0 && (
+                            <div className="mt-1 text-[10px] text-rose-700 font-medium max-w-[200px] truncate" title={off.validationErrors.join(' ')}>
+                              {off.validationErrors[0]}
+                            </div>
+                          )}
                         </td>
                         <td className="p-3 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
                           <div className="inline-flex items-center gap-1">
                             <button
                               type="button"
                               onClick={() => setInspectingOffer(off)}
-                              className="rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-200"
+                              className="rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-200 cursor-pointer"
                             >
                               Inspectează
                             </button>
@@ -2468,17 +2613,17 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                               <>
                                 <button
                                   type="button"
-                                  onClick={() => handleReviewOffer(off.id, 'approve')}
+                                  onClick={() => handleReviewOffer(off.id, 'approve').catch(() => {})}
                                   disabled={reviewingOfferIds.has(off.id)}
-                                  className="rounded-lg bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                                  className="rounded-lg bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
                                 >
-                                  {reviewingOfferIds.has(off.id) ? '...' : 'Validează'}
+                                  {reviewingOfferIds.has(off.id) ? '...' : 'Aprobă & Validează'}
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => handleReviewOffer(off.id, 'reject')}
+                                  onClick={() => handleReviewOffer(off.id, 'reject').catch(() => {})}
                                   disabled={reviewingOfferIds.has(off.id)}
-                                  className="rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                                  className="rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50 cursor-pointer"
                                 >
                                   Respinge
                                 </button>
@@ -2760,14 +2905,20 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       {/* 1. Publication Preview Modal (Requirement 6) */}
       <AdminPublishPreviewModal
         open={showPublishPreview}
-        onClose={() => setShowPublishPreview(false)}
+        onClose={() => {
+          setShowPublishPreview(false);
+          setPublishPreviewHasConflict(false);
+        }}
         onConfirm={handleConfirmPublish}
         onCleanUnpublished={handleCleanUnpublished}
+        onRefreshPreview={handleRefreshPublishPreview}
         preview={publishPreviewData}
         isPublishing={isPublishing}
         isCleaning={isCleaningUnpublished}
+        isRefreshingPreview={isRefreshingPreview}
         publishErrorMessage={publishErrorMessage}
         cleanupErrorMessage={cleanupErrorMessage}
+        hasConflict={publishPreviewHasConflict}
       />
 
       {/* 2. Product Detail Drawer / Modal (Requirement 9) */}
@@ -2861,9 +3012,20 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         }}
         fetchWithAuth={fetchWithAuth}
         onSaved={(savedRetailer, _initialSource) => {
-          setRetailersList(current => current.map(retailer =>
-            retailer.id === savedRetailer.id ? { ...retailer, ...savedRetailer } : retailer
-          ));
+          setRetailersList(current => {
+            const exists = current.some(retailer => retailer.id === savedRetailer.id);
+            const next = exists
+              ? current.map(retailer =>
+                  retailer.id === savedRetailer.id ? { ...retailer, ...savedRetailer } : retailer
+                )
+              : [...current, savedRetailer];
+            const unique = new Map<string, RetailerConfig>();
+            for (const retailer of next) {
+              if (!retailer?.id || unique.has(retailer.id)) continue;
+              unique.set(retailer.id, retailer);
+            }
+            return Array.from(unique.values());
+          });
           loadRetailers();
           loadSources();
           loadDashboard();
