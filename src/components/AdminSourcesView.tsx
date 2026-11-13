@@ -15,6 +15,7 @@ import {
   Search,
   ExternalLink,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Layers,
   ArrowRight,
@@ -151,6 +152,40 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   const [authInput, setAuthInput] = useState<string>('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [isVerifyingAuth, setIsVerifyingAuth] = useState<boolean>(false);
+
+  const handleAdminLogin = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const token = authInput.trim();
+    if (!token || isVerifyingAuth) return;
+
+    setAuthError(null);
+    setIsVerifyingAuth(true);
+    try {
+      const response = await fetch('/api/admin/auth-check', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        const message = payload?.error || (
+          response.status === 401 || response.status === 403
+            ? 'Tokenul administrativ este invalid.'
+            : 'Autentificarea administratorului nu a putut fi verificată.'
+        );
+        throw new Error(message);
+      }
+
+      sessionStorage.setItem('cosul_meu_admin_token', token);
+      sessionStorage.setItem('cosul_meu_admin_auth', 'true');
+      setAdminToken(token);
+      setIsAuthenticated(true);
+      setAuthInput('');
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Autentificarea administratorului nu a putut fi verificată.');
+    } finally {
+      setIsVerifyingAuth(false);
+    }
+  };
 
   // Operational Dashboard state from backend
   const [operationalData, setOperationalData] = useState<OperationalDashboardData | null>(null);
@@ -903,7 +938,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           <h1 className="text-xl font-extrabold text-slate-900 text-center">Autentificare administrator</h1>
           <p className="mt-2 text-center text-sm text-slate-500">Introdu tokenul administrativ configurat pentru producție.</p>
           <label className="mt-5 block text-xs font-bold text-slate-700" htmlFor="admin-token">Token administrativ</label>
-          <input id="admin-token" type="password" value={authInput} onChange={event => setAuthInput(event.target.value)} autoComplete="current-password" className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="Introdu tokenul" />
+          <input id="admin-token" type="password" value={authInput} onChange={event => { setAuthInput(event.target.value); setAuthError(null); }} autoComplete="current-password" className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="Introdu tokenul" />
           {authError && <p className="mt-2 text-xs font-semibold text-rose-600" role="alert">{authError}</p>}
           <button type="submit" disabled={isVerifyingAuth} className="mt-5 w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
             {isVerifyingAuth ? 'Se verifică…' : 'Intră în panoul admin'}

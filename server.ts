@@ -271,10 +271,7 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
   }
 
   const token = authHeader.slice(7).trim();
-  const isValid =
-    token === ADMIN_API_KEY ||
-    token === 'cosul-meu-admin-secret-2026' ||
-    (!isProd && token === DEFAULT_DEV_ADMIN_KEY);
+  const isValid = token === ADMIN_API_KEY || (!isProd && token === DEFAULT_DEV_ADMIN_KEY);
   if (!token || !isValid) {
     return res.status(403).json({ error: 'Acces interzis. Token administrativ invalid.' });
   }
@@ -1979,6 +1976,8 @@ const handleCronPublish = async (req: express.Request, res: express.Response) =>
 
 app.get('/api/cron/catalog-publish', handleCronPublish);
 app.post('/api/cron/catalog-publish', handleCronPublish);
+
+app.get('/api/admin/auth-check', requireAdminAuth, (_req, res) => res.sendStatus(204));
 
 app.get('/api/admin/operational-dashboard', requireAdminAuth, async (req, res) => {
   try {
