@@ -69,14 +69,18 @@ export const AdminImportConfirmModal: React.FC<AdminImportConfirmModalProps> = (
             Retaileri și surse ce vor fi procesate ({retailers.length}):
           </span>
           <div className="border border-slate-200 rounded-2xl overflow-hidden divide-y divide-slate-100 max-h-48 overflow-y-auto text-xs">
-            {retailers.map(r => (
+            {retailers.length === 0 ? (
+              <div className="p-4 text-center text-slate-500">
+                Nu există surse oficiale active configurate.
+              </div>
+            ) : retailers.map(r => (
               <div key={r.id} className="p-2.5 flex items-center justify-between gap-3 hover:bg-slate-50">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-slate-800">{r.name}</span>
-                  <span className="text-[10px] text-slate-400">({r.format})</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="shrink-0 font-bold text-slate-800">{r.name}</span>
+                  <span className="min-w-0 break-words text-[10px] text-slate-400">({r.format})</span>
                 </div>
                 <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold ${
                     (r.status || r.defaultStatus) === 'BLOCKED'
                       ? 'bg-rose-100 text-rose-800'
                       : 'bg-emerald-100 text-emerald-800'
@@ -108,7 +112,7 @@ export const AdminImportConfirmModal: React.FC<AdminImportConfirmModalProps> = (
           </button>
           <button
             onClick={onConfirm}
-            disabled={isRunning}
+            disabled={isRunning || retailers.length === 0}
             className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm hover:shadow transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
           >
             {isRunning ? (
