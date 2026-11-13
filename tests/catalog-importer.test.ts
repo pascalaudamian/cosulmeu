@@ -15,7 +15,7 @@ async function runTests() {
   // =========================================================================
   // TEST 1: Protecție SSRF și Validare URL
   // =========================================================================
-  console.log('1. Verificare Protecție SSRF și Validare Domenii Retaileri...');
+  console.log('1. Verificare Protecție SSRF și URL-uri publice...');
 
   // URL-uri ilegitime / atacuri SSRF ce TREBUIE respinse
   const unsafeUrls = [
@@ -26,9 +26,10 @@ async function runTests() {
     'http://192.168.0.1/router',
     'http://172.20.0.1/admin',
     'http://169.254.169.254/computeMetadata/v1/',
+    'http://[::1]/api/admin',
+    'http://[fd00::1]/private',
     'file:///etc/hosts',
-    'ftp://files.example.com/catalog.pdf',
-    'https://attacker-domain.xyz/phishing-catalog.html'
+    'ftp://files.example.com/catalog.pdf'
   ];
 
   for (const url of unsafeUrls) {
@@ -52,12 +53,14 @@ async function runTests() {
     'https://www.profi.ro/reviste-ro/',
     'https://www.mega-image.ro/promotii-online/reviste-promo-online',
     'https://view.publitas.com/mega-image/revista-nr-43-2026/page/1',
-    'https://www.metro.ro/cataloagele-metro'
+    'https://www.metro.ro/cataloagele-metro',
+    'https://untrusted-domain.xyz/phishing-catalog.html',
+    'https://example.com/catalog.pdf'
   ];
 
   for (const url of safeUrls) {
     const safety = CatalogDownloader.validateUrlSafety(url);
-    assert.strictEqual(safety.safe, true, `URL legitim al unui retailer a fost respins eronat: ${url} (${safety.reason})`);
+    assert.strictEqual(safety.safe, true, `URL public a fost respins eronat: ${url} (${safety.reason})`);
   }
   console.log('   ✅ Protecția SSRF funcționează conform cerințelor de securitate.');
 

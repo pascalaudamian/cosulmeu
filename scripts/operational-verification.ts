@@ -163,13 +163,13 @@ async function runOperationalVerification() {
   const ssrf1 = CatalogDownloader.validateUrlSafety('http://169.254.169.254/latest/meta-data');
   const ssrf2 = CatalogDownloader.validateUrlSafety('http://localhost:3000/api/admin');
   const ssrf3 = CatalogDownloader.validateUrlSafety('http://10.0.0.1/admin');
-  const ssrf4 = CatalogDownloader.validateUrlSafety('https://untrusted-domain.com/catalog.html');
+  const publicUrl = CatalogDownloader.validateUrlSafety('https://untrusted-domain.com/catalog.html');
   const ssrfAllowed = CatalogDownloader.validateUrlSafety('https://www.lidl.ro/cataloage');
 
   console.log('Blocare Link-Local (169.254.x):', !ssrf1.safe ? 'PASS' : 'FAIL');
   console.log('Blocare Loopback (localhost):', !ssrf2.safe ? 'PASS' : 'FAIL');
   console.log('Blocare Private IP (10.x):', !ssrf3.safe ? 'PASS' : 'FAIL');
-  console.log('Blocare Domeniu Neautorizat:', !ssrf4.safe ? 'PASS' : 'FAIL');
+  console.log('Permitere URL Public Extern:', publicUrl.safe ? 'PASS' : 'FAIL');
   console.log('Permitere Domeniu Oficial Lidl:', ssrfAllowed.safe ? 'PASS' : 'FAIL');
   console.log('ETAPA 6: PASS\n');
 

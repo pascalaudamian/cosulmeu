@@ -389,7 +389,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div className="sm:col-span-2">
                     <label className="block font-semibold text-slate-700 mb-1 text-[11px]">
-                      URL Pagină / Catalog Oficial
+                      URL Pagină / Catalog
                     </label>
                     <div className="relative">
                       <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
@@ -401,6 +401,9 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                         className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                       />
                     </div>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Orice domeniu public HTTP/HTTPS este acceptat; adresele locale și private rămân blocate.
+                    </p>
                   </div>
 
                   <div>

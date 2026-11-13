@@ -204,7 +204,7 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="block font-bold text-slate-700">
-                URL Catalog / Pagină Oficială *
+                URL Catalog / Pagină Sursă *
               </label>
               {catalogUrl && (
                 <a
@@ -230,7 +230,7 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
               />
             </div>
             <p className="text-[11px] text-slate-500 mt-1">
-              URL-ul este validat automat împotriva adreselor private locale (protecție SSRF).
+              Este acceptat orice domeniu public HTTP/HTTPS; localhost și adresele private sunt blocate pentru protecția serverului.
             </p>
           </div>
 
