@@ -21,52 +21,7 @@ export class CatalogDownloader {
   public static readonly DEFAULT_TIMEOUT_MS = 20000; // 20 secunde
 
   /**
-   * Domenii oficiale permise pentru descărcare cataloage
-   */
-  public static readonly ALLOWED_HOST_DOMAINS: string[] = [
-    'lidl.ro',
-    'kaufland.ro',
-    'carrefour.ro',
-    'penny.ro',
-    'auchan.ro',
-    'auchan.vtexassets.com',
-    'vtexassets.com',
-    'profi.ro',
-    'mega-image.ro',
-    'metro.ro',
-    'selgros.ro',
-    'supeco.ro',
-    'la-cocos.ro',
-    'lacocos.ro',
-    'freshful.ro',
-    'sezamo.ro',
-    'cora.ro',
-    'magazinelediana.ro',
-    'anabella.ro',
-    'unicarm.ro',
-    'remarkt.ro',
-    'leaflet.lidl.ro',
-    'cdn.lidl.ro',
-    'media.kaufland.com',
-    'assets.leaflets.schwarz',
-    'leaflets.schwarz',
-    'endpoints.leaflets.schwarz',
-    'view.publitas.com',
-    'publitas.com',
-    'files.rewe.co.at',
-    'rewe.co.at',
-    'carrefour-romania.ro'
-  ];
-
-  public static addAllowedDomain(domain: string): void {
-    const clean = domain.toLowerCase().trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    if (clean && !this.ALLOWED_HOST_DOMAINS.includes(clean)) {
-      this.ALLOWED_HOST_DOMAINS.push(clean);
-    }
-  }
-
-  /**
-   * Verifică protocolul HTTP(S) și blochează localhost / IP-uri private (SSRF), fără a impune allowlist-ul fix de domenii.
+   * Verifică URL-urile publice HTTP(S) și blochează hosturile locale și private.
    */
   static validatePublicUrlSafety(inputUrl: string): { safe: boolean; reason?: string; hostname?: string } {
     try {
@@ -78,71 +33,69 @@ export class CatalogDownloader {
       }
 
       const hostname = parsed.hostname.toLowerCase();
+      const normalizedHostname = hostname.replace(/^\[|\]$/g, '');
 
-      // 2. Protecție SSRF: Blocare localhost și adrese de buclă/interne
+      // URL-urile publice sunt permise; adresele locale și rețelele private rămân blocate.
       if (
-        hostname === 'localhost' ||
-        hostname === '127.0.0.1' ||
-        hostname === '0.0.0.0' ||
-        hostname === '::1' ||
-        hostname.endsWith('.localhost') ||
-        hostname.endsWith('.internal') ||
-        hostname.endsWith('.local')
+        normalizedHostname === 'localhost' ||
+        normalizedHostname === '0.0.0.0' ||
+        normalizedHostname.endsWith('.localhost') ||
+        normalizedHostname.endsWith('.internal') ||
+        normalizedHostname.endsWith('.local')
       ) {
-        return { safe: false, reason: `Acces interzis la adrese locale sau interne: ${hostname}` };
+        return { safe: false, reason: `Acces interzis la adrese locale sau interne: ${normalizedHostname}` };
       }
 
-      // 3. Blocare intervale IP private (IPv4)
-      const ipMatch = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+      if (normalizedHostname.includes(':') && (
+        normalizedHostname === '::' ||
+        normalizedHostname === '::1' ||
+        normalizedHostname.startsWith('fc') ||
+        normalizedHostname.startsWith('fd') ||
+        /^fe[89ab]/.test(normalizedHostname) ||
+        normalizedHostname.startsWith('ff') ||
+        normalizedHostname.startsWith('::ffff:') ||
+        normalizedHostname.startsWith('2002:')
+      )) {
+        return { safe: false, reason: `Acces interzis la adrese IPv6 locale sau rezervate: ${normalizedHostname}` };
+      }
+
+      const ipMatch = normalizedHostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
       if (ipMatch) {
-        const [_, a, b] = ipMatch.map(Number);
-        // 10.0.0.0/8
-        if (a === 10) return { safe: false, reason: 'Acces interzis la rețea privată (10.0.0.0/8).' };
-        // 172.16.0.0/12
-        if (a === 172 && b >= 16 && b <= 31) return { safe: false, reason: 'Acces interzis la rețea privată (172.16.0.0/12).' };
-        // 192.168.0.0/16
-        if (a === 192 && b === 168) return { safe: false, reason: 'Acces interzis la rețea privată (192.168.0.0/16).' };
-        // 169.254.0.0/16 (Link-local / Cloud metadata)
-        if (a === 169 && b === 254) return { safe: false, reason: 'Acces interzis la link-local / cloud metadata (169.254.0.0/16).' };
-        // 127.0.0.0/8
-        if (a === 127) return { safe: false, reason: 'Acces interzis la loopback (127.0.0.0/8).' };
+        const [a, b, c, d] = ipMatch.slice(1).map(Number);
+        if ([a, b, c, d].some(octet => octet > 255)) {
+          return { safe: false, reason: 'Adresa IPv4 nu este validă.' };
+        }
+
+        const isNonPublicAddress =
+          a === 0 ||
+          a === 10 ||
+          a === 127 ||
+          a >= 224 ||
+          (a === 100 && b >= 64 && b <= 127) ||
+          (a === 169 && b === 254) ||
+          (a === 172 && b >= 16 && b <= 31) ||
+          (a === 192 && (b === 168 || (b === 0 && (c === 0 || c === 2)) || (b === 88 && c === 99))) ||
+          (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+          (a === 203 && b === 0 && c === 113);
+
+        if (isNonPublicAddress) {
+          return { safe: false, reason: `Acces interzis la o adresă IPv4 locală, privată sau rezervată: ${normalizedHostname}` };
+        }
       }
 
-      return { safe: true, hostname };
+      return { safe: true, hostname: normalizedHostname };
     } catch (err: any) {
       return { safe: false, reason: `URL malformat sau invalid: ${err.message}` };
     }
   }
 
   /**
-   * Verifică dacă adresa URL este sigură împotriva atacurilor SSRF
+   * Compatibility wrapper for existing callers that pass legacy domain lists.
+   * All public HTTP(S) domains are accepted; local and private targets remain blocked.
    */
-  static validateUrlSafety(inputUrl: string, additionalAllowedDomains?: string[]): { safe: boolean; reason?: string } {
-    const publicCheck = this.validatePublicUrlSafety(inputUrl);
-    if (!publicCheck.safe || !publicCheck.hostname) {
-      return { safe: false, reason: publicCheck.reason };
-    }
-
-    const hostname = publicCheck.hostname;
-
-    // 4. Verificare dacă domeniul aparține retailerilor autorizați sau allowlist-ului
-    const allAllowed = additionalAllowedDomains && additionalAllowedDomains.length > 0
-      ? [...this.ALLOWED_HOST_DOMAINS, ...additionalAllowedDomains.map(d => d.toLowerCase().replace(/^www\./, '').trim()).filter(Boolean)]
-      : this.ALLOWED_HOST_DOMAINS;
-
-    const matchesAllowed = allAllowed.some(allowed => {
-      const cleanAllowed = allowed.toLowerCase().replace(/^www\./, '').trim();
-      return Boolean(cleanAllowed) && (hostname === cleanAllowed || hostname.endsWith('.' + cleanAllowed));
-    });
-
-    if (!matchesAllowed) {
-      return {
-        safe: false,
-        reason: `Domeniul ${hostname} nu se află în lista retailerilor oficiali autorizați pentru descărcare cataloage.`
-      };
-    }
-
-    return { safe: true };
+  static validateUrlSafety(inputUrl: string, _additionalAllowedDomains?: string[]): { safe: boolean; reason?: string } {
+    const result = this.validatePublicUrlSafety(inputUrl);
+    return result.safe ? { safe: true } : { safe: false, reason: result.reason };
   }
 
   /**

@@ -479,7 +479,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
         setShowAddSourceModal(false);
         setNewSourceUrl('');
         setNewSourceName('');
-        setActionMessage({ type: 'success', text: 'Sursa a fost adăugată cu succes și validată împotriva SSRF.' });
+        setActionMessage({ type: 'success', text: 'Sursa a fost adăugată cu succes.' });
         loadAllData();
       } else {
         setActionMessage({ type: 'error', text: data.error || 'Eroare la adăugarea sursei.' });
@@ -551,10 +551,10 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       {
         stepNumber: 1,
         name: 'Descoperire și Validare URL',
-        description: 'Verificare protecție SSRF, domeniu autorizat și conectivitate HTTP',
+        description: 'Verificare format URL, protecție pentru adrese private și conectivitate HTTP',
         status: 'PASS',
         durationMs: 120,
-        details: `Sursă validată în lista permisă (${run.retailerId}). Răspuns HTTP 200 OK.`
+        details: `Sursă verificată (${run.retailerId}). Răspuns HTTP 200 OK.`
       },
       {
         stepNumber: 2,
@@ -1856,10 +1856,10 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
               <div className="font-bold text-slate-900 flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                Protecție SSRF & Domenii Autorizate
+                Protecție SSRF & URL-uri Publice
               </div>
               <p className="text-slate-600 leading-relaxed">
-                Descărcările de cataloage sunt limitate strict la allowlist-ul retailerilor oficiali (<code>lidl.ro</code>, <code>kaufland.ro</code>, <code>leaflets.schwarz</code>, etc.). Adresele locale și rețelele interne RFC 1918 sunt respinse automat.
+                Sunt acceptate URL-uri HTTP/HTTPS de pe orice domeniu public. Localhost, adresele private și rețelele interne sunt respinse automat pentru protecția serverului.
               </p>
             </div>
 
@@ -2218,7 +2218,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
 
               <div>
                 <label className="font-semibold text-slate-700 block mb-1">
-                  Adresă URL Sursă (HTTP / HTTPS oficial)
+                  Adresă URL Sursă (HTTP / HTTPS)
                 </label>
                 <input
                   type="url"
@@ -2229,7 +2229,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono outline-none focus:border-emerald-500"
                 />
                 <span className="text-[11px] text-slate-400 mt-1 block">
-                  Protecție automată SSRF: doar domeniile autorizate ale retailerilor români sunt permise.
+                  Poți folosi orice domeniu public; localhost și adresele private sunt blocate pentru protecția serverului.
                 </span>
               </div>
 
