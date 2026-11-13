@@ -347,7 +347,7 @@ export class CatalogStagingManager {
     itemsWithoutPriceCount: number;
     needsReviewCount: number;
     retailersInvolved: string[];
-    sampleItems: { id: string; title: string; price: number; retailerId: string; isNewProduct: boolean }[];
+    items: { id: string; title: string; price: number; retailerId: string; isNewProduct: boolean }[];
     cleanupOfferIds: string[];
     errors: string[];
   }> {
@@ -416,7 +416,7 @@ export class CatalogStagingManager {
       itemsWithoutPriceCount,
       needsReviewCount: needsReview.length,
       retailersInvolved: Array.from(retailers),
-      sampleItems: toPublish.slice(0, 10).map(i => ({
+      items: toPublish.map(i => ({
         id: i.id,
         title: i.rawTitle,
         price: i.effectivePrice,

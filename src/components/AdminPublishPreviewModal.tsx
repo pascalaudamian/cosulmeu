@@ -25,7 +25,7 @@ export interface PublishPreviewData {
   itemsWithoutPriceCount: number;
   needsReviewCount: number;
   retailersInvolved: string[];
-  sampleItems: { id: string; title: string; price: number; retailerId: string; isNewProduct: boolean }[];
+  items: { id: string; title: string; price: number; retailerId: string; isNewProduct: boolean }[];
   cleanupOfferIds: string[];
   errors: string[];
 }
@@ -155,15 +155,15 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
           </div>
         )}
 
-        {/* Sample Items Preview */}
+        {/* Full offer preview */}
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-            <span>Mostră articole ({preview.sampleItems.length} din {preview.toPublishCount}):</span>
+            <span>Produse care se vor publica ({preview.items.length}):</span>
             <span className="text-slate-400 font-normal">Total oferte gata de publicare: {preview.toPublishCount}</span>
           </div>
-          <div className="border border-slate-200 rounded-2xl overflow-hidden divide-y divide-slate-100 max-h-48 overflow-y-auto text-xs">
-            {preview.sampleItems.map(item => (
-              <div key={item.id} className="p-2.5 flex items-center justify-between gap-3 hover:bg-slate-50">
+          <div role="list" aria-label="Oferte incluse în publicare" className="border border-slate-200 rounded-2xl overflow-hidden divide-y divide-slate-100 max-h-48 overflow-y-auto text-xs">
+            {preview.items.map(item => (
+              <div role="listitem" key={item.id} className="p-2.5 flex items-center justify-between gap-3 hover:bg-slate-50">
                 <div className="flex items-center gap-2 truncate">
                   <span className="px-1.5 py-0.5 rounded-md bg-slate-100 text-[10px] font-bold uppercase text-slate-600">
                     {item.retailerId}
