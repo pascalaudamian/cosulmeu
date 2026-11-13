@@ -66,21 +66,29 @@ export class CatalogParserEngine {
     retailerId?: string
   ): Promise<ParseResult> {
     try {
-      if (format === 'html') {
+      if (format === 'pdf') {
+        const buffer = typeof content === 'string' ? Buffer.from(content) : content;
+        const head = buffer.subarray(0, 512).toString('utf-8').trim().toLowerCase();
+        if (!head.startsWith('%pdf') && (head.startsWith('<!doctype') || head.startsWith('<html') || head.includes('<body') || head.includes('<head'))) {
+          return CatalogParserEngine.parseCatalog(buffer.toString('utf-8'), 'html', retailerId);
+        }
+        return await CatalogParserEngine.parsePdfCatalog(buffer);
+      } else if (format === 'html') {
         const htmlText = typeof content === 'string' ? content : content.toString('utf-8');
         if (retailerId === 'carrefour') {
-          return CatalogParserEngine.parseCarrefourCatalog(htmlText);
+          const res = CatalogParserEngine.parseCarrefourCatalog(htmlText);
+          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
         } else if (retailerId === 'penny') {
-          return CatalogParserEngine.parsePennyCatalog(htmlText);
+          const res = CatalogParserEngine.parsePennyCatalog(htmlText);
+          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
         } else if (retailerId === 'mega-image') {
-          return CatalogParserEngine.parseMegaImageCatalog(htmlText);
+          const res = CatalogParserEngine.parseMegaImageCatalog(htmlText);
+          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
         } else if (retailerId === 'auchan') {
-          return CatalogParserEngine.parseAuchanOnlineStore(htmlText);
+          const res = CatalogParserEngine.parseAuchanOnlineStore(htmlText);
+          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
         }
         return CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
-      } else if (format === 'pdf') {
-        const buffer = typeof content === 'string' ? Buffer.from(content) : content;
-        return await CatalogParserEngine.parsePdfCatalog(buffer);
       } else if (format === 'csv') {
         const csvText = typeof content === 'string' ? content : content.toString('utf-8');
         return CatalogParserEngine.parseCsvCatalog(csvText);
@@ -107,8 +115,93 @@ export class CatalogParserEngine {
     }
   }
 
+  private static parseNumericPrice(raw: unknown): number {
+    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+    if (typeof raw !== 'string') return 0;
+    const match = raw.trim().match(/(\d+(?:[.,]\d{1,2})?)/);
+    if (!match) return 0;
+    const val = parseFloat(match[1].replace(',', '.'));
+    return Number.isFinite(val) ? val : 0;
+  }
+
+  private static extractOffersFromJsonLdNode(node: any, offers: RawParsedOffer[]): void {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        this.extractOffersFromJsonLdNode(child, offers);
+      }
+      return;
+    }
+
+    if (Array.isArray(node['@graph'])) {
+      this.extractOffersFromJsonLdNode(node['@graph'], offers);
+    }
+
+    if (node.mainEntity) {
+      this.extractOffersFromJsonLdNode(node.mainEntity, offers);
+    }
+
+    if (Array.isArray(node.itemListElement)) {
+      for (const listEl of node.itemListElement) {
+        this.extractOffersFromJsonLdNode(listEl?.item || listEl, offers);
+      }
+    }
+
+    const rawType = node['@type'];
+    const types = Array.isArray(rawType) ? rawType.map(String) : rawType ? [String(rawType)] : [];
+    const isProduct = types.some(t => t === 'Product' || t === 'IndividualProduct');
+
+    if ((isProduct || node.offers) && typeof node.name === 'string' && node.name.trim().length >= 2) {
+      const rawOffers = Array.isArray(node.offers)
+        ? node.offers
+        : Array.isArray(node.offers?.offers)
+          ? node.offers.offers
+          : node.offers
+            ? [node.offers]
+            : [];
+      const offerObj = rawOffers[0] || {};
+      const price = this.parseNumericPrice(
+        offerObj.price ?? offerObj.lowPrice ?? node.price
+      );
+
+      if (price > 0 && price < 100000) {
+        const listPrice = this.parseNumericPrice(offerObj.highPrice ?? offerObj.priceSpecification?.price);
+        const normalPrice = listPrice > price ? listPrice : price;
+        const promoPrice = listPrice > price ? price : undefined;
+        const imageVal = Array.isArray(node.image) ? node.image[0] : node.image;
+        const imageUrl = typeof imageVal === 'string' ? imageVal : imageVal?.url;
+
+        let packageQuantity: number | undefined;
+        let packageUnit: string | undefined;
+        const pkgMatch = node.name.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
+        if (pkgMatch) {
+          packageQuantity = parseFloat(pkgMatch[1].replace(',', '.'));
+          packageUnit = pkgMatch[2].toLowerCase();
+        }
+
+        offers.push({
+          rawTitle: node.name.trim(),
+          rawBrand: node.brand?.name || (typeof node.brand === 'string' ? node.brand : undefined),
+          rawBarcode: node.gtin13 || node.gtin8 || node.gtin || node.sku,
+          rawCategory: typeof node.category === 'string' ? node.category : undefined,
+          normalPrice,
+          promoPrice,
+          effectivePrice: price,
+          currency: offerObj.priceCurrency || 'RON',
+          packageQuantity,
+          packageUnit,
+          isPromo: Boolean(promoPrice || offerObj.discount || offerObj.priceValidUntil),
+          validUntil: offerObj.priceValidUntil ? String(offerObj.priceValidUntil).slice(0, 10) : undefined,
+          imageUrl,
+          catalogUrl: node.url || offerObj.url,
+          confidenceScore: 0.95
+        });
+      }
+    }
+  }
+
   /**
-   * Parsează cataloage HTML (inclusiv suport avansat pentru structura Lidl România)
+   * Parsează cataloage HTML (inclusiv suport avansat pentru structura Lidl România și pagini web retaileri)
    */
   static parseHtmlCatalog(html: string, retailerId?: string): ParseResult {
     const $ = cheerio.load(html);
@@ -116,33 +209,13 @@ export class CatalogParserEngine {
     const products: RawCatalogProduct[] = [];
     const warnings: string[] = [];
 
-    // 1. Verificare JSON-LD structurat
+    // 1. Verificare JSON-LD structurat (inclusiv ItemList, OfferCatalog, @graph)
     $('script[type="application/ld+json"]').each((_, el) => {
       try {
         const text = $(el).html();
         if (!text) return;
         const data = JSON.parse(text);
-        const items = Array.isArray(data) ? data : data['@graph'] || [data];
-        for (const item of items) {
-          if (item['@type'] === 'Product' || item.offers) {
-            const offerObj = item.offers || {};
-            const price = parseFloat(offerObj.price || item.price);
-            if (!isNaN(price) && price > 0 && item.name) {
-              offers.push({
-                rawTitle: item.name.trim(),
-                rawBrand: item.brand?.name || (typeof item.brand === 'string' ? item.brand : undefined),
-                rawBarcode: item.gtin13 || item.gtin8 || item.sku,
-                rawCategory: typeof item.category === 'string' ? item.category : undefined,
-                normalPrice: price,
-                effectivePrice: price,
-                currency: offerObj.priceCurrency || 'RON',
-                isPromo: Boolean(offerObj.discount || offerObj.priceValidUntil),
-                validUntil: offerObj.priceValidUntil,
-                confidenceScore: 0.95
-              });
-            }
-          }
-        }
+        this.extractOffersFromJsonLdNode(data, offers);
       } catch {
         // Ignorăm blocurile JSON-LD invalide
       }
@@ -289,31 +362,76 @@ export class CatalogParserEngine {
       });
     }
 
-    // 3. Parsare generică HTML carduri (pentru alte pagini de oferte sau cataloage online)
+    // 3. Parsare generică HTML carduri (pentru pagini web ale retailerilor sau cataloage online)
     if (offers.length === 0) {
-      $('[class*="product"], [class*="offer"], [class*="card"], article').each((_, el) => {
-        const title = $(el).find('h2, h3, h4, [class*="title"], [class*="name"]').first().text().trim();
-        const priceText = $(el).find('[class*="price"], .pret').first().text().trim();
+      const seenTitles = new Set<string>();
+      $('.product-card, .product-item, .product-tile, .product-box, [data-product-id], [data-testid*="product"], [class*="product"], [class*="offer"], [class*="card"], article').each((_, el) => {
+        const card = $(el);
+        const title = card.find('h2, h3, h4, .product-name, .title, .name, [data-qa="product-title"], [class*="title"], [class*="name"]').first().text().trim();
+        if (title.length < 3) return;
 
-        if (title.length >= 3 && priceText) {
-          const matchPrice = priceText.match(/(\d+(?:[.,]\d+)?)\s*(?:lei|ron)?/i);
-          if (matchPrice) {
-            const parsedPrice = parseFloat(matchPrice[1].replace(',', '.'));
-            if (!isNaN(parsedPrice) && parsedPrice > 0 && parsedPrice < 10000) {
-              // Verificare dacă nu am adăugat deja exact aceeași denumire
-              if (!offers.some(o => o.rawTitle.toLowerCase() === title.toLowerCase())) {
-                offers.push({
-                  rawTitle: title,
-                  normalPrice: parsedPrice,
-                  effectivePrice: parsedPrice,
-                  currency: 'RON',
-                  isPromo: /reducere|promo|discount|oferta/i.test($(el).text()),
-                  confidenceScore: 0.75
-                });
-              }
-            }
-          }
+        const titleKey = title.toLowerCase();
+        if (seenTitles.has(titleKey)) return;
+
+        const currentPriceEl = card.find('.current-price, .promo-price, [data-qa="price-current"], [class*="price"]:not([class*="old"]):not([class*="original"]):not([class*="strike"]), .pret, .valoare').first();
+        const oldPriceEl = card.find('.old-price, .original-price, .cut-price, .pret-vechi, [data-qa="price-original"], [class*="old-price"], [class*="original-price"], del, s').first();
+        const loyaltyPriceEl = card.find('.loyalty-price, .card-price, .pret-card, [data-qa="price-loyalty"]').first();
+
+        const extractCardPrice = (rawText: string): number => {
+          if (!rawText) return 0;
+          const currencyMatch = rawText.match(/(\d+(?:[.,]\d{1,2})?)\s*(?:lei|ron)\b/i);
+          if (currencyMatch) return parseFloat(currencyMatch[1].replace(',', '.'));
+          const decimalMatch = rawText.match(/(\d+[.,]\d{2})\b/);
+          if (decimalMatch) return parseFloat(decimalMatch[1].replace(',', '.'));
+          const genericMatch = rawText.match(/(\d+(?:[.,]\d{1,2})?)/);
+          return genericMatch ? parseFloat(genericMatch[1].replace(',', '.')) : 0;
+        };
+
+        const currentPrice = extractCardPrice(currentPriceEl.text().trim());
+        const oldPrice = extractCardPrice(oldPriceEl.text().trim());
+        const loyaltyPrice = extractCardPrice(loyaltyPriceEl.text().trim());
+
+        const effectivePrice = loyaltyPrice > 0 ? loyaltyPrice : currentPrice;
+        if (!Number.isFinite(effectivePrice) || effectivePrice <= 0 || effectivePrice >= 10000) return;
+
+        const normalPrice = oldPrice > effectivePrice ? oldPrice : (currentPrice > effectivePrice ? currentPrice : effectivePrice);
+        const promoPrice = !loyaltyPrice && normalPrice > effectivePrice ? effectivePrice : undefined;
+        const brand = card.find('.brand, .manufacturer, [data-qa="product-brand"]').first().text().trim() || undefined;
+        const barcode = card.attr('data-ean') || card.attr('data-sku') || undefined;
+        const imageUrl = card.find('img').first().attr('src') || card.find('img').first().attr('data-src') || undefined;
+
+        let packageQuantity: number | undefined;
+        let packageUnit: string | undefined;
+        const pkgMatch = title.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
+        if (pkgMatch) {
+          packageQuantity = parseFloat(pkgMatch[1].replace(',', '.'));
+          packageUnit = pkgMatch[2].toLowerCase();
         }
+
+        const promoBadge = card.find('.badge, .promo-label, .reducere, .discount-tag').first().text().trim();
+        const isPromo = Boolean(promoPrice || loyaltyPrice || /reducere|promo|discount|oferta/i.test(card.text()));
+
+        seenTitles.add(titleKey);
+        offers.push({
+          rawTitle: title,
+          rawBrand: brand,
+          rawBarcode: barcode,
+          normalPrice,
+          promoPrice,
+          loyaltyPrice: loyaltyPrice > 0 ? loyaltyPrice : undefined,
+          effectivePrice,
+          currency: 'RON',
+          priceType: loyaltyPrice > 0 ? 'loyalty_card' : promoPrice ? 'promotional' : 'standard',
+          discountPercentage: normalPrice > effectivePrice ? Math.round(((normalPrice - effectivePrice) / normalPrice) * 100) : undefined,
+          packageQuantity,
+          packageUnit,
+          isPromo,
+          promoDetails: promoBadge || undefined,
+          loyaltyCardName: loyaltyPrice > 0 && retailerId ? `${retailerId.toUpperCase()} Card` : undefined,
+          loyaltyCardRequired: loyaltyPrice > 0,
+          imageUrl,
+          confidenceScore: 0.78
+        });
       });
     }
 

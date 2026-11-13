@@ -10,7 +10,8 @@ import {
   SourceSyncRun,
   ProductMatchCandidate,
   UserErrorReport,
-  MatchAuditEntry
+  MatchAuditEntry,
+  Store
 } from '../types.js';
 import {
   PromotionRecord,
@@ -35,6 +36,7 @@ import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/CatalogSourceDiscov
 import {
   INITIAL_USER_PROFILE,
   PRODUCTS,
+  STORES,
   PRODUCT_OFFERS,
   PRICE_OBSERVATIONS,
   DATA_SOURCES,
@@ -71,7 +73,8 @@ const KEYS = {
   CATALOG_IMPORT_RUNS: 'cosul_meu_catalog_import_runs_v1',
   CATALOG_EXTRACTED_OFFERS: 'cosul_meu_catalog_extracted_offers_v1',
   CATALOG_IMPORT_ERRORS: 'cosul_meu_catalog_import_errors_v1',
-  DELETED_PRODUCT_IDS: 'cosul_meu_deleted_product_ids_v1'
+  DELETED_PRODUCT_IDS: 'cosul_meu_deleted_product_ids_v1',
+  CUSTOM_STORES: 'cosul_meu_custom_stores_v1'
 };
 
 
@@ -897,6 +900,43 @@ export class StorageService {
     return true;
   }
 
+  static getStores(): Store[] {
+    try {
+      const data = safeGetItem(KEYS.CUSTOM_STORES);
+      if (!data) return STORES;
+      const customStores = JSON.parse(data) as Store[];
+      if (!Array.isArray(customStores) || customStores.length === 0) return STORES;
+
+      const byId = new Map<string, Store>();
+      for (const s of STORES) byId.set(s.id, s);
+      for (const c of customStores) {
+        if (!c?.id) continue;
+        const existing = byId.get(c.id);
+        byId.set(c.id, existing ? { ...existing, ...c } : c);
+      }
+      return Array.from(byId.values());
+    } catch {
+      return STORES;
+    }
+  }
+
+  static saveCustomStore(store: Store): void {
+    try {
+      const data = safeGetItem(KEYS.CUSTOM_STORES);
+      const customStores = data ? (JSON.parse(data) as Store[]) : [];
+      const list = Array.isArray(customStores) ? customStores : [];
+      const idx = list.findIndex(s => s.id === store.id);
+      if (idx !== -1) {
+        list[idx] = { ...list[idx], ...store };
+      } else {
+        list.push(store);
+      }
+      safeSetItem(KEYS.CUSTOM_STORES, JSON.stringify(list));
+    } catch (e) {
+      console.error('Eroare la salvarea magazinului personalizat:', e);
+    }
+  }
+
   // ==========================================
   // CATALOG IMPORTER STORAGE METHODS
   // ==========================================
@@ -907,17 +947,28 @@ export class StorageService {
       if (!data) return INITIAL_CATALOG_SOURCES;
 
       const storedSources = JSON.parse(data) as CatalogSource[];
-      const storedById = new Map(storedSources.map(source => [source.id, source]));
+      if (!Array.isArray(storedSources) || storedSources.length === 0) {
+        return INITIAL_CATALOG_SOURCES;
+      }
 
-      // Keep user changes, but backfill newly registered retailers and sync updated official URLs.
-      return INITIAL_CATALOG_SOURCES.map(source => {
-        const stored = storedById.get(source.id);
-        if (!stored) return source;
-        if (stored.catalogUrl !== source.catalogUrl) {
-          return { ...stored, ...source };
+      const result: CatalogSource[] = [];
+      const seenIds = new Set<string>();
+
+      for (const stored of storedSources) {
+        if (!stored?.id || seenIds.has(stored.id)) continue;
+        seenIds.add(stored.id);
+        const initial = INITIAL_CATALOG_SOURCES.find(s => s.id === stored.id);
+        result.push(initial ? { ...initial, ...stored } : stored);
+      }
+
+      for (const source of INITIAL_CATALOG_SOURCES) {
+        if (!seenIds.has(source.id)) {
+          seenIds.add(source.id);
+          result.push(source);
         }
-        return stored;
-      });
+      }
+
+      return result;
     } catch {
       return INITIAL_CATALOG_SOURCES;
     }

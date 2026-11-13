@@ -14,9 +14,11 @@ import { CatalogParserEngine, RawParsedOffer } from './CatalogParserEngine.js';
 import { ProductMatcher } from '../../services/ProductMatcher.js';
 import { StorageService } from '../../services/StorageService.js';
 import { DatabaseService, isPostgresConfigured, getPool } from '../../db/index.js';
-import { Product, ProductOffer, PriceObservation, UnitType } from '../../types.js';
+import { Product, ProductOffer, PriceObservation, UnitType, Store } from '../../types.js';
 import { PriceQualityMonitor } from '../PriceQualityMonitor.js';
 import { mapRetailerCategoryToStandard } from '../../data/categories.js';
+import { STORES } from '../../data/mockData.js';
+import { CatalogSourceDiscovery } from './CatalogSourceDiscovery.js';
 
 export interface PublishPreviewItem {
   id: string;
@@ -84,13 +86,39 @@ export class CatalogStagingManager {
     return crypto.createHash('sha256').update(signature).digest('hex');
   }
 
+  private static extractDomain(url?: string): string | null {
+    if (!url) return null;
+    try {
+      return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+
+  private static async resolveStoreWebsiteUrl(retailerId: string): Promise<{ name: string; websiteUrl?: string }> {
+    const localFallback = STORES.find(s => s.id === retailerId);
+    const localSaved = StorageService.getStores().find(s => s.id === retailerId);
+    let dbStore: Store | undefined;
+    try {
+      const stores = await DatabaseService.getStores();
+      dbStore = stores.find(s => s.id === retailerId);
+    } catch {}
+    const resolved = dbStore || localSaved || localFallback;
+    return {
+      name: resolved?.name || retailerId.toUpperCase(),
+      websiteUrl: resolved?.officialUrl || resolved?.websiteUrl || localFallback?.officialUrl || localFallback?.websiteUrl
+    };
+  }
+
   /**
-   * Execută fluxul complet de procesare pentru un document de catalog
+   * Execută fluxul complet de procesare pentru un document de catalog.
+   * Dacă documentul/catalogul nu este disponibil sau nu returnează oferte,
+   * încearcă automat fallback-ul pe pagina web oficială a retailerului.
    */
   static async executeImportForDocument(
     document: CatalogDocument,
-    options: { autoPublishValidated?: boolean } = {}
-  ): Promise<{ run: CatalogImportRun; offers: CatalogExtractedOffer[]; error?: string }> {
+    options: { autoPublishValidated?: boolean; websiteUrl?: string; disableSyntheticFallback?: boolean } = {}
+  ): Promise<{ run: CatalogImportRun; offers: CatalogExtractedOffer[]; usedWebsiteFallback?: boolean; resolvedUrl?: string; error?: string }> {
     const startedAt = new Date().toISOString();
     const runId = `run-${document.retailerId}-${Date.now()}`;
     const startTime = Date.now();
@@ -118,13 +146,108 @@ export class CatalogStagingManager {
       updatedAt: new Date().toISOString()
     });
 
-    // 2. Descărcare document cu protecție SSRF
+    const storeInfo = options.websiteUrl
+      ? { name: document.retailerId.toUpperCase(), websiteUrl: options.websiteUrl }
+      : await this.resolveStoreWebsiteUrl(document.retailerId);
+
+    const configuredSources = [
+      ...StorageService.getCatalogSources().filter(s => s.retailerId === document.retailerId),
+      ...(await DatabaseService.getCatalogSources(document.retailerId).catch(() => [] as CatalogSource[]))
+    ];
+
+    const allowedDomains = Array.from(new Set([
+      this.extractDomain(storeInfo.websiteUrl),
+      ...configuredSources.map(s => this.extractDomain(s.catalogUrl))
+    ].filter((d): d is string => Boolean(d))));
+
+    const detectEffectiveFormat = (docFormat: CatalogDocument['format'], contentType?: string, buf?: Buffer) => {
+      if (docFormat === 'pdf' && buf) {
+        const ct = (contentType || '').toLowerCase();
+        const head = buf.subarray(0, 512).toString('utf-8').trim().toLowerCase();
+        if (
+          !head.startsWith('%pdf') &&
+          (ct.includes('text/html') || head.startsWith('<!doctype') || head.startsWith('<html') || head.includes('<body'))
+        ) {
+          return 'html' as const;
+        }
+      }
+      return docFormat;
+    };
+
+    // 2. Descărcare document principal cu protecție SSRF
     let downloadRes = await CatalogDownloader.downloadCatalog(document.documentUrl, {
-      timeoutMs: 25000,
-      maxRetries: 2
+      timeoutMs: 20000,
+      maxRetries: 1,
+      additionalAllowedDomains: allowedDomains
     });
 
-    if (!downloadRes.ok || !downloadRes.data) {
+    let parseRes: Awaited<ReturnType<typeof CatalogParserEngine.parseCatalog>> | null = null;
+    let usedWebsiteFallback = false;
+    let resolvedUrl = downloadRes.finalUrl || document.documentUrl;
+
+    if (downloadRes.ok && downloadRes.data) {
+      const effectiveFormat = detectEffectiveFormat(document.format, downloadRes.contentType, downloadRes.data);
+      parseRes = await CatalogParserEngine.parseCatalog(downloadRes.data, effectiveFormat, document.retailerId);
+    }
+
+    // 2b. Fallback automat pe pagina web a retailerului când catalogul lipsește, dă eroare sau nu are oferte/produse
+    const needsWebFallback =
+      !downloadRes.ok ||
+      !downloadRes.data ||
+      !parseRes ||
+      (parseRes.offers.length === 0 && (parseRes.products?.length || 0) === 0);
+
+    if (needsWebFallback) {
+      const primaryFailure =
+        downloadRes.error ||
+        parseRes?.error ||
+        'Catalogul principal nu a returnat oferte disponibile.';
+
+      const webFallbackUrls = CatalogSourceDiscovery.getRetailerWebFallbackUrls(
+        document.retailerId,
+        storeInfo.websiteUrl,
+        [document.documentUrl]
+      );
+
+      let bestProductOnlyDownload: typeof downloadRes | null = null;
+      let bestProductOnlyParse: typeof parseRes | null = null;
+      let bestProductOnlyUrl: string | null = null;
+
+      for (const webUrl of webFallbackUrls) {
+        const webRes = await CatalogDownloader.downloadCatalog(webUrl, {
+          timeoutMs: 12000,
+          maxRetries: 1,
+          additionalAllowedDomains: allowedDomains
+        });
+        if (!webRes.ok || !webRes.data) continue;
+
+        const webParse = await CatalogParserEngine.parseCatalog(webRes.data, 'html', document.retailerId);
+        if (webParse.offers.length > 0) {
+          downloadRes = webRes;
+          parseRes = webParse;
+          usedWebsiteFallback = true;
+          resolvedUrl = webRes.finalUrl || webUrl;
+          errors.push(`Catalog indisponibil (${primaryFailure}); import executat din pagina web a retailerului (${webUrl}).`);
+          break;
+        }
+        if ((webParse.products?.length || 0) > 0 && !bestProductOnlyParse) {
+          bestProductOnlyDownload = webRes;
+          bestProductOnlyParse = webParse;
+          bestProductOnlyUrl = webRes.finalUrl || webUrl;
+        }
+      }
+
+      if (!usedWebsiteFallback && bestProductOnlyDownload && bestProductOnlyParse) {
+        downloadRes = bestProductOnlyDownload;
+        parseRes = bestProductOnlyParse;
+        usedWebsiteFallback = true;
+        resolvedUrl = bestProductOnlyUrl || document.documentUrl;
+        errors.push(`Catalog indisponibil (${primaryFailure}); produse extrase din pagina web a retailerului (${resolvedUrl}).`);
+      }
+    }
+
+    // 2c. Fallback sintetic controlat pentru medii izolate (doar dacă nici catalogul, nici paginile web nu au răspuns)
+    if ((!downloadRes.ok || !downloadRes.data) && !options.disableSyntheticFallback) {
       const fallback = this.getFallbackCatalogContent(document.retailerId, document.format);
       if (fallback) {
         const buf = Buffer.isBuffer(fallback) ? fallback : Buffer.from(fallback, 'utf-8');
@@ -136,6 +259,7 @@ export class CatalogStagingManager {
           sha256: crypto.createHash('sha256').update(buf).digest('hex'),
           fileSizeBytes: buf.length
         };
+        parseRes = await CatalogParserEngine.parseCatalog(downloadRes.data, document.format, document.retailerId);
       }
     }
 
@@ -168,12 +292,15 @@ export class CatalogStagingManager {
       updatedAt: new Date().toISOString()
     });
 
-    // 3. Parsare conținut conform formatului
-    const parseRes = await CatalogParserEngine.parseCatalog(
-      downloadRes.data,
-      document.format,
-      document.retailerId
-    );
+    // 3. Parsare conținut conform formatului efectiv
+    if (!parseRes) {
+      const effectiveFormat = detectEffectiveFormat(document.format, downloadRes.contentType, downloadRes.data);
+      parseRes = await CatalogParserEngine.parseCatalog(
+        downloadRes.data,
+        effectiveFormat,
+        document.retailerId
+      );
+    }
 
     if ((!parseRes.success || parseRes.offers.length === 0) && (parseRes.products?.length || 0) > 0) {
       const discoveredProducts = parseRes.products || [];
@@ -198,7 +325,9 @@ export class CatalogStagingManager {
         StorageService.addCustomProduct(product);
       }
 
-      const warning = `Catalogul a fost descărcat, dar nu conține prețuri valide. Au fost extrase și salvate ${discoveredProducts.length} produse pentru procesare ulterioară.`;
+      const warning = usedWebsiteFallback
+        ? `Catalogul principal a fost indisponibil. De pe pagina web a retailerului (${resolvedUrl}) au fost extrase și salvate ${discoveredProducts.length} produse (fără prețuri afișate).`
+        : `Catalogul a fost descărcat, dar nu conține prețuri valide. Au fost extrase și salvate ${discoveredProducts.length} produse pentru procesare ulterioară.`;
       errors.push(warning);
       StorageService.updateCatalogDocument(document.id, {
         parseStatus: 'parsed',
@@ -212,7 +341,7 @@ export class CatalogStagingManager {
       importRun.totalRawExtracted = discoveredProducts.length;
       importRun.errors = errors;
       StorageService.updateCatalogImportRun(runId, importRun);
-      return { run: importRun, offers: [], error: warning };
+      return { run: importRun, offers: [], usedWebsiteFallback, resolvedUrl, error: warning };
     }
 
     if (!parseRes.success || parseRes.offers.length === 0) {
@@ -233,7 +362,7 @@ export class CatalogStagingManager {
       importRun.errors = errors;
       StorageService.updateCatalogImportRun(runId, importRun);
 
-      return { run: importRun, offers: [], error: errMsg };
+      return { run: importRun, offers: [], usedWebsiteFallback, resolvedUrl, error: errMsg };
     }
 
     StorageService.updateCatalogDocument(document.id, {
@@ -401,7 +530,7 @@ export class CatalogStagingManager {
       await DatabaseService.saveCatalogImportRun(importRun);
     }
 
-    return { run: importRun, offers: stagedOffers };
+    return { run: importRun, offers: stagedOffers, usedWebsiteFallback, resolvedUrl };
   }
 
   /**
@@ -915,7 +1044,68 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
   }
 
   /**
-   * Rulează importul pilot pentru un retailer specific (Lidl, Kaufland etc.)
+   * Rezolvă sursele de import ale unui retailer (DB + memorie) și sintetizează automat o sursă web
+   * din pagina oficială a retailerului dacă nu există un catalog dedicat configurat.
+   */
+  static async resolveRetailerImportContext(retailerId: string): Promise<{
+    sources: CatalogSource[];
+    activeSources: CatalogSource[];
+    websiteUrl?: string;
+    retailerName: string;
+    synthesizedWebSource: boolean;
+  }> {
+    const storeInfo = await this.resolveStoreWebsiteUrl(retailerId);
+    const localSources = StorageService.getCatalogSources().filter(s => s.retailerId === retailerId);
+    let dbSources: CatalogSource[] = [];
+    try {
+      dbSources = await DatabaseService.getCatalogSources(retailerId);
+    } catch {}
+
+    const byId = new Map<string, CatalogSource>();
+    for (const s of localSources) byId.set(s.id, s);
+    for (const s of dbSources) byId.set(s.id, s);
+
+    const sources = Array.from(byId.values());
+    let activeSources = sources.filter(s => s.status !== 'disabled');
+    let synthesizedWebSource = false;
+
+    if (sources.length === 0 && storeInfo.websiteUrl) {
+      const webSource: CatalogSource = {
+        id: `cat-src-${retailerId}-web`,
+        retailerId,
+        retailerName: storeInfo.name,
+        name: `Pagină Web Oficială ${storeInfo.name}`,
+        catalogUrl: storeInfo.websiteUrl,
+        format: 'html',
+        status: 'active',
+        updateFrequencyDays: 7,
+        authRequired: false,
+        legalStatusNotice: `Import direct de pe pagina web oficială ${storeInfo.name} când catalogul dedicat nu este disponibil.`
+      };
+      sources.push(webSource);
+      activeSources = [webSource];
+      synthesizedWebSource = true;
+
+      const allLocal = StorageService.getCatalogSources();
+      if (!allLocal.some(s => s.id === webSource.id)) {
+        StorageService.saveCatalogSources([...allLocal, webSource]);
+      }
+      try {
+        await DatabaseService.saveCatalogSource(webSource);
+      } catch {}
+    }
+
+    return {
+      sources,
+      activeSources,
+      websiteUrl: storeInfo.websiteUrl,
+      retailerName: storeInfo.name,
+      synthesizedWebSource
+    };
+  }
+
+  /**
+   * Rulează importul pentru un retailer specific (Lidl, Kaufland, Auchan sau orice retailer cu catalog/pagină web)
    */
   static async runPilotImportForRetailer(retailerId: string): Promise<{
     success: boolean;
@@ -925,13 +1115,13 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
     needsReview: number;
     published: number;
     sampleOffers: CatalogExtractedOffer[];
+    usedWebsiteFallback?: boolean;
+    documentUrl?: string;
     error?: string;
   }> {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const sources = StorageService.getCatalogSources();
-    const source = sources.find(s => s.retailerId === retailerId);
+    const context = await this.resolveRetailerImportContext(retailerId);
 
-    if (!source) {
+    if (context.sources.length === 0) {
       return {
         success: false,
         retailerId,
@@ -940,11 +1130,12 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
         needsReview: 0,
         published: 0,
         sampleOffers: [],
-        error: `Sursa de catalog pentru retailerul "${retailerId}" nu este configurată.`
+        error: `Sursa de catalog și pagina web oficială pentru retailerul "${retailerId}" nu sunt configurate.`
       };
     }
 
-    if (source.status === 'disabled') {
+    if (context.activeSources.length === 0) {
+      const firstDisabled = context.sources[0];
       return {
         success: false,
         retailerId,
@@ -953,201 +1144,171 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
         needsReview: 0,
         published: 0,
         sampleOffers: [],
-        error: `Sursa ${source.retailerName} este dezactivată: ${source.legalStatusNotice}`
+        error: `Sursa ${firstDisabled.retailerName} este dezactivată: ${firstDisabled.legalStatusNotice}`
       };
     }
 
+    // Descoperim toate documentele candidate (cataloage + fallback pagină web oficială)
+    const candidateDocs: CatalogDocument[] = [];
+    const seenDocUrls = new Set<string>();
+
+    for (const src of context.activeSources) {
+      try {
+        await DatabaseService.saveCatalogSource(src);
+      } catch {}
+
+      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(src, {
+        websiteUrl: context.websiteUrl
+      });
+
+      for (const doc of docs) {
+        const key = doc.documentUrl.trim().replace(/\/+$/, '');
+        if (seenDocUrls.has(key)) continue;
+        seenDocUrls.add(key);
+        candidateDocs.push(doc);
+      }
+    }
+
+    if (candidateDocs.length === 0) {
+      return {
+        success: false,
+        retailerId,
+        totalExtracted: 0,
+        autoMatched: 0,
+        needsReview: 0,
+        published: 0,
+        sampleOffers: [],
+        error: `Nu au fost identificate cataloage sau pagini web disponibile pentru ${context.retailerName}.`
+      };
+    }
+
+    // Ordonăm prioritățile pentru Lidl & Auchan păstrând fallback-urile în coadă
+    const orderedDocs = [...candidateDocs];
     if (retailerId === 'lidl') {
-      const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery.js');
-      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
+      orderedDocs.sort((a, b) => {
+        const aScore = a.documentUrl.includes('ofertele-saptamanale') ? 0 : a.format === 'html' ? 1 : 2;
+        const bScore = b.documentUrl.includes('ofertele-saptamanale') ? 0 : b.format === 'html' ? 1 : 2;
+        return aScore - bScore;
+      });
+    } else if (retailerId === 'auchan') {
+      orderedDocs.sort((a, b) => {
+        const aScore = (a.documentUrl.includes('/promotii') || a.documentUrl.includes('oferte-si-promotii')) ? 0 : 1;
+        const bScore = (b.documentUrl.includes('/promotii') || b.documentUrl.includes('oferte-si-promotii')) ? 0 : 1;
+        return aScore - bScore;
+      });
+    }
 
-      // Prioritize the HTML weekly offers or first valid document
-      const targetDoc = docs.find(d => d.format === 'html' || d.documentUrl.includes('ofertele-saptamanale')) || docs[docs.length - 1] || docs[0];
+    let bestProductOnlyResult: Awaited<ReturnType<typeof CatalogStagingManager.executeImportForDocument>> | null = null;
+    let bestProductOnlyDoc: CatalogDocument | null = null;
+    let lastFailureError: string | undefined;
 
-      if (!targetDoc) {
+    for (let idx = 0; idx < orderedDocs.length; idx++) {
+      const candidateDoc = orderedDocs[idx];
+      const isLastDoc = idx === orderedDocs.length - 1;
+      StorageService.addCatalogDocument(candidateDoc);
+
+      const res = await this.executeImportForDocument(candidateDoc, {
+        autoPublishValidated: true,
+        websiteUrl: context.websiteUrl,
+        // Activăm fallback-ul sintetic doar la ultimul document dacă niciun document/site real nu a furnizat oferte
+        disableSyntheticFallback: !isLastDoc
+      });
+
+      if (res.run.status !== 'failed' && res.offers.length > 0) {
+        const isWebFallbackDoc = Boolean(
+          res.usedWebsiteFallback ||
+          context.synthesizedWebSource ||
+          candidateDoc.id.includes('-web-') ||
+          candidateDoc.sourcePageUrl !== candidateDoc.documentUrl && idx > 0 && orderedDocs[0].format === 'pdf'
+        );
         return {
-          success: false,
+          success: true,
           retailerId,
-          totalExtracted: 0,
-          autoMatched: 0,
-          needsReview: 0,
-          published: 0,
-          sampleOffers: [],
-          error: 'Nu au fost identificate cataloage disponibile pentru Lidl.'
+          totalExtracted: res.run.totalRawExtracted,
+          autoMatched: res.run.autoMatchedCount,
+          needsReview: res.run.needsReviewCount,
+          published: res.run.publishedCount,
+          sampleOffers: res.offers.slice(0, 10),
+          usedWebsiteFallback: isWebFallbackDoc,
+          documentUrl: res.resolvedUrl || candidateDoc.documentUrl
         };
       }
 
-      StorageService.addCatalogDocument(targetDoc);
-      const result = await this.executeImportForDocument(targetDoc, { autoPublishValidated: true });
-
-      if (!result.run || result.run.status === 'failed') {
-        return {
-          success: false,
-          retailerId,
-          totalExtracted: 0,
-          autoMatched: 0,
-          needsReview: 0,
-          published: 0,
-          sampleOffers: [],
-          error: result.error || 'Importul pilot Lidl a eșuat.'
-        };
+      if (res.run.status === 'completed' && res.run.totalRawExtracted > 0 && !bestProductOnlyResult) {
+        bestProductOnlyResult = res;
+        bestProductOnlyDoc = candidateDoc;
       }
 
+      if (res.error) {
+        lastFailureError = res.error;
+      }
+    }
+
+    if (bestProductOnlyResult && bestProductOnlyDoc) {
       return {
         success: true,
         retailerId,
-        totalExtracted: result.run.totalRawExtracted,
-        autoMatched: result.run.autoMatchedCount,
-        needsReview: result.run.needsReviewCount,
-        published: result.run.publishedCount,
-        sampleOffers: result.offers.slice(0, 10)
-      };
-    }
-
-    if (retailerId === 'kaufland') {
-      const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery.js');
-      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
-
-      if (docs.length === 0) {
-        return {
-          success: false,
-          retailerId,
-          totalExtracted: 0,
-          autoMatched: 0,
-          needsReview: 0,
-          published: 0,
-          sampleOffers: [],
-          error: 'Nu a fost identificat un catalog PDF activ pe portalul Kaufland România.'
-        };
-      }
-
-      const kauflandDoc = docs[0];
-      StorageService.addCatalogDocument(kauflandDoc);
-      const result = await this.executeImportForDocument(kauflandDoc, { autoPublishValidated: true });
-
-      if (!result.run || result.run.status === 'failed') {
-        return {
-          success: false,
-          retailerId,
-          totalExtracted: 0,
-          autoMatched: 0,
-          needsReview: 0,
-          published: 0,
-          sampleOffers: [],
-          error: result.error || 'Importul catalogului Kaufland a eșuat.'
-        };
-      }
-
-      return {
-        success: true,
-        retailerId,
-        totalExtracted: result.run.totalRawExtracted,
-        autoMatched: result.run.autoMatchedCount,
-        needsReview: result.run.needsReviewCount,
-        published: result.run.publishedCount,
-        sampleOffers: result.offers.slice(0, 10)
-      };
-    }
-
-    if (retailerId === 'auchan') {
-      const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery.js');
-      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
-
-      const targetDoc = docs.find(d => d.documentUrl.includes('/promotii') || d.documentUrl.includes('oferte-si-promotii')) || docs[0];
-
-      if (!targetDoc) {
-        return {
-          success: false,
-          retailerId,
-          totalExtracted: 0,
-          autoMatched: 0,
-          needsReview: 0,
-          published: 0,
-          sampleOffers: [],
-          error: 'Nu au fost identificate pagini de produse disponibile pentru Auchan.'
-        };
-      }
-
-      StorageService.addCatalogDocument(targetDoc);
-      const result = await this.executeImportForDocument(targetDoc, { autoPublishValidated: true });
-
-      if (!result.run || result.run.status === 'failed') {
-        return {
-          success: false,
-          retailerId,
-          totalExtracted: 0,
-          autoMatched: 0,
-          needsReview: 0,
-          published: 0,
-          sampleOffers: [],
-          error: result.error || 'Importul pilot Auchan a eșuat.'
-        };
-      }
-
-      return {
-        success: true,
-        retailerId,
-        totalExtracted: result.run.totalRawExtracted,
-        autoMatched: result.run.autoMatchedCount,
-        needsReview: result.run.needsReviewCount,
-        published: result.run.publishedCount,
-        sampleOffers: result.offers.slice(0, 10)
-      };
-    }
-
-    // Pentru ceilalți retaileri, încercăm descoperirea automată
-    const { CatalogSourceDiscovery } = await import('./CatalogSourceDiscovery.js');
-    const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(source);
-
-    if (docs.length === 0) {
-      return {
-        success: false,
-        retailerId,
-        totalExtracted: 0,
-        autoMatched: 0,
-        needsReview: 0,
-        published: 0,
+        totalExtracted: bestProductOnlyResult.run.totalRawExtracted,
+        autoMatched: bestProductOnlyResult.run.autoMatchedCount,
+        needsReview: bestProductOnlyResult.run.needsReviewCount,
+        published: bestProductOnlyResult.run.publishedCount,
         sampleOffers: [],
-        error: `Retailerul ${source.retailerName} nu are cataloage descărcabile automat: ${source.legalStatusNotice}`
+        usedWebsiteFallback: Boolean(bestProductOnlyResult.usedWebsiteFallback || context.synthesizedWebSource),
+        documentUrl: bestProductOnlyResult.resolvedUrl || bestProductOnlyDoc.documentUrl,
+        error: bestProductOnlyResult.error
       };
     }
-
-    const doc = docs[0];
-    StorageService.addCatalogDocument(doc);
-    const result = await this.executeImportForDocument(doc, { autoPublishValidated: true });
 
     return {
-      success: result.run.status !== 'failed',
+      success: false,
       retailerId,
-      totalExtracted: result.run.totalRawExtracted,
-      autoMatched: result.run.autoMatchedCount,
-      needsReview: result.run.needsReviewCount,
-      published: result.run.publishedCount,
-      sampleOffers: result.offers.slice(0, 10),
-      error: result.error
+      totalExtracted: 0,
+      autoMatched: 0,
+      needsReview: 0,
+      published: 0,
+      sampleOffers: [],
+      error: lastFailureError || `Importul pentru ${context.retailerName} nu a identificat oferte nici în catalog, nici pe pagina web oficială.`
     };
   }
 
   /**
-   * Rulează importul automat pentru toți retailerii marcați ca activi (Lidl, Kaufland etc.)
+   * Rulează importul automat pentru toți retailerii marcați ca activi
    */
   static async runActiveImports(): Promise<{
-    results: Array<{ retailerId: string; success: boolean; totalExtracted: number; published: number; error?: string }>;
+    results: Array<{ retailerId: string; success: boolean; totalExtracted: number; published: number; usedWebsiteFallback?: boolean; error?: string }>;
     totalExtracted: number;
     totalPublished: number;
   }> {
-    const sources = StorageService.getCatalogSources().filter(s => s.status === 'active');
-    const results: Array<{ retailerId: string; success: boolean; totalExtracted: number; published: number; error?: string }> = [];
+    const localSources = StorageService.getCatalogSources();
+    let dbSources: CatalogSource[] = [];
+    try {
+      dbSources = await DatabaseService.getCatalogSources();
+    } catch {}
+
+    const mergedById = new Map<string, CatalogSource>();
+    for (const s of localSources) mergedById.set(s.id, s);
+    for (const s of dbSources) mergedById.set(s.id, s);
+
+    const activeRetailerIds = Array.from(
+      new Set(
+        Array.from(mergedById.values())
+          .filter(s => s.status === 'active')
+          .map(s => s.retailerId)
+      )
+    );
+
+    const results: Array<{ retailerId: string; success: boolean; totalExtracted: number; published: number; usedWebsiteFallback?: boolean; error?: string }> = [];
     let totalExtracted = 0;
     let totalPublished = 0;
 
-    for (const src of sources) {
-      const res = await this.runPilotImportForRetailer(src.retailerId);
+    for (const rId of activeRetailerIds) {
+      const res = await this.runPilotImportForRetailer(rId);
       results.push({
-        retailerId: src.retailerId,
+        retailerId: res.retailerId,
         success: res.success,
         totalExtracted: res.totalExtracted,
         published: res.published,
+        usedWebsiteFallback: res.usedWebsiteFallback,
         error: res.error
       });
       totalExtracted += res.totalExtracted;

@@ -9,6 +9,7 @@ export interface DownloadResult {
   data?: Buffer;
   text?: string;
   contentType?: string;
+  finalUrl?: string;
   sha256?: string;
   fileSizeBytes?: number;
   error?: string;
@@ -36,9 +37,14 @@ export class CatalogDownloader {
     'selgros.ro',
     'supeco.ro',
     'la-cocos.ro',
+    'lacocos.ro',
     'freshful.ro',
     'sezamo.ro',
     'cora.ro',
+    'magazinelediana.ro',
+    'anabella.ro',
+    'unicarm.ro',
+    'remarkt.ro',
     'leaflet.lidl.ro',
     'cdn.lidl.ro',
     'media.kaufland.com',
@@ -60,9 +66,9 @@ export class CatalogDownloader {
   }
 
   /**
-   * Verifică dacă adresa URL este sigură împotriva atacurilor SSRF
+   * Verifică protocolul HTTP(S) și blochează localhost / IP-uri private (SSRF), fără a impune allowlist-ul fix de domenii.
    */
-  static validateUrlSafety(inputUrl: string, additionalAllowedDomains?: string[]): { safe: boolean; reason?: string } {
+  static validatePublicUrlSafety(inputUrl: string): { safe: boolean; reason?: string; hostname?: string } {
     try {
       const parsed = new URL(inputUrl);
 
@@ -102,26 +108,41 @@ export class CatalogDownloader {
         if (a === 127) return { safe: false, reason: 'Acces interzis la loopback (127.0.0.0/8).' };
       }
 
-      // 4. Verificare dacă domeniul aparține retailerilor autorizați sau allowlist-ului
-      const allAllowed = additionalAllowedDomains && additionalAllowedDomains.length > 0
-        ? [...this.ALLOWED_HOST_DOMAINS, ...additionalAllowedDomains]
-        : this.ALLOWED_HOST_DOMAINS;
-
-      const matchesAllowed = allAllowed.some(allowed => {
-        return hostname === allowed || hostname.endsWith('.' + allowed);
-      });
-
-      if (!matchesAllowed) {
-        return {
-          safe: false,
-          reason: `Domeniul ${hostname} nu se află în lista retailerilor oficiali autorizați pentru descărcare cataloage.`
-        };
-      }
-
-      return { safe: true };
+      return { safe: true, hostname };
     } catch (err: any) {
       return { safe: false, reason: `URL malformat sau invalid: ${err.message}` };
     }
+  }
+
+  /**
+   * Verifică dacă adresa URL este sigură împotriva atacurilor SSRF
+   */
+  static validateUrlSafety(inputUrl: string, additionalAllowedDomains?: string[]): { safe: boolean; reason?: string } {
+    const publicCheck = this.validatePublicUrlSafety(inputUrl);
+    if (!publicCheck.safe || !publicCheck.hostname) {
+      return { safe: false, reason: publicCheck.reason };
+    }
+
+    const hostname = publicCheck.hostname;
+
+    // 4. Verificare dacă domeniul aparține retailerilor autorizați sau allowlist-ului
+    const allAllowed = additionalAllowedDomains && additionalAllowedDomains.length > 0
+      ? [...this.ALLOWED_HOST_DOMAINS, ...additionalAllowedDomains.map(d => d.toLowerCase().replace(/^www\./, '').trim()).filter(Boolean)]
+      : this.ALLOWED_HOST_DOMAINS;
+
+    const matchesAllowed = allAllowed.some(allowed => {
+      const cleanAllowed = allowed.toLowerCase().replace(/^www\./, '').trim();
+      return Boolean(cleanAllowed) && (hostname === cleanAllowed || hostname.endsWith('.' + cleanAllowed));
+    });
+
+    if (!matchesAllowed) {
+      return {
+        safe: false,
+        reason: `Domeniul ${hostname} nu se află în lista retailerilor oficiali autorizați pentru descărcare cataloage.`
+      };
+    }
+
+    return { safe: true };
   }
 
   /**
@@ -133,9 +154,10 @@ export class CatalogDownloader {
       timeoutMs?: number;
       maxRetries?: number;
       knownChecksums?: Set<string>;
+      additionalAllowedDomains?: string[];
     } = {}
   ): Promise<DownloadResult> {
-    const safety = this.validateUrlSafety(url);
+    const safety = this.validateUrlSafety(url, options.additionalAllowedDomains);
     if (!safety.safe) {
       return { ok: false, error: safety.reason };
     }
@@ -167,6 +189,14 @@ export class CatalogDownloader {
 
         clearTimeout(timeoutId);
 
+        const finalUrl = response.url || url;
+        if (finalUrl && finalUrl !== url) {
+          const redirectSafety = this.validateUrlSafety(finalUrl, options.additionalAllowedDomains);
+          if (!redirectSafety.safe) {
+            return { ok: false, error: `Redirecționare blocată SSRF: ${redirectSafety.reason}` };
+          }
+        }
+
         if (!response.ok) {
           lastError = `Răspuns HTTP necorespunzător: ${response.status} ${response.statusText}`;
           if (response.status >= 500 && attempt <= maxRetries) {
@@ -174,7 +204,7 @@ export class CatalogDownloader {
             await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500));
             continue;
           }
-          return { ok: false, statusCode: response.status, error: lastError };
+          return { ok: false, statusCode: response.status, finalUrl, error: lastError };
         }
 
         const contentLengthHeader = response.headers.get('content-length');
@@ -203,6 +233,7 @@ export class CatalogDownloader {
             ok: true,
             isDuplicate: true,
             statusCode: response.status,
+            finalUrl,
             sha256,
             fileSizeBytes: buffer.length,
             contentType: response.headers.get('content-type') || 'application/octet-stream'
@@ -215,6 +246,7 @@ export class CatalogDownloader {
         return {
           ok: true,
           statusCode: response.status,
+          finalUrl,
           data: buffer,
           text,
           contentType,

@@ -2030,26 +2030,40 @@ app.post('/api/admin/audit-logs', requireAdminAuth, async (req, res) => {
 // 1.5. Administrare Retaileri (Listare & Adăugare Retailer Nou)
 app.get('/api/admin/retailers', requireAdminAuth, async (req, res) => {
   try {
-    const stores = await DatabaseService.getStores();
-    const seenIds = new Set<string>();
-    const mapped = stores
-      .filter(s => {
-        if (!s.id || seenIds.has(s.id)) return false;
-        seenIds.add(s.id);
-        return true;
-      })
-      .map(s => ({
-        id: s.id,
-        name: s.name,
-        slug: s.slug,
-        chain: s.chain,
-        format: s.chain?.includes('PDF') ? 'PDF' : 'HTML & PDF',
-        defaultStatus: s.isPartner ? 'ACTIVE' : 'ACTIVE',
-        color: s.brandColor?.replace(/^bg-/, '')?.replace(/-\d{3}$/, '') || 'emerald',
-        brandColor: s.brandColor,
-        accentColor: s.accentColor,
-        type: s.type
-      }));
+    const dbStores = await DatabaseService.getStores();
+    const localStores = StorageService.getStores();
+    const mergedById = new Map<string, Store>();
+    for (const s of dbStores) {
+      if (s?.id) mergedById.set(s.id, s);
+    }
+    for (const ls of localStores) {
+      if (!ls?.id) continue;
+      const existing = mergedById.get(ls.id);
+      if (existing) {
+        mergedById.set(ls.id, {
+          ...ls,
+          ...existing,
+          officialUrl: existing.officialUrl || existing.websiteUrl || ls.officialUrl || ls.websiteUrl,
+          websiteUrl: existing.websiteUrl || existing.officialUrl || ls.websiteUrl || ls.officialUrl
+        });
+      } else {
+        mergedById.set(ls.id, ls);
+      }
+    }
+
+    const mapped = Array.from(mergedById.values()).map(s => ({
+      id: s.id,
+      name: s.name,
+      slug: s.slug,
+      chain: s.chain,
+      officialUrl: s.officialUrl || s.websiteUrl,
+      format: s.chain?.includes('PDF') ? 'PDF' : 'HTML & PDF',
+      defaultStatus: 'ACTIVE',
+      color: s.brandColor?.replace(/^bg-/, '')?.replace(/-\d{3}$/, '') || 'emerald',
+      brandColor: s.brandColor,
+      accentColor: s.accentColor,
+      type: s.type
+    }));
     res.json({ success: true, retailers: mapped });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la preluarea listei de retaileri.' });
@@ -2062,6 +2076,8 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
       id,
       name,
       chain,
+      officialUrl,
+      websiteUrl,
       format = 'HTML & PDF',
       defaultStatus = 'ACTIVE',
       color = 'emerald',
@@ -2085,10 +2101,31 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
     if (!allowedColors.includes(color)) return res.status(400).json({ error: 'Culoarea retailerului nu este validă.' });
     if (!allowedStoreTypes.includes(storeType)) return res.status(400).json({ error: 'Tipul magazinului nu este valid.' });
 
+    let resolvedOfficialUrl = typeof officialUrl === 'string' && officialUrl.trim()
+      ? officialUrl.trim()
+      : (typeof websiteUrl === 'string' && websiteUrl.trim() ? websiteUrl.trim() : '');
+
+    let officialDomain: string | undefined;
+    if (resolvedOfficialUrl) {
+      const siteSafety = CatalogDownloader.validatePublicUrlSafety(resolvedOfficialUrl);
+      if (!siteSafety.safe) {
+        return res.status(400).json({ error: `Adresă pagină web oficială nesigură: ${siteSafety.reason}` });
+      }
+      officialDomain = siteSafety.hostname;
+    }
+
     if (catalogUrl && catalogUrl.trim()) {
-      const sourceSafety = CatalogDownloader.validateUrlSafety(catalogUrl.trim());
-      if (!sourceSafety.safe) {
-        return res.status(400).json({ error: `Adresă URL nesigură: ${sourceSafety.reason}` });
+      const catalogSafety = officialDomain
+        ? CatalogDownloader.validateUrlSafety(catalogUrl.trim(), [officialDomain])
+        : CatalogDownloader.validatePublicUrlSafety(catalogUrl.trim());
+      if (!catalogSafety.safe) {
+        return res.status(400).json({ error: `Adresă URL catalog nesigură: ${catalogSafety.reason}` });
+      }
+      if (!resolvedOfficialUrl) {
+        try {
+          resolvedOfficialUrl = new URL(catalogUrl.trim()).origin;
+          officialDomain = new URL(resolvedOfficialUrl).hostname.toLowerCase();
+        } catch {}
       }
     }
 
@@ -2102,6 +2139,8 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
       chain: chain?.trim() || name.trim(),
       brandColor,
       accentColor,
+      officialUrl: resolvedOfficialUrl || undefined,
+      websiteUrl: resolvedOfficialUrl || undefined,
       type: (['discounter', 'hypermarket', 'supermarket', 'proximity'].includes(storeType) ? storeType : 'supermarket') as any,
       rating: 4.5,
       locationsCount: 1,
@@ -2111,11 +2150,19 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
 
     const pool = getPool();
     if (pool) {
-      await pool.query(
-      `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, store_type, rating, locations_count, sample_address, is_partner)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [newStore.id, newStore.name, newStore.slug, newStore.chain, newStore.brandColor, newStore.accentColor, newStore.type, newStore.rating, newStore.locationsCount, newStore.sampleAddress, newStore.isPartner]
-      );
+      try {
+        await pool.query(
+          `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, official_url, store_type, rating, locations_count, sample_address, is_partner)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          [newStore.id, newStore.name, newStore.slug, newStore.chain, newStore.brandColor, newStore.accentColor, newStore.officialUrl || null, newStore.type, newStore.rating, newStore.locationsCount, newStore.sampleAddress, newStore.isPartner]
+        );
+      } catch {
+        await pool.query(
+          `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, store_type, rating, locations_count, sample_address, is_partner)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [newStore.id, newStore.name, newStore.slug, newStore.chain, newStore.brandColor, newStore.accentColor, newStore.type, newStore.rating, newStore.locationsCount, newStore.sampleAddress, newStore.isPartner]
+        );
+      }
     } else {
       const { error: storeError } = await supabase.from('stores').insert({
         id: newStore.id,
@@ -2133,56 +2180,38 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
       if (storeError) throw storeError;
     }
 
-    // Configurare opțională a primei surse de catalog
+    StorageService.saveCustomStore(newStore);
+
+    // Configurare opțională a primei surse de catalog (sau a paginii web oficiale ca sursă HTML)
     let createdSource: CatalogSource | null = null;
-    if (catalogUrl && catalogUrl.trim()) {
-      const sourceId = `cat-src-${cleanId}-${Date.now()}`;
+    const effectiveSourceUrl = (catalogUrl && catalogUrl.trim()) || resolvedOfficialUrl;
+    if (effectiveSourceUrl) {
+      const isWebsiteFallbackOnly = !(catalogUrl && catalogUrl.trim()) && Boolean(resolvedOfficialUrl);
+      const sourceId = isWebsiteFallbackOnly ? `cat-src-${cleanId}-web` : `cat-src-${cleanId}-${Date.now()}`;
       createdSource = {
         id: sourceId,
         retailerId: cleanId,
         retailerName: name.trim(),
-        name: sourceName?.trim() || `Catalog Online ${name.trim()}`,
-        catalogUrl: catalogUrl.trim(),
-        format: ['html', 'pdf', 'api'].includes(sourceFormat) ? sourceFormat : (format.toLowerCase().includes('pdf') ? 'pdf' : 'html'),
+        name: sourceName?.trim() || (isWebsiteFallbackOnly ? `Pagină Web Oficială ${name.trim()}` : `Catalog Online ${name.trim()}`),
+        catalogUrl: effectiveSourceUrl,
+        format: isWebsiteFallbackOnly
+          ? 'html'
+          : (['html', 'pdf', 'api'].includes(sourceFormat) ? sourceFormat : (format.toLowerCase().includes('pdf') ? 'pdf' : 'html')),
         status: defaultStatus === 'ACTIVE' ? 'active' : 'disabled',
         updateFrequencyDays: 7,
         authRequired: false,
-        legalStatusNotice: `Catalog oficial ${name.trim()}; configurat manual de administrator.`
+        legalStatusNotice: isWebsiteFallbackOnly
+          ? `Import direct de pe pagina web oficială ${name.trim()} atunci când catalogul dedicat nu este disponibil.`
+          : `Catalog oficial ${name.trim()}; configurat manual de administrator.`
       };
 
-      if (pool) {
-        await pool.query(
-          `INSERT INTO catalog_sources (id, retailer_id, name, catalog_url, format, status, update_frequency_days, auth_required, legal_status_notice)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT (id) DO UPDATE SET
-         retailer_id = EXCLUDED.retailer_id,
-         name = EXCLUDED.name,
-         catalog_url = EXCLUDED.catalog_url,
-         format = EXCLUDED.format,
-         status = EXCLUDED.status,
-         update_frequency_days = EXCLUDED.update_frequency_days,
-         auth_required = EXCLUDED.auth_required,
-         legal_status_notice = EXCLUDED.legal_status_notice`,
-          [createdSource.id, createdSource.retailerId, createdSource.name, createdSource.catalogUrl, createdSource.format, createdSource.status, createdSource.updateFrequencyDays, createdSource.authRequired, createdSource.legalStatusNotice]
-        );
-      } else {
-        const { error: sourceError } = await supabase.from('catalog_sources').upsert({
-          id: createdSource.id,
-          retailer_id: createdSource.retailerId,
-          name: createdSource.name,
-          catalog_url: createdSource.catalogUrl,
-          format: createdSource.format,
-          status: createdSource.status,
-          update_frequency_days: createdSource.updateFrequencyDays,
-          auth_required: createdSource.authRequired,
-          legal_status_notice: createdSource.legalStatusNotice
-        }, { onConflict: 'id' });
-        if (sourceError) throw sourceError;
-      }
+      await DatabaseService.saveCatalogSource(createdSource);
 
       const sources = StorageService.getCatalogSources();
-      sources.push(createdSource);
-      StorageService.saveCatalogSources(sources);
+      if (!sources.some(s => s.id === createdSource!.id)) {
+        sources.push(createdSource);
+        StorageService.saveCatalogSources(sources);
+      }
     }
 
     res.json({
@@ -2190,9 +2219,12 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
       retailer: {
         id: cleanId,
         name: name.trim(),
+        chain: newStore.chain,
+        officialUrl: newStore.officialUrl,
         format,
         defaultStatus,
-        color
+        color,
+        type: newStore.type
       },
       source: createdSource,
       message: `Retailerul "${name.trim()}" a fost salvat cu succes.`
@@ -2215,6 +2247,9 @@ app.put('/api/admin/retailers/:id', requireAdminAuth, async (req, res) => {
       : name;
     const storeType = req.body?.storeType;
     const color = req.body?.color;
+    const rawOfficialUrl = typeof req.body?.officialUrl === 'string'
+      ? req.body.officialUrl.trim()
+      : (typeof req.body?.websiteUrl === 'string' ? req.body.websiteUrl.trim() : undefined);
     const allowedStoreTypes = ['discounter', 'hypermarket', 'supermarket', 'proximity'];
     const allowedColors = ['blue', 'red', 'sky', 'amber', 'rose', 'emerald', 'purple', 'yellow', 'indigo', 'slate'];
 
@@ -2223,20 +2258,46 @@ app.put('/api/admin/retailers/:id', requireAdminAuth, async (req, res) => {
     if (!allowedStoreTypes.includes(storeType)) return res.status(400).json({ error: 'Tipul magazinului nu este valid.' });
     if (!allowedColors.includes(color)) return res.status(400).json({ error: 'Culoarea retailerului nu este validă.' });
 
+    if (rawOfficialUrl) {
+      const siteSafety = CatalogDownloader.validatePublicUrlSafety(rawOfficialUrl);
+      if (!siteSafety.safe) {
+        return res.status(400).json({ error: `Adresă pagină web oficială nesigură: ${siteSafety.reason}` });
+      }
+    }
+
     const brandColor = `bg-${color}-600`;
     const accentColor = `text-${color}-600`;
     const pool = getPool();
     let updatedStore: any;
 
     if (pool) {
-      const result = await pool.query(
-        `UPDATE stores
-         SET name = $1, chain = $2, brand_color = $3, accent_color = $4, store_type = $5
-         WHERE id = $6
-         RETURNING id, name, slug, chain, brand_color, accent_color, store_type`,
-        [name, chain, brandColor, accentColor, storeType, retailerId]
-      );
-      updatedStore = result.rows[0];
+      try {
+        const result = rawOfficialUrl !== undefined
+          ? await pool.query(
+              `UPDATE stores
+               SET name = $1, chain = $2, brand_color = $3, accent_color = $4, store_type = $5, official_url = $6
+               WHERE id = $7
+               RETURNING id, name, slug, chain, brand_color, accent_color, store_type, official_url`,
+              [name, chain, brandColor, accentColor, storeType, rawOfficialUrl || null, retailerId]
+            )
+          : await pool.query(
+              `UPDATE stores
+               SET name = $1, chain = $2, brand_color = $3, accent_color = $4, store_type = $5
+               WHERE id = $6
+               RETURNING id, name, slug, chain, brand_color, accent_color, store_type`,
+              [name, chain, brandColor, accentColor, storeType, retailerId]
+            );
+        updatedStore = result.rows[0];
+      } catch {
+        const result = await pool.query(
+          `UPDATE stores
+           SET name = $1, chain = $2, brand_color = $3, accent_color = $4, store_type = $5
+           WHERE id = $6
+           RETURNING id, name, slug, chain, brand_color, accent_color, store_type`,
+          [name, chain, brandColor, accentColor, storeType, retailerId]
+        );
+        updatedStore = result.rows[0];
+      }
     } else {
       const { data, error } = await supabase
         .from('stores')
@@ -2248,19 +2309,43 @@ app.put('/api/admin/retailers/:id', requireAdminAuth, async (req, res) => {
       updatedStore = data;
     }
 
-    if (!updatedStore) return res.status(404).json({ error: 'Retailerul nu a fost găsit.' });
+    const existingLocal = StorageService.getStores().find(s => s.id === retailerId);
+    if (!updatedStore && !existingLocal) {
+      return res.status(404).json({ error: 'Retailerul nu a fost găsit.' });
+    }
+
+    const resolvedOfficialUrl = rawOfficialUrl !== undefined
+      ? (rawOfficialUrl || undefined)
+      : (updatedStore?.official_url || existingLocal?.officialUrl || existingLocal?.websiteUrl);
+
+    StorageService.saveCustomStore({
+      id: retailerId,
+      name: updatedStore?.name || name,
+      slug: updatedStore?.slug || retailerId,
+      chain: updatedStore?.chain || chain,
+      brandColor: updatedStore?.brand_color || brandColor,
+      accentColor: updatedStore?.accent_color || accentColor,
+      officialUrl: resolvedOfficialUrl,
+      websiteUrl: resolvedOfficialUrl,
+      type: (updatedStore?.store_type || storeType) as any,
+      rating: existingLocal?.rating || 4.5,
+      locationsCount: existingLocal?.locationsCount || 1,
+      sampleAddress: existingLocal?.sampleAddress || 'România',
+      isPartner: existingLocal?.isPartner || false
+    });
 
     const retailer = {
-      id: updatedStore.id,
-      name: updatedStore.name,
-      slug: updatedStore.slug,
-      chain: updatedStore.chain,
-      format: updatedStore.chain?.toUpperCase().includes('PDF') ? 'PDF' : 'HTML & PDF',
+      id: updatedStore?.id || retailerId,
+      name: updatedStore?.name || name,
+      slug: updatedStore?.slug || retailerId,
+      chain: updatedStore?.chain || chain,
+      officialUrl: resolvedOfficialUrl,
+      format: (updatedStore?.chain || chain)?.toUpperCase().includes('PDF') ? 'PDF' : 'HTML & PDF',
       defaultStatus: 'ACTIVE',
       color,
-      brandColor: updatedStore.brand_color,
-      accentColor: updatedStore.accent_color,
-      type: updatedStore.store_type
+      brandColor: updatedStore?.brand_color || brandColor,
+      accentColor: updatedStore?.accent_color || accentColor,
+      type: updatedStore?.store_type || storeType
     };
 
     return res.json({ success: true, retailer, message: `Retailerul "${name}" a fost actualizat cu succes.` });
@@ -2326,7 +2411,20 @@ app.post('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, re
       return res.status(400).json({ error: 'Câmpurile retailerId, catalogUrl și name sunt obligatorii.' });
     }
 
-    const safety = CatalogDownloader.validateUrlSafety(catalogUrl);
+    const additionalAllowedDomains: string[] = [];
+    const registeredStores = [
+      ...(await DatabaseService.getStores().catch(() => [] as Store[])),
+      ...StorageService.getStores()
+    ];
+    const targetStore = registeredStores.find(s => s.id === retailerId);
+    const storeUrl = targetStore?.officialUrl || targetStore?.websiteUrl;
+    if (storeUrl) {
+      try {
+        additionalAllowedDomains.push(new URL(storeUrl).hostname.replace(/^www\./, '').toLowerCase());
+      } catch {}
+    }
+
+    const safety = CatalogDownloader.validateUrlSafety(catalogUrl, additionalAllowedDomains);
     if (!safety.safe) {
       return res.status(400).json({ error: `Adresă URL nesigură: ${safety.reason}` });
     }
@@ -2588,17 +2686,37 @@ app.post('/api/admin/catalog-importer/documents/:id/reprocess', requireAdminAuth
   }
 });
 
-// 6. Declanșare descoperire documente noi
+// 6. Declanșare descoperire documente noi (inclusiv fallback pe pagina web oficială)
 app.post('/api/admin/catalog-importer/discover', requireAdminAuth, async (req, res) => {
   try {
-    const { retailerId } = req.body;
-    const sources = StorageService.getCatalogSources().filter(s =>
-      (!retailerId || s.retailerId === retailerId) && s.status !== 'disabled'
-    );
+    const { retailerId } = req.body || {};
+    let sources: CatalogSource[] = [];
+    let websiteUrlOverride: string | undefined;
 
-    let discoveredTotal: CatalogDocument[] = [];
+    if (retailerId) {
+      const ctx = await CatalogStagingManager.resolveRetailerImportContext(retailerId);
+      sources = ctx.activeSources;
+      websiteUrlOverride = ctx.websiteUrl;
+    } else {
+      const localSources = StorageService.getCatalogSources();
+      const dbSources = await DatabaseService.getCatalogSources().catch(() => [] as CatalogSource[]);
+      const mergedById = new Map<string, CatalogSource>();
+      for (const s of localSources) mergedById.set(s.id, s);
+      for (const s of dbSources) mergedById.set(s.id, s);
+      sources = Array.from(mergedById.values()).filter(s => s.status !== 'disabled');
+    }
+
+    const allStores = [
+      ...(await DatabaseService.getStores().catch(() => [] as Store[])),
+      ...StorageService.getStores()
+    ];
+
+    const discoveredTotal: CatalogDocument[] = [];
     for (const src of sources) {
-      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(src);
+      const storeMatch = allStores.find(s => s.id === src.retailerId);
+      const docs = await CatalogSourceDiscovery.discoverDocumentsForSource(src, {
+        websiteUrl: websiteUrlOverride || storeMatch?.officialUrl || storeMatch?.websiteUrl
+      });
       for (const d of docs) {
         StorageService.addCatalogDocument(d);
         discoveredTotal.push(d);
@@ -2607,7 +2725,7 @@ app.post('/api/admin/catalog-importer/discover', requireAdminAuth, async (req, r
 
     res.json({
       success: true,
-      message: `Au fost descoperite ${discoveredTotal.length} documente de catalog.`,
+      message: `Au fost descoperite ${discoveredTotal.length} documente / pagini web de catalog.`,
       documentsCount: discoveredTotal.length,
       documents: discoveredTotal
     });
@@ -3423,12 +3541,21 @@ app.post('/api/admin/import/run-retailer/:retailerId', requireAdminAuth, async (
         totalExtracted: result.totalExtracted,
         autoMatched: result.autoMatched,
         published: result.published,
+        usedWebsiteFallback: Boolean(result.usedWebsiteFallback),
+        documentUrl: result.documentUrl,
         error: result.error
       },
       ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
     });
 
-    res.json({ success: true, result });
+    const entityLabel = result.sampleOffers.length === 0 && result.totalExtracted > 0 ? 'produse' : 'oferte';
+    const message = result.success
+      ? result.usedWebsiteFallback
+        ? `Catalogul dedicat a fost indisponibil; import executat de pe pagina web a retailerului (${result.documentUrl || retailerId}): ${result.totalExtracted} ${entityLabel} extrase, ${result.autoMatched} potrivite, ${result.published} publicate.`
+        : `Import finalizat pentru ${retailerId.toUpperCase()}: ${result.totalExtracted} ${entityLabel} extrase, ${result.autoMatched} potrivite, ${result.published} publicate.`
+      : (result.error || `Importul pentru ${retailerId.toUpperCase()} nu a putut extrage oferte.`);
+
+    res.json({ success: result.success, result, message });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Eroare la rularea importului pentru retailer.' });
   }
