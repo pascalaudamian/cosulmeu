@@ -3,6 +3,7 @@
 
 import * as cheerio from 'cheerio';
 import { CatalogFormat } from './catalogTypes.js';
+import { validatePublicHttpUrl } from '../../utils/urlSecurity.js';
 
 export interface RawParsedOffer {
   rawTitle: string;
@@ -144,7 +145,11 @@ export class CatalogParserEngine {
     if (!candidate) return undefined;
     const lower = candidate.toLowerCase();
     if (
-      lower.startsWith('data:image/svg+xml') ||
+      lower.startsWith('data:') ||
+      lower.startsWith('javascript:') ||
+      lower.startsWith('file:') ||
+      lower.startsWith('vbscript:') ||
+      lower.startsWith('blob:') ||
       lower.includes('1x1.') ||
       lower.includes('pixel.') ||
       lower.includes('spacer') ||
@@ -161,7 +166,14 @@ export class CatalogParserEngine {
       if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
         return undefined;
       }
-      return resolved.href;
+      if (resolved.pathname.toLowerCase().endsWith('.svg')) {
+        return undefined;
+      }
+      const safety = validatePublicHttpUrl(resolved.href);
+      if (!safety.safe || !safety.normalizedUrl) {
+        return undefined;
+      }
+      return safety.normalizedUrl;
     } catch {
       return undefined;
     }

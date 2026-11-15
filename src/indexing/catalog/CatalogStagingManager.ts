@@ -19,6 +19,25 @@ import { PriceQualityMonitor } from '../PriceQualityMonitor.js';
 import { mapRetailerCategoryToStandard } from '../../data/categories.js';
 import { STORES } from '../../data/mockData.js';
 import { CatalogSourceDiscovery } from './CatalogSourceDiscovery.js';
+import { validatePublicHttpUrl } from '../../utils/urlSecurity.js';
+
+function sanitizeImageUrl(url?: string): string | undefined {
+  if (!url || !url.trim()) return undefined;
+  const trimmed = url.trim();
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+    return trimmed;
+  }
+  const safety = validatePublicHttpUrl(trimmed.startsWith('//') ? `https:${trimmed}` : trimmed);
+  if (!safety.safe || !safety.normalizedUrl) return undefined;
+  try {
+    if (new URL(safety.normalizedUrl).pathname.toLowerCase().endsWith('.svg')) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return safety.normalizedUrl;
+}
 
 export interface PublishPreviewItem {
   id: string;
@@ -469,7 +488,7 @@ export class CatalogStagingManager {
         loyaltyCardName: raw.loyaltyCardName,
         validFrom: raw.validFrom || document.validFrom,
         validUntil: raw.validUntil || document.validUntil,
-        imageUrl: raw.imageUrl || undefined,
+        imageUrl: sanitizeImageUrl(raw.imageUrl),
         matchedProductId,
         matchedProductName,
         matchConfidence: matchResult.confidence,
@@ -670,7 +689,7 @@ export class CatalogStagingManager {
         retailerSku: item.retailerSku,
         packageQuantity: item.packageQuantity,
         packageUnit: item.packageUnit,
-        imageUrl: item.imageUrl || resolvedProduct?.imageUrl,
+        imageUrl: sanitizeImageUrl(item.imageUrl) || sanitizeImageUrl(resolvedProduct?.imageUrl),
         matchedProductId: resolvedProduct?.id || item.matchedProductId,
         matchedProductName: resolvedProduct?.name || item.matchedProductName,
         canonicalStatus: isNewProduct ? 'PRODUS NOU' : 'PRODUS EXISTENT',
@@ -865,12 +884,13 @@ export class CatalogStagingManager {
     const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
 
     for (const item of toPublish) {
+      const safeItemImageUrl = sanitizeImageUrl(item.imageUrl);
       const persistedMatch = productsForMatching.find(product => product.id === item.matchedProductId);
       if (persistedMatch) {
         item.matchedProductName = persistedMatch.name;
-        if (!persistedMatch.imageUrl && item.imageUrl) {
-          persistedMatch.imageUrl = item.imageUrl;
-          StorageService.addCustomProduct({ ...persistedMatch, imageUrl: item.imageUrl });
+        if (!persistedMatch.imageUrl && safeItemImageUrl) {
+          persistedMatch.imageUrl = safeItemImageUrl;
+          StorageService.addCustomProduct({ ...persistedMatch, imageUrl: safeItemImageUrl });
         }
       } else {
         const matchResult = ProductMatcher.matchProduct({
@@ -885,9 +905,9 @@ export class CatalogStagingManager {
         item.matchedProductName = matchResult.matchedProduct?.name;
         if (matchResult.matchedProduct) {
           item.matchConfidence = matchResult.confidence;
-          if (!matchResult.matchedProduct.imageUrl && item.imageUrl) {
-            matchResult.matchedProduct.imageUrl = item.imageUrl;
-            StorageService.addCustomProduct({ ...matchResult.matchedProduct, imageUrl: item.imageUrl });
+          if (!matchResult.matchedProduct.imageUrl && safeItemImageUrl) {
+            matchResult.matchedProduct.imageUrl = safeItemImageUrl;
+            StorageService.addCustomProduct({ ...matchResult.matchedProduct, imageUrl: safeItemImageUrl });
           }
         }
       }
@@ -912,7 +932,7 @@ export class CatalogStagingManager {
           packageUnit: (item.packageUnit as any) || 'buc',
           normalizedUnit: normUnit,
           barcode: item.rawBarcode || undefined,
-          imageUrl: item.imageUrl,
+          imageUrl: safeItemImageUrl,
           baseReferencePrice: item.normalPrice || item.effectivePrice,
           isRomanianProduct: true
         };

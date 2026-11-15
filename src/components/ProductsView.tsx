@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { Product, Store as StoreType, ShoppingList } from '../types.js';
 import { CATEGORIES_TAXONOMY, CategoryDefinition } from '../data/categories.js';
+import { getSafeProductImageSrc } from '../utils/urlSecurity.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 import { StorageService } from '../services/StorageService.js';
 import { STORES } from '../data/mockData.js';
@@ -652,28 +653,33 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                   </div>
 
                   {/* Imagine Produs */}
-                  <div className="h-32 w-full bg-slate-50/80 rounded-2xl flex items-center justify-center p-3 mb-3 group-hover:scale-105 transition-transform">
-                    {product.imageUrl && !failedImageIds.has(product.id) ? (
-                      <img
-                        src={product.imageUrl}
-                        alt={product.name}
-                        className="max-h-full max-w-full object-contain rounded-lg"
-                        loading="lazy"
-                        onError={() => {
-                          setFailedImageIds(prev => {
-                            if (prev.has(product.id)) return prev;
-                            const next = new Set(prev);
-                            next.add(product.id);
-                            return next;
-                          });
-                        }}
-                      />
-                    ) : (
-                      <div className="w-16 h-16 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-700 font-extrabold text-2xl">
-                        {product.name.charAt(0)}
+                  {(() => {
+                    const safeImageSrc = getSafeProductImageSrc(product.imageUrl);
+                    return (
+                      <div className="h-32 w-full bg-slate-50/80 rounded-2xl flex items-center justify-center p-3 mb-3 group-hover:scale-105 transition-transform">
+                        {safeImageSrc && !failedImageIds.has(product.id) ? (
+                          <img
+                            src={safeImageSrc}
+                            alt={product.name}
+                            className="max-h-full max-w-full object-contain rounded-lg"
+                            loading="lazy"
+                            onError={() => {
+                              setFailedImageIds(prev => {
+                                if (prev.has(product.id)) return prev;
+                                const next = new Set(prev);
+                                next.add(product.id);
+                                return next;
+                              });
+                            }}
+                          />
+                        ) : (
+                          <div className="w-16 h-16 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-700 font-extrabold text-2xl">
+                            {product.name.charAt(0)}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    );
+                  })()}
 
                   {/* Titlu & Cantitate */}
                   <h3 className="font-extrabold text-sm text-slate-900 group-hover:text-emerald-700 line-clamp-2 leading-snug mb-1">

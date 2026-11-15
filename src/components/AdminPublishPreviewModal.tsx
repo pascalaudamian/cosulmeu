@@ -18,6 +18,7 @@ import type {
   PublishPreviewData,
   PublishPreviewItem
 } from '../indexing/catalog/CatalogStagingManager.js';
+import { getSafeProductImageSrc } from '../utils/urlSecurity.js';
 
 export type { PublishPreviewData, PublishPreviewItem };
 
@@ -334,7 +335,8 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
             {displayedItems.length > 0 ? (
               <div className="border border-slate-200 rounded-2xl overflow-hidden divide-y divide-slate-100 max-h-[38vh] overflow-y-auto text-xs bg-white">
                 {displayedItems.map(item => {
-                  const hasValidImage = item.imageUrl && !brokenImages.has(item.id);
+                  const safeImageSrc = getSafeProductImageSrc(item.imageUrl);
+                  const hasValidImage = Boolean(safeImageSrc) && !brokenImages.has(item.id);
                   const np = Number(item.normalPrice || item.price);
                   const ep = Number(item.price || 0);
                   const disc =
@@ -350,9 +352,9 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                       className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/80 transition-colors"
                     >
                       <div className="flex items-start gap-3 min-w-0 flex-1">
-                        {hasValidImage ? (
+                        {hasValidImage && safeImageSrc ? (
                           <img
-                            src={item.imageUrl}
+                            src={safeImageSrc}
                             alt={item.title}
                             onError={() => setBrokenImages(prev => new Set(prev).add(item.id))}
                             className="w-11 h-11 rounded-xl object-cover border border-slate-200 shrink-0 bg-slate-50"

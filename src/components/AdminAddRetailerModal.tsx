@@ -12,6 +12,7 @@ import {
   Palette
 } from 'lucide-react';
 import { CatalogSource } from '../indexing/catalog/catalogTypes.js';
+import { validatePublicHttpUrl } from '../utils/urlSecurity.js';
 
 type RetailerStoreType = 'supermarket' | 'hypermarket' | 'discounter' | 'proximity';
 
@@ -136,19 +137,17 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
     }
 
     if (officialUrl.trim()) {
-      try {
-        new URL(officialUrl.trim());
-      } catch {
-        setErrorMessage('Adresa URL a site-ului oficial nu este validă.');
+      const siteCheck = validatePublicHttpUrl(officialUrl.trim());
+      if (!siteCheck.safe) {
+        setErrorMessage(`Adresa URL a site-ului oficial este invalidă sau nesigură: ${siteCheck.reason}`);
         return;
       }
     }
 
     if (!retailer && hasInitialSource && catalogUrl.trim()) {
-      try {
-        new URL(catalogUrl.trim());
-      } catch {
-        setErrorMessage('Adresa URL a catalogului inițial nu este validă.');
+      const catalogCheck = validatePublicHttpUrl(catalogUrl.trim());
+      if (!catalogCheck.safe) {
+        setErrorMessage(`Adresa URL a catalogului inițial este invalidă sau nesigură: ${catalogCheck.reason}`);
         return;
       }
     }
@@ -203,7 +202,12 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-      <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-retailer-modal-title"
+        className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]"
+      >
         {/* Header */}
         <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3 bg-slate-50/70">
           <div className="flex items-center gap-3">
@@ -211,7 +215,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
               <StoreIcon className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-extrabold text-slate-900">
+              <h3 id="add-retailer-modal-title" className="text-base font-extrabold text-slate-900">
                 {retailer ? 'Editează Retailer' : 'Definire Retailer Nou'}
               </h3>
               <p className="text-xs text-slate-500">
@@ -222,7 +226,9 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
+            aria-label="Închide fereastra"
             className="p-1.5 rounded-xl hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors"
           >
             <X className="w-5 h-5" />
@@ -232,7 +238,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
           {errorMessage && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-2">
+            <div role="alert" className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
               <div className="flex-1 font-semibold leading-relaxed">{errorMessage}</div>
             </div>
@@ -241,10 +247,11 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           {/* Name & ID */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-name" className="block font-bold text-slate-700 mb-1">
                 Nume Retailer *
               </label>
               <input
+                id="retailer-name"
                 type="text"
                 value={name}
                 onChange={e => handleNameChange(e.target.value)}
@@ -255,8 +262,8 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1 flex items-center justify-between gap-2">
-                <span>Identificator (Slug) *</span>
+              <div className="font-bold text-slate-700 mb-1 flex items-center justify-between gap-2">
+                <label htmlFor="retailer-id">Identificator (Slug) *</label>
                 {retailer ? (
                   <span className="text-[10px] font-medium text-slate-500">Păstrat pentru legăturile existente</span>
                 ) : (
@@ -268,8 +275,9 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                     {isCustomId ? 'Generare auto' : 'Modifică manual'}
                   </button>
                 )}
-              </label>
+              </div>
               <input
+                id="retailer-id"
                 type="text"
                 value={id}
                 disabled={!isCustomId || Boolean(retailer)}
@@ -284,10 +292,11 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           {/* Chain & Store Type */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-chain" className="block font-bold text-slate-700 mb-1">
                 Grup / Denumire Rețea
               </label>
               <input
+                id="retailer-chain"
                 type="text"
                 value={chain}
                 onChange={e => setChain(e.target.value)}
@@ -297,10 +306,11 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-store-type" className="block font-bold text-slate-700 mb-1">
                 Tip Magazin
               </label>
               <select
+                id="retailer-store-type"
                 value={storeType}
                 onChange={e => setStoreType(e.target.value as any)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
@@ -314,12 +324,13 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           </div>
 
           <div>
-            <label className="block font-bold text-slate-700 mb-1">
+            <label htmlFor="retailer-official-url" className="block font-bold text-slate-700 mb-1">
               Website Oficial / Pagină Fallback Web
             </label>
             <div className="relative">
               <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
               <input
+                id="retailer-official-url"
                 type="url"
                 value={officialUrl}
                 onChange={e => setOfficialUrl(e.target.value)}
@@ -328,15 +339,15 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
               />
             </div>
             <p className="text-[10px] text-slate-400 mt-1">
-              Utilizat automat pentru importul din pagina web atunci când revista săptămânală sau catalogul PDF nu este disponibil.
+              Utilizat automat pentru importul din pagina web atunci când revista săptămânală sau catalogul PDF nu este disponibil. Sunt permise doar URL-uri publice HTTP/HTTPS.
             </p>
           </div>
 
           <div>
-            <label className="block font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+            <span className="block font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
               <Palette className="w-3.5 h-3.5 text-slate-500" />
               <span>Culoare Identitate Brand</span>
-            </label>
+            </span>
             <div className="flex flex-wrap items-center gap-2">
               {COLOR_OPTIONS.map(c => (
                 <button
@@ -361,10 +372,11 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           {/* Format & Status */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-format" className="block font-bold text-slate-700 mb-1">
                 Format Principal Catalog
               </label>
               <select
+                id="retailer-format"
                 value={format}
                 onChange={e => setFormat(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
@@ -378,10 +390,11 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-default-status" className="block font-bold text-slate-700 mb-1">
                 Stare Inițială
               </label>
               <select
+                id="retailer-default-status"
                 value={defaultStatus}
                 onChange={e => setDefaultStatus(e.target.value as any)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
@@ -394,8 +407,9 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
 
           {/* Initial Source Section */}
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
-            <label className="flex items-center gap-2 cursor-pointer">
+            <label htmlFor="retailer-has-initial-source" className="flex items-center gap-2 cursor-pointer">
               <input
+                id="retailer-has-initial-source"
                 type="checkbox"
                 checked={hasInitialSource}
                 onChange={e => setHasInitialSource(e.target.checked)}
@@ -409,10 +423,11 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             {hasInitialSource && (
               <div className="space-y-3 pt-2 border-t border-slate-200/60">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1 text-[11px]">
+                  <label htmlFor="retailer-source-name" className="block font-semibold text-slate-700 mb-1 text-[11px]">
                     Nume Sursă Catalog
                   </label>
                   <input
+                    id="retailer-source-name"
                     type="text"
                     value={sourceName}
                     onChange={e => setSourceName(e.target.value)}
@@ -423,12 +438,13 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div className="sm:col-span-2">
-                    <label className="block font-semibold text-slate-700 mb-1 text-[11px]">
+                    <label htmlFor="retailer-catalog-url" className="block font-semibold text-slate-700 mb-1 text-[11px]">
                       URL Pagină / Catalog
                     </label>
                     <div className="relative">
                       <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
                       <input
+                        id="retailer-catalog-url"
                         type="url"
                         value={catalogUrl}
                         onChange={e => setCatalogUrl(e.target.value)}
@@ -442,10 +458,11 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1 text-[11px]">
+                    <label htmlFor="retailer-source-format" className="block font-semibold text-slate-700 mb-1 text-[11px]">
                       Format Sursă
                     </label>
                     <select
+                      id="retailer-source-format"
                       value={sourceFormat}
                       onChange={e => setSourceFormat(e.target.value)}
                       className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"

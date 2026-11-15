@@ -26,6 +26,25 @@ import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTy
 import { Store } from './src/types.ts';
 import { createHash } from 'node:crypto';
 import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
+import { validatePublicHttpUrl } from './src/utils/urlSecurity.ts';
+
+function sanitizeApiImageUrl(rawUrl?: string | null): string | undefined {
+  if (!rawUrl || !rawUrl.trim()) return undefined;
+  const trimmed = rawUrl.trim();
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+    return trimmed;
+  }
+  const safety = validatePublicHttpUrl(trimmed.startsWith('//') ? `https:${trimmed}` : trimmed);
+  if (!safety.safe || !safety.normalizedUrl) return undefined;
+  try {
+    if (new URL(safety.normalizedUrl).pathname.toLowerCase().endsWith('.svg')) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return safety.normalizedUrl;
+}
 
 
 dotenv.config({ path: '.env.development.local' });
@@ -438,6 +457,53 @@ const handleGetStores = async (_req: express.Request, res: express.Response) => 
 app.get('/api/stores', handleGetStores);
 app.get('/api/catalog/stores', handleGetStores);
 
+// Secure Image Proxy endpoint (previne SSRF, blochează SVG/MIME nevalid și limitează dimensiunea în streaming)
+app.get('/api/images/proxy', async (req, res) => {
+  try {
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    if (!rawUrl) {
+      return res.status(400).json({ error: 'Parametrul url este obligatoriu.' });
+    }
+    if (rawUrl.length > 2048) {
+      return res.status(400).json({ error: 'URL-ul imaginii depășește lungimea maximă permisă.' });
+    }
+
+    const safety = CatalogDownloader.validatePublicUrlSafety(rawUrl);
+    if (!safety.safe) {
+      return res.status(400).json({ error: safety.reason || 'URL imagine nesigur sau nepermis.' });
+    }
+
+    const imgResult = await CatalogDownloader.downloadImageSafely(rawUrl, {
+      maxBytes: CatalogDownloader.MAX_IMAGE_SIZE_BYTES,
+      timeoutMs: 10000,
+      maxRedirects: 3
+    });
+
+    if (!imgResult.ok || !imgResult.data) {
+      const statusMap: Record<string, number> = {
+        SSRF_BLOCKED: 403,
+        SIZE_EXCEEDED: 413,
+        INVALID_MIME: 415,
+        TIMEOUT: 504
+      };
+      const status = (imgResult.errorCode && statusMap[imgResult.errorCode]) || 502;
+      return res.status(status).json({
+        error: imgResult.error || 'Imaginea nu a putut fi preluată în siguranță.'
+      });
+    }
+
+    res.setHeader('Content-Type', imgResult.contentType || 'image/jpeg');
+    res.setHeader('Content-Length', String(imgResult.data.length));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.status(200).send(imgResult.data);
+  } catch {
+    return res.status(502).json({ error: 'Eroare la procesarea proxy-ului de imagini.' });
+  }
+});
+
 // Catalog Products endpoint
 app.get('/api/catalog/products', async (req, res) => {
   try {
@@ -557,6 +623,7 @@ app.get('/api/products', async (req, res) => {
 
       return {
         ...p,
+        imageUrl: sanitizeApiImageUrl(p.imageUrl),
         minPrice: minOffer ? minOffer.price : null,
         maxPrice: maxPrice || null,
         lowestStoreId: minOffer ? minOffer.storeId : null,
@@ -729,10 +796,18 @@ app.get('/api/products/:id', async (req, res) => {
       return res.status(404).json({ error: 'Produsul nu a fost găsit în catalog.' });
     }
 
+    const sanitizedProduct = {
+      ...comparison.product,
+      imageUrl: sanitizeApiImageUrl(comparison.product?.imageUrl)
+    };
+
     res.json({
       success: true,
-      product: comparison.product,
-      comparison,
+      product: sanitizedProduct,
+      comparison: {
+        ...comparison,
+        product: sanitizedProduct
+      },
       observationsCount: observations.length,
       hasSufficientHistory: observations.length >= 2,
       observations: observations.slice(0, 50)
@@ -2149,20 +2224,50 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
     };
 
     const pool = getPool();
+    let persistedOfficialUrl: string | undefined = newStore.officialUrl;
+
     if (pool) {
+      const insertWithOfficialSql = `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, official_url, store_type, rating, locations_count, sample_address, is_partner)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`;
+      const insertParams = [
+        newStore.id,
+        newStore.name,
+        newStore.slug,
+        newStore.chain,
+        newStore.brandColor,
+        newStore.accentColor,
+        newStore.officialUrl || null,
+        newStore.type,
+        newStore.rating,
+        newStore.locationsCount,
+        newStore.sampleAddress,
+        newStore.isPartner
+      ];
+
       try {
-        await pool.query(
-          `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, official_url, store_type, rating, locations_count, sample_address, is_partner)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-          [newStore.id, newStore.name, newStore.slug, newStore.chain, newStore.brandColor, newStore.accentColor, newStore.officialUrl || null, newStore.type, newStore.rating, newStore.locationsCount, newStore.sampleAddress, newStore.isPartner]
-        );
-      } catch {
-        await pool.query(
-          `INSERT INTO stores (id, name, slug, chain, brand_color, accent_color, store_type, rating, locations_count, sample_address, is_partner)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-          [newStore.id, newStore.name, newStore.slug, newStore.chain, newStore.brandColor, newStore.accentColor, newStore.type, newStore.rating, newStore.locationsCount, newStore.sampleAddress, newStore.isPartner]
-        );
+        await pool.query(insertWithOfficialSql, insertParams);
+      } catch (insertErr: any) {
+        if (insertErr?.code === '42703') {
+          await pool.query('ALTER TABLE stores ADD COLUMN IF NOT EXISTS official_url TEXT');
+          await pool.query(insertWithOfficialSql, insertParams);
+        } else {
+          throw insertErr;
+        }
       }
+
+      const readBack = await pool.query(
+        `SELECT id, name, slug, chain, brand_color, accent_color, store_type, official_url
+         FROM stores WHERE id = $1`,
+        [newStore.id]
+      );
+      const savedRow = readBack.rows[0];
+      if (!savedRow) {
+        throw new Error('Retailerul inserat nu a putut fi verificat la recitirea din PostgreSQL.');
+      }
+      if ((newStore.officialUrl || null) !== (savedRow.official_url || null)) {
+        throw new Error('Persistența câmpului official_url nu a putut fi confirmată în PostgreSQL.');
+      }
+      persistedOfficialUrl = savedRow.official_url || undefined;
     } else {
       const { error: storeError } = await supabase.from('stores').insert({
         id: newStore.id,
@@ -2171,6 +2276,7 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
         chain: newStore.chain,
         brand_color: newStore.brandColor,
         accent_color: newStore.accentColor,
+        official_url: newStore.officialUrl || null,
         store_type: newStore.type,
         rating: newStore.rating,
         locations_count: newStore.locationsCount,
@@ -2178,8 +2284,23 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
         is_partner: newStore.isPartner
       });
       if (storeError) throw storeError;
+
+      const { data: savedRow, error: readBackError } = await supabase
+        .from('stores')
+        .select('id, name, slug, chain, brand_color, accent_color, store_type, official_url')
+        .eq('id', newStore.id)
+        .single();
+      if (readBackError || !savedRow) {
+        throw readBackError || new Error('Retailerul inserat nu a putut fi verificat la recitirea din Supabase.');
+      }
+      if ((newStore.officialUrl || null) !== (savedRow.official_url || null)) {
+        throw new Error('Persistența câmpului official_url nu a putut fi confirmată în Supabase.');
+      }
+      persistedOfficialUrl = savedRow.official_url || undefined;
     }
 
+    newStore.officialUrl = persistedOfficialUrl;
+    newStore.websiteUrl = persistedOfficialUrl;
     StorageService.saveCustomStore(newStore);
 
     // Configurare opțională a primei surse de catalog (sau a paginii web oficiale ca sursă HTML)
@@ -2205,7 +2326,10 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
           : `Catalog oficial ${name.trim()}; configurat manual de administrator.`
       };
 
-      await DatabaseService.saveCatalogSource(createdSource);
+      const sourceSaved = await DatabaseService.saveCatalogSource(createdSource);
+      if (!sourceSaved) {
+        throw new Error('Sursa inițială de catalog nu a putut fi salvată în baza de date.');
+      }
 
       const sources = StorageService.getCatalogSources();
       if (!sources.some(s => s.id === createdSource!.id)) {
@@ -2234,7 +2358,7 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
       return res.status(409).json({ error: 'Există deja un retailer cu acest identificator sau slug.' });
     }
     console.error('Eroare adăugare retailer:', err);
-    res.status(500).json({ error: 'Eroare la adăugarea retailerului.' });
+    res.status(500).json({ error: err?.message || 'Eroare la adăugarea retailerului.' });
   }
 });
 
@@ -2271,7 +2395,7 @@ app.put('/api/admin/retailers/:id', requireAdminAuth, async (req, res) => {
     let updatedStore: any;
 
     if (pool) {
-      try {
+      const runPgUpdate = async () => {
         const result = rawOfficialUrl !== undefined
           ? await pool.query(
               `UPDATE stores
@@ -2284,29 +2408,73 @@ app.put('/api/admin/retailers/:id', requireAdminAuth, async (req, res) => {
               `UPDATE stores
                SET name = $1, chain = $2, brand_color = $3, accent_color = $4, store_type = $5
                WHERE id = $6
-               RETURNING id, name, slug, chain, brand_color, accent_color, store_type`,
+               RETURNING id, name, slug, chain, brand_color, accent_color, store_type, official_url`,
               [name, chain, brandColor, accentColor, storeType, retailerId]
             );
-        updatedStore = result.rows[0];
-      } catch {
-        const result = await pool.query(
-          `UPDATE stores
-           SET name = $1, chain = $2, brand_color = $3, accent_color = $4, store_type = $5
-           WHERE id = $6
-           RETURNING id, name, slug, chain, brand_color, accent_color, store_type`,
-          [name, chain, brandColor, accentColor, storeType, retailerId]
+        return result.rows[0];
+      };
+
+      try {
+        updatedStore = await runPgUpdate();
+      } catch (pgErr: any) {
+        if (pgErr?.code === '42703') {
+          await pool.query('ALTER TABLE stores ADD COLUMN IF NOT EXISTS official_url TEXT');
+          updatedStore = await runPgUpdate();
+        } else {
+          throw pgErr;
+        }
+      }
+
+      if (updatedStore) {
+        const readBack = await pool.query(
+          `SELECT id, name, slug, chain, brand_color, accent_color, store_type, official_url
+           FROM stores WHERE id = $1`,
+          [retailerId]
         );
-        updatedStore = result.rows[0];
+        const verifiedRow = readBack.rows[0];
+        if (!verifiedRow) {
+          throw new Error('Retailerul actualizat nu a putut fi verificat la recitirea din PostgreSQL.');
+        }
+        if (rawOfficialUrl !== undefined && (rawOfficialUrl || null) !== (verifiedRow.official_url || null)) {
+          throw new Error('Actualizarea câmpului official_url nu a putut fi confirmată în PostgreSQL.');
+        }
+        updatedStore = verifiedRow;
       }
     } else {
+      const updatePayload: Record<string, any> = {
+        name,
+        chain,
+        brand_color: brandColor,
+        accent_color: accentColor,
+        store_type: storeType
+      };
+      if (rawOfficialUrl !== undefined) {
+        updatePayload.official_url = rawOfficialUrl || null;
+      }
+
       const { data, error } = await supabase
         .from('stores')
-        .update({ name, chain, brand_color: brandColor, accent_color: accentColor, store_type: storeType })
+        .update(updatePayload)
         .eq('id', retailerId)
-        .select('id, name, slug, chain, brand_color, accent_color, store_type')
+        .select('id, name, slug, chain, brand_color, accent_color, store_type, official_url')
         .maybeSingle();
       if (error) throw error;
       updatedStore = data;
+
+      if (updatedStore) {
+        const { data: verifiedRow, error: readBackError } = await supabase
+          .from('stores')
+          .select('id, name, slug, chain, brand_color, accent_color, store_type, official_url')
+          .eq('id', retailerId)
+          .maybeSingle();
+        if (readBackError || !verifiedRow) {
+          throw readBackError || new Error('Retailerul actualizat nu a putut fi verificat la recitirea din Supabase.');
+        }
+        if (rawOfficialUrl !== undefined && (rawOfficialUrl || null) !== (verifiedRow.official_url || null)) {
+          throw new Error('Actualizarea câmpului official_url nu a putut fi confirmată în Supabase.');
+        }
+        updatedStore = verifiedRow;
+      }
     }
 
     const existingLocal = StorageService.getStores().find(s => s.id === retailerId);
@@ -2315,7 +2483,7 @@ app.put('/api/admin/retailers/:id', requireAdminAuth, async (req, res) => {
     }
 
     const resolvedOfficialUrl = rawOfficialUrl !== undefined
-      ? (rawOfficialUrl || undefined)
+      ? (updatedStore ? (updatedStore.official_url || undefined) : (rawOfficialUrl || undefined))
       : (updatedStore?.official_url || existingLocal?.officialUrl || existingLocal?.websiteUrl);
 
     StorageService.saveCustomStore({
@@ -2351,7 +2519,7 @@ app.put('/api/admin/retailers/:id', requireAdminAuth, async (req, res) => {
     return res.json({ success: true, retailer, message: `Retailerul "${name}" a fost actualizat cu succes.` });
   } catch (err: any) {
     console.error('Eroare actualizare retailer:', err);
-    return res.status(500).json({ error: 'Eroare la actualizarea retailerului.' });
+    return res.status(500).json({ error: err?.message || 'Eroare la actualizarea retailerului.' });
   }
 });
 

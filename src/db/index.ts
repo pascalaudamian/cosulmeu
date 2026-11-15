@@ -286,6 +286,7 @@ export class DatabaseService {
               brand_color VARCHAR(32) NOT NULL,
               accent_color VARCHAR(32) NOT NULL,
               logo_url TEXT,
+              official_url TEXT,
               store_type VARCHAR(32) NOT NULL DEFAULT 'supermarket',
               rating NUMERIC(3,2) NOT NULL DEFAULT 4.0,
               locations_count INTEGER NOT NULL DEFAULT 1,

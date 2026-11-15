@@ -29,6 +29,7 @@ import { Product, Store, ProductOffer, PriceObservation, ShoppingList } from '..
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 import { StorageService } from '../services/StorageService.js';
 import { STORES } from '../data/mockData.js';
+import { getSafeProductImageSrc } from '../utils/urlSecurity.js';
 
 interface ProductDetailViewProps {
   productId: string;
@@ -396,20 +397,25 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               </span>
             )}
 
-            <div className="w-40 h-40 flex items-center justify-center text-slate-400">
-              {product.imageUrl && !imageFailed ? (
-                <img
-                  src={product.imageUrl}
-                  alt={product.name}
-                  className="max-h-full max-w-full object-contain rounded-xl"
-                  onError={() => setImageFailed(true)}
-                />
-              ) : (
-                <div className="w-32 h-32 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 font-extrabold text-3xl">
-                  {product.name.charAt(0)}
+            {(() => {
+              const safeImageSrc = getSafeProductImageSrc(product.imageUrl);
+              return (
+                <div className="w-40 h-40 flex items-center justify-center text-slate-400">
+                  {safeImageSrc && !imageFailed ? (
+                    <img
+                      src={safeImageSrc}
+                      alt={product.name}
+                      className="max-h-full max-w-full object-contain rounded-xl"
+                      onError={() => setImageFailed(true)}
+                    />
+                  ) : (
+                    <div className="w-32 h-32 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 font-extrabold text-3xl">
+                      {product.name.charAt(0)}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })()}
           </div>
 
           {/* Detalii & Specificații */}

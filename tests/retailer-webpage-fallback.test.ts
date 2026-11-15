@@ -1,5 +1,6 @@
 // tests/retailer-webpage-fallback.test.ts
-// Teste pentru fallback-ul pe pagina web a retailerului, extragerea și persistența imaginilor produselor și deduplicarea magazinelor
+// Teste izolate și idempotente pentru fallback-ul pe pagina web a retailerului,
+// extragerea/persistența imaginilor produselor, persistența official_url și deduplicarea magazinelor
 
 import 'dotenv/config';
 process.env.NODE_ENV = 'test';
@@ -12,16 +13,264 @@ import { describe, it, before, after } from 'node:test';
 import { CatalogDownloader } from '../src/indexing/catalog/CatalogDownloader.ts';
 import { CatalogParserEngine } from '../src/indexing/catalog/CatalogParserEngine.ts';
 import { CatalogStagingManager } from '../src/indexing/catalog/CatalogStagingManager.ts';
+import { INITIAL_CATALOG_SOURCES } from '../src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogDocument } from '../src/indexing/catalog/catalogTypes.ts';
 import { StorageService } from '../src/services/StorageService.ts';
 import { PriceComparisonService } from '../src/services/PriceComparisonService.ts';
 import { OptimizationService } from '../src/services/OptimizationService.ts';
 import { PRODUCTS, STORES } from '../src/data/mockData.ts';
+import { supabase } from '../src/lib/supabase.ts';
 
-describe('Retailer Webpage Fallback, Product Images & Store Key Deduplication', () => {
+type TableRow = Record<string, any>;
+
+function createIsolatedSupabaseStub() {
+  const tables: Record<string, TableRow[]> = {
+    stores: STORES.map(s => ({
+      id: s.id,
+      name: s.name,
+      slug: s.slug,
+      chain: s.chain,
+      brand_color: s.brandColor,
+      accent_color: s.accentColor,
+      logo_url: s.logoUrl || null,
+      official_url: s.officialUrl || s.websiteUrl || null,
+      store_type: s.type,
+      rating: s.rating,
+      locations_count: s.locationsCount,
+      sample_address: s.sampleAddress,
+      is_partner: s.isPartner
+    })),
+    catalog_sources: INITIAL_CATALOG_SOURCES.map(src => ({
+      id: src.id,
+      retailer_id: src.retailerId,
+      name: src.name,
+      catalog_url: src.catalogUrl,
+      format: src.format,
+      status: src.status,
+      update_frequency_days: src.updateFrequencyDays,
+      auth_required: src.authRequired,
+      legal_status_notice: src.legalStatusNotice
+    })),
+    products: [],
+    product_offers: [],
+    price_observations: [],
+    catalog_documents: [],
+    catalog_import_runs: [],
+    catalog_extracted_offers: []
+  };
+
+  const makeQuery = (tableName: string) => {
+    const getRows = () => {
+      if (!tables[tableName]) tables[tableName] = [];
+      return tables[tableName];
+    };
+
+    let mode: 'select' | 'insert' | 'update' | 'upsert' | 'delete' = 'select';
+    let payload: any = null;
+    let conflictCol = 'id';
+    const filters: Array<(row: TableRow) => boolean> = [];
+    let orderCol: string | null = null;
+    let orderAsc = true;
+    let maxLimit: number | null = null;
+
+    const execute = async (): Promise<{ data: any; error: any; count?: number }> => {
+      const rows = getRows();
+      const matched = () => rows.filter(r => filters.every(fn => fn(r)));
+
+      if (mode === 'insert') {
+        const items = (Array.isArray(payload) ? payload : [payload]).map(item => ({ ...item }));
+        for (const item of items) {
+          if (tableName === 'stores' && rows.some(r => r.id === item.id || r.slug === item.slug)) {
+            return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
+          }
+          if (tableName === 'catalog_sources' && item.retailer_id && !tables.stores.some(s => s.id === item.retailer_id)) {
+            return { data: null, error: { code: '23503', message: 'foreign key violation on catalog_sources.retailer_id' } };
+          }
+        }
+        rows.push(...items);
+        return { data: Array.isArray(payload) ? items : items, error: null };
+      }
+
+      if (mode === 'upsert') {
+        const items = (Array.isArray(payload) ? payload : [payload]).map(item => ({ ...item }));
+        for (const item of items) {
+          const idx = rows.findIndex(r => r[conflictCol] === item[conflictCol]);
+          if (idx >= 0) {
+            rows[idx] = { ...rows[idx], ...item };
+          } else {
+            rows.push(item);
+          }
+        }
+        return { data: items, error: null };
+      }
+
+      if (mode === 'update') {
+        const updated: TableRow[] = [];
+        for (let i = 0; i < rows.length; i++) {
+          if (filters.every(fn => fn(rows[i]))) {
+            rows[i] = { ...rows[i], ...payload };
+            updated.push({ ...rows[i] });
+          }
+        }
+        return { data: updated, error: null };
+      }
+
+      if (mode === 'delete') {
+        // Respectă constrângerile de chei străine în testul izolat
+        const targets = matched();
+        if (tableName === 'stores') {
+          for (const st of targets) {
+            if (tables.catalog_sources.some(src => src.retailer_id === st.id)) {
+              return {
+                data: null,
+                error: { code: '23503', message: `FK violation: catalog_sources referă stores(${st.id})` }
+              };
+            }
+          }
+        }
+        const toDelete = new Set(targets);
+        tables[tableName] = rows.filter(r => !toDelete.has(r));
+        return { data: targets, error: null };
+      }
+
+      let result = matched().map(r => ({ ...r }));
+      if (orderCol) {
+        result.sort((a, b) => {
+          const av = a[orderCol!];
+          const bv = b[orderCol!];
+          if (av === bv) return 0;
+          return (av > bv ? 1 : -1) * (orderAsc ? 1 : -1);
+        });
+      }
+      if (maxLimit !== null) {
+        result = result.slice(0, maxLimit);
+      }
+      return { data: result, error: null, count: result.length };
+    };
+
+    const builder: any = {
+      select: (_cols?: string) => builder,
+      insert: (data: any) => {
+        mode = 'insert';
+        payload = data;
+        return builder;
+      },
+      update: (data: any) => {
+        mode = 'update';
+        payload = data;
+        return builder;
+      },
+      upsert: (data: any, opts?: { onConflict?: string }) => {
+        mode = 'upsert';
+        payload = data;
+        if (opts?.onConflict) conflictCol = opts.onConflict;
+        return builder;
+      },
+      delete: () => {
+        mode = 'delete';
+        return builder;
+      },
+      eq: (col: string, val: any) => {
+        filters.push(r => r[col] === val);
+        return builder;
+      },
+      neq: (col: string, val: any) => {
+        filters.push(r => r[col] !== val);
+        return builder;
+      },
+      is: (col: string, val: any) => {
+        filters.push(r => (val === null ? r[col] === null || r[col] === undefined : r[col] === val));
+        return builder;
+      },
+      in: (col: string, vals: any[]) => {
+        const set = new Set(vals);
+        filters.push(r => set.has(r[col]));
+        return builder;
+      },
+      order: (col: string, opts?: { ascending?: boolean }) => {
+        orderCol = col;
+        orderAsc = opts?.ascending !== false;
+        return builder;
+      },
+      limit: (n: number) => {
+        maxLimit = n;
+        return builder;
+      },
+      single: async () => {
+        const res = await execute();
+        if (res.error) return { data: null, error: res.error };
+        const row = Array.isArray(res.data) ? res.data[0] : res.data;
+        if (!row) return { data: null, error: { code: 'PGRST116', message: 'Row not found' } };
+        return { data: row, error: null };
+      },
+      maybeSingle: async () => {
+        const res = await execute();
+        if (res.error) return { data: null, error: res.error };
+        const row = Array.isArray(res.data) ? (res.data[0] ?? null) : (res.data ?? null);
+        return { data: row, error: null };
+      },
+      then: (onFulfilled: any, onRejected: any) => execute().then(onFulfilled, onRejected)
+    };
+    return builder;
+  };
+
+  return {
+    tables,
+    from: (tableName: string) => makeQuery(tableName)
+  };
+}
+
+describe('Retailer Webpage Fallback, Product Images & Store Key Deduplication (Isolated)', () => {
   let server: http.Server;
   let baseUrl = '';
   let adminToken = '';
+  const runNonce = `${Date.now()}-${crypto.randomUUID().slice(0, 6)}`;
+
+  let originalSupabaseFrom: typeof supabase.from;
+  let isolatedDb: ReturnType<typeof createIsolatedSupabaseStub>;
+
+  // Registre explicite pentru cleanup determinist în ordinea cheilor străine
+  const createdSourceIds = new Set<string>();
+  const createdRetailerIds = new Set<string>();
+  const createdOfferIds = new Set<string>();
+  const createdDocumentIds = new Set<string>();
+  const createdProductIds = new Set<string>();
+
+  const cleanupTrackedRecords = async () => {
+    // 1. Oferte staging extrase + documente catalog (copii ai surselor/retailerilor)
+    if (createdOfferIds.size > 0) {
+      StorageService.removeCatalogExtractedOffersByIds(Array.from(createdOfferIds));
+      createdOfferIds.clear();
+    }
+    if (createdDocumentIds.size > 0) {
+      const remainingDocs = StorageService.getCatalogDocuments().filter(d => !createdDocumentIds.has(d.id));
+      StorageService.saveCatalogDocuments(remainingDocs);
+      createdDocumentIds.clear();
+    }
+
+    // 2. Surse de catalog (referă stores.id) — șterse ÎNAINTE de stores
+    for (const sourceId of Array.from(createdSourceIds)) {
+      const { error } = await supabase.from('catalog_sources').delete().eq('id', sourceId);
+      assert.strictEqual(error, null, `Eroare la cleanup catalog_sources(${sourceId}): ${error?.message}`);
+      const remainingSources = StorageService.getCatalogSources().filter(s => s.id !== sourceId);
+      StorageService.saveCatalogSources(remainingSources);
+      createdSourceIds.delete(sourceId);
+    }
+
+    // 3. Produse / oferte create în memorie
+    if (createdProductIds.size > 0) {
+      const offers = StorageService.getProductOffers().filter(o => !createdProductIds.has(o.productId));
+      StorageService.saveProductOffers(offers);
+      createdProductIds.clear();
+    }
+
+    // 4. Retaileri (tabelul părinte stores) — șterși DUPĂ copii
+    for (const retailerId of Array.from(createdRetailerIds)) {
+      const { error } = await supabase.from('stores').delete().eq('id', retailerId);
+      assert.strictEqual(error, null, `Eroare la cleanup stores(${retailerId}): ${error?.message}`);
+      createdRetailerIds.delete(retailerId);
+    }
+  };
 
   const getAuthHeaders = () => ({
     Authorization: `Bearer ${adminToken}`,
@@ -29,6 +278,13 @@ describe('Retailer Webpage Fallback, Product Images & Store Key Deduplication', 
   });
 
   before(async () => {
+    // Izolare totală față de baza de date de producție Supabase
+    originalSupabaseFrom = supabase.from.bind(supabase);
+    isolatedDb = createIsolatedSupabaseStub();
+    (supabase as any).from = isolatedDb.from;
+
+    StorageService.resetAllData();
+
     const serverMod = await import('../server.ts');
     adminToken = serverMod.ADMIN_API_KEY;
     server = await new Promise<http.Server>(resolve => {
@@ -39,7 +295,15 @@ describe('Retailer Webpage Fallback, Product Images & Store Key Deduplication', 
   });
 
   after(async () => {
-    await new Promise<void>(resolve => server.close(() => resolve()));
+    try {
+      await cleanupTrackedRecords();
+      StorageService.resetAllData();
+    } finally {
+      (supabase as any).from = originalSupabaseFrom;
+      if (server) {
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    }
   });
 
   it('1. Extrage și rezolvă corect URL-urile imaginilor din HTML (data-src, srcset, relative, Carrefour, Penny, Mega Image, JSON-LD, CSV, XML)', async () => {
@@ -123,6 +387,8 @@ describe('Retailer Webpage Fallback, Product Images & Store Key Deduplication', 
   it('2. Revine automat pe pagina web a retailerului când catalogul PDF lipsește (404 / HTML gol) și păstrează imaginea până la publicare', async () => {
     const origDownload = CatalogDownloader.downloadCatalog;
     const calledUrls: string[] = [];
+    const docId = `doc-fallback-profi-${runNonce}`;
+    createdDocumentIds.add(docId);
 
     const fallbackHtml = `
       <!DOCTYPE html>
@@ -132,7 +398,7 @@ describe('Retailer Webpage Fallback, Product Images & Store Key Deduplication', 
           {
             "@context": "https://schema.org",
             "@type": "Product",
-            "name": "Pulpă de Porc Fără Os 1kg",
+            "name": "Pulpă de Porc Fără Os Test ${runNonce} 1kg",
             "brand": "Profi Agro",
             "image": "/assets/pulpa-porc.webp",
             "offers": {
@@ -170,7 +436,7 @@ describe('Retailer Webpage Fallback, Product Images & Store Key Deduplication', 
 
     try {
       const doc: CatalogDocument = {
-        id: `doc-fallback-profi-${Date.now()}`,
+        id: docId,
         sourceId: 'cat-src-profi',
         retailerId: 'profi',
         documentUrl: 'https://www.profi.ro/reviste-ro/',
@@ -193,95 +459,144 @@ describe('Retailer Webpage Fallback, Product Images & Store Key Deduplication', 
 
       assert.strictEqual(res.usedWebsiteFallback, true, 'Trebuie să activeze fallback-ul pe pagina web a retailerului');
       assert.strictEqual(res.offers.length, 1);
+      createdOfferIds.add(res.offers[0].id);
       assert.strictEqual(res.offers[0].imageUrl, 'https://www.profi.ro/assets/pulpa-porc.webp');
       assert.ok(calledUrls.some(u => u.includes('/reviste-ro')), 'Trebuie să încerce mai întâi URL-ul catalogului');
       assert.ok(calledUrls.some(u => u.includes('/oferte') || u === 'https://www.profi.ro'), 'Trebuie să încerce pagina web a retailerului');
 
-      // Aprobare & publicare în memorie -> produsul creat primește imageUrl
+      // Aprobare & publicare în test izolat -> produsul creat primește imageUrl
       StorageService.updateCatalogExtractedOffer(res.offers[0].id, { stagingStatus: 'APPROVED' });
       const pubRes = await CatalogStagingManager.publishValidatedOffers([res.offers[0].id]);
       assert.strictEqual(pubRes.publishedCount, 1);
 
       const matchedOffer = StorageService.getCatalogExtractedOffers().find(o => o.id === res.offers[0].id);
       assert.ok(matchedOffer?.matchedProductId);
+      createdProductIds.add(matchedOffer!.matchedProductId!);
       const publishedProduct = StorageService.getAllProducts().find(p => p.id === matchedOffer!.matchedProductId);
       assert.strictEqual(publishedProduct?.imageUrl, 'https://www.profi.ro/assets/pulpa-porc.webp');
     } finally {
       CatalogDownloader.downloadCatalog = origDownload;
+      await cleanupTrackedRecords();
     }
   });
 
-  it('3. Website-only retailer via API: creare sursă automată, blocare SSRF și backfill imagine pe produs existent fără duplicare', async () => {
-    // 3a. Protecție SSRF la POST/PUT /api/admin/retailers
-    const unsafeRes = await fetch(`${baseUrl}/api/admin/retailers`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({
-        id: `ssrf-test-${Date.now()}`,
-        name: 'SSRF Test Store',
-        storeType: 'supermarket',
-        color: 'emerald',
-        officialUrl: 'http://127.0.0.1:3000/internal'
-      })
-    });
-    assert.strictEqual(unsafeRes.status, 400);
+  it('3. Website-only retailer via API: creare sursă automată, persistență official_url, blocare SSRF și cleanup complet în ordinea FK', async () => {
+    const retailerId = `selgros-web-${runNonce}`;
+    let createdSourceId: string | undefined;
 
-    // 3b. Creare retailer fără catalog PDF, doar cu officialUrl pe domeniu public permis
-    const retailerId = `selgros-web-${Date.now()}`;
-    const createRes = await fetch(`${baseUrl}/api/admin/retailers`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({
-        id: retailerId,
-        name: 'Selgros Web Test',
-        chain: 'Selgros',
-        storeType: 'hypermarket',
-        color: 'rose',
-        officialUrl: 'https://www.selgros.ro/oferte'
-      })
-    });
-    assert.strictEqual(createRes.status, 200);
-    const createdJson = await createRes.json();
-    assert.strictEqual(createdJson.success, true);
-    assert.strictEqual(createdJson.retailer.officialUrl, 'https://www.selgros.ro/oferte');
-    assert.ok(createdJson.source, 'Trebuie să creeze automat sursă HTML din officialUrl');
-    assert.strictEqual(createdJson.source.format, 'html');
+    try {
+      // 3a. Protecție SSRF la POST /api/admin/retailers
+      const unsafeRes = await fetch(`${baseUrl}/api/admin/retailers`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          id: `ssrf-test-${runNonce}`,
+          name: 'SSRF Test Store',
+          storeType: 'supermarket',
+          color: 'emerald',
+          officialUrl: 'http://127.0.0.1:3000/internal'
+        })
+      });
+      assert.strictEqual(unsafeRes.status, 400);
 
-    // 3c. Verificare PUT /api/admin/retailers/:id pentru actualizare officialUrl + respingere SSRF
-    const unsafePutRes = await fetch(`${baseUrl}/api/admin/retailers/${retailerId}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({
-        name: 'Selgros Web Test',
-        chain: 'Selgros',
-        storeType: 'hypermarket',
-        color: 'rose',
-        officialUrl: 'http://169.254.169.254/latest/meta-data/'
-      })
-    });
-    assert.strictEqual(unsafePutRes.status, 400);
+      // 3b. Creare retailer fără catalog PDF, doar cu officialUrl pe domeniu public permis
+      const createRes = await fetch(`${baseUrl}/api/admin/retailers`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          id: retailerId,
+          name: 'Selgros Web Test',
+          chain: 'Selgros',
+          storeType: 'hypermarket',
+          color: 'rose',
+          officialUrl: 'https://www.selgros.ro/oferte'
+        })
+      });
+      assert.strictEqual(createRes.status, 200);
+      const createdJson = await createRes.json();
+      createdRetailerIds.add(retailerId);
+      if (createdJson.source?.id) {
+        createdSourceId = createdJson.source.id;
+        createdSourceIds.add(createdJson.source.id);
+      }
 
-    // 3d. Backfill imageUrl pe un produs existent fără imagine + fără duplicare ID
-    const targetProd = PRODUCTS[0];
-    const hadImageInitially = Boolean(targetProd.imageUrl);
-    if (!hadImageInitially) {
-      const stagedBackfillId = `stg-backfill-${Date.now()}`;
+      assert.strictEqual(createdJson.success, true);
+      assert.strictEqual(createdJson.retailer.officialUrl, 'https://www.selgros.ro/oferte');
+      assert.ok(createdJson.source, 'Trebuie să creeze automat sursă HTML din officialUrl');
+      assert.strictEqual(createdJson.source.format, 'html');
+
+      // Verifică persistența reală în tabelul stores izolat (Supabase fallback)
+      const persistedRow = isolatedDb.tables.stores.find(s => s.id === retailerId);
+      assert.ok(persistedRow, 'Retailerul trebuie să existe în tabelul stores');
+      assert.strictEqual(persistedRow.official_url, 'https://www.selgros.ro/oferte');
+
+      // 3c. Verificare PUT /api/admin/retailers/:id pentru respingere SSRF + actualizare reală official_url
+      const unsafePutRes = await fetch(`${baseUrl}/api/admin/retailers/${retailerId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          name: 'Selgros Web Test',
+          chain: 'Selgros',
+          storeType: 'hypermarket',
+          color: 'rose',
+          officialUrl: 'http://169.254.169.254/latest/meta-data/'
+        })
+      });
+      assert.strictEqual(unsafePutRes.status, 400);
+
+      const validPutRes = await fetch(`${baseUrl}/api/admin/retailers/${retailerId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          name: 'Selgros Web Test Updated',
+          chain: 'Selgros',
+          storeType: 'hypermarket',
+          color: 'rose',
+          officialUrl: 'https://www.selgros.ro/cataloage-noi'
+        })
+      });
+      assert.strictEqual(validPutRes.status, 200);
+      const updatedJson = await validPutRes.json();
+      assert.strictEqual(updatedJson.retailer.officialUrl, 'https://www.selgros.ro/cataloage-noi');
+      assert.strictEqual(
+        isolatedDb.tables.stores.find(s => s.id === retailerId)?.official_url,
+        'https://www.selgros.ro/cataloage-noi'
+      );
+
+      // 3d. Backfill imageUrl pe un produs izolat fără imagine + fără duplicare ID
+      const backfillProdId = `prod-backfill-${runNonce}`;
+      createdProductIds.add(backfillProdId);
+      StorageService.addCustomProduct({
+        id: backfillProdId,
+        name: `Lapte Test Backfill ${runNonce} 1L`,
+        brand: 'Napolact',
+        category: 'Lactate și ouă',
+        defaultUnit: 'l',
+        packageWeightOrVolume: 1,
+        packageUnit: 'l',
+        normalizedUnit: 'l',
+        baseReferencePrice: 10.99,
+        isRomanianProduct: true
+      });
+
+      const stagedBackfillId = `stg-backfill-${runNonce}`;
+      createdOfferIds.add(stagedBackfillId);
       const nowIso = new Date().toISOString();
       StorageService.addCatalogExtractedOffers([
         {
           id: stagedBackfillId,
-          runId: `run-backfill-${Date.now()}`,
-          documentId: `doc-backfill-${Date.now()}`,
+          runId: `run-backfill-${runNonce}`,
+          documentId: `doc-backfill-${runNonce}`,
           retailerId: 'lidl',
-          rawTitle: targetProd.name,
-          rawBrand: targetProd.brand,
+          rawTitle: `Lapte Test Backfill ${runNonce} 1L`,
+          rawBrand: 'Napolact',
           normalPrice: 10.99,
           effectivePrice: 9.49,
           currency: 'RON',
           isPromo: true,
           loyaltyCardRequired: false,
           imageUrl: 'https://www.lidl.ro/assets/backfill-prod.jpg',
-          matchedProductId: targetProd.id,
+          matchedProductId: backfillProdId,
           matchConfidence: 0.99,
           matchMethod: 'name_brand_similarity',
           stagingStatus: 'APPROVED',
@@ -293,10 +608,30 @@ describe('Retailer Webpage Fallback, Product Images & Store Key Deduplication', 
       assert.strictEqual(pubBackfill.publishedCount, 1);
 
       const allAfter = StorageService.getAllProducts();
-      const matchingEntries = allAfter.filter(p => p.id === targetProd.id);
+      const matchingEntries = allAfter.filter(p => p.id === backfillProdId);
       assert.strictEqual(matchingEntries.length, 1, 'getAllProducts nu trebuie să producă ID-uri duplicate după backfill');
       assert.strictEqual(matchingEntries[0].imageUrl, 'https://www.lidl.ro/assets/backfill-prod.jpg');
+    } finally {
+      await cleanupTrackedRecords();
     }
+
+    // Verificare post-cleanup: nicio înregistrare creată în test nu a rămas în tabele
+    assert.strictEqual(
+      isolatedDb.tables.stores.some(s => s.id === retailerId),
+      false,
+      'Retailerul creat în test nu a fost șters la cleanup'
+    );
+    if (createdSourceId) {
+      assert.strictEqual(
+        isolatedDb.tables.catalog_sources.some(s => s.id === createdSourceId),
+        false,
+        'Sursa de catalog creată în test nu a fost ștearsă la cleanup'
+      );
+    }
+    assert.ok(
+      isolatedDb.tables.stores.some(s => s.id === 'lidl'),
+      'Datele de bază existente NU trebuie afectate de cleanup'
+    );
   });
 
   it('4. Deduplică magazinele duplicat (penny/store-penny, mega-image, metro) în comparații și optimizare', () => {
