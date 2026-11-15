@@ -289,7 +289,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   return (
     <div className="space-y-6 pb-16">
       {/* Top Header: List selector & List actions */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-6 shadow-xs">
+      <div className="surface-card p-4 sm:p-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           {/* List switcher & Editable name */}
           <div className="flex items-center gap-3">
@@ -470,29 +470,29 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       </div>
 
       {/* Main List Items Section */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
+      <div className="surface-card overflow-hidden">
         {/* Printable Header */}
         <div className="hidden print-only p-4 border-b">
-          <h1 className="text-xl font-bold">Coșul Meu - {activeList.name}</h1>
-          <p className="text-xs text-gray-500">
-            Generat la {new Date().toLocaleDateString('ro-RO')} • Total estimat: {PriceComparisonService.formatRon(totalEstimatedCost)}
+          <h1 className="font-display text-xl font-bold">Coșul Meu - {activeList.name}</h1>
+          <p className="text-xs text-gray-500 tabular-nums">
+            Generat la {new Date().toLocaleDateString('ro-RO')} · Total estimat: {PriceComparisonService.formatRon(totalEstimatedCost)}
           </p>
         </div>
 
         <div className="p-4 sm:p-5 flex items-center justify-between border-b border-slate-100 bg-slate-50/50">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5 tabular-nums">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
               Produse ({filteredItems.length})
             </span>
             {checkedCount > 0 && (
-              <span className="text-xs text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full font-semibold">
-                {checkedCount} bifate
+              <span className="text-xs text-emerald-700 font-semibold">
+                · {checkedCount} bifate
               </span>
             )}
           </div>
-          <div className="text-right">
+          <div className="text-right tabular-nums">
             <span className="text-xs text-slate-500">Total estimativ:</span>
-            <span className="font-extrabold text-slate-900 text-sm sm:text-base ml-1.5">
+            <span className="font-display font-bold text-slate-900 text-sm sm:text-base ml-1.5">
               {PriceComparisonService.formatRon(totalEstimatedCost)}
             </span>
           </div>
@@ -504,7 +504,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3">
               <Plus className="w-6 h-6" />
             </div>
-            <h3 className="text-sm font-bold text-slate-800">Niciun produs în această listă</h3>
+            <h3 className="font-display text-sm font-bold text-slate-800">Niciun produs în această listă</h3>
             <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
               Folosește bara de căutare de mai sus pentru a adăuga produse din catalog sau creează un produs propriu.
             </p>
@@ -522,7 +522,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <button
                     onClick={() => handleToggleCheck(item.id)}
-                    className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors shrink-0 ${
+                    className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
                       item.checked
                         ? 'bg-emerald-600 border-emerald-600 text-white'
                         : 'border-slate-300 hover:border-emerald-500 bg-white'
@@ -539,15 +539,16 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                     >
                       {item.name}
                     </span>
-                    <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500">
+                    <div className="flex items-center gap-1.5 mt-0.5 text-xs text-slate-500 tabular-nums truncate">
                       {item.brand && (
-                        <span className="font-medium text-slate-600 bg-slate-100 px-1.5 py-0.2 rounded text-[11px]">
-                          {item.brand}
-                        </span>
+                        <>
+                          <span className="font-medium text-slate-700">{item.brand}</span>
+                          <span>·</span>
+                        </>
                       )}
                       <span>{item.category}</span>
                       {item.estimatedPrice && (
-                        <span>• ~{PriceComparisonService.formatRon(item.estimatedPrice * item.quantity)}</span>
+                        <span>· ~{PriceComparisonService.formatRon(item.estimatedPrice * item.quantity)}</span>
                       )}
                     </div>
                   </div>
@@ -556,20 +557,20 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                 {/* Right: Quantity Stepper & Unit Selector & Remove */}
                 <div className="flex items-center gap-2 sm:gap-3 shrink-0 no-print">
                   {/* Quantity Stepper */}
-                  <div className="flex items-center border border-slate-200 rounded-xl bg-white overflow-hidden shadow-2xs">
+                  <div className="flex items-center border border-slate-200 rounded-xl bg-white overflow-hidden">
                     <button
                       onClick={() => handleUpdateQuantity(item.id, item.unit === 'kg' ? -0.5 : -1)}
-                      className="px-2 py-1 text-slate-600 hover:bg-slate-100 text-sm font-bold"
+                      className="px-2 py-1 text-slate-600 hover:bg-slate-100 text-sm font-bold cursor-pointer"
                       title="Scade cantitatea"
                     >
                       -
                     </button>
-                    <span className="px-2 text-xs font-bold text-slate-800 min-w-[28px] text-center">
+                    <span className="px-2 text-xs font-bold text-slate-800 min-w-[28px] text-center tabular-nums">
                       {item.quantity}
                     </span>
                     <button
                       onClick={() => handleUpdateQuantity(item.id, item.unit === 'kg' ? 0.5 : 1)}
-                      className="px-2 py-1 text-slate-600 hover:bg-slate-100 text-sm font-bold"
+                      className="px-2 py-1 text-slate-600 hover:bg-slate-100 text-sm font-bold cursor-pointer"
                       title="Crește cantitatea"
                     >
                       +
@@ -580,7 +581,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                   <select
                     value={item.unit}
                     onChange={e => handleUpdateUnit(item.id, e.target.value as UnitType)}
-                    className="text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-xl py-1 px-1.5 focus:outline-hidden"
+                    className="text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-xl py-1 px-1.5 focus:outline-hidden cursor-pointer"
                   >
                     {UNITS.map(u => (
                       <option key={u} value={u}>
@@ -592,7 +593,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                   {/* Delete Button */}
                   <button
                     onClick={() => handleRemoveItem(item.id)}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
+                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
                     title="Șterge produsul"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -607,16 +608,16 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       {/* Primary Compare CTA Button */}
       {activeList.items.length > 0 && (
         <div className="sticky bottom-16 md:bottom-6 z-30 pt-2 no-print">
-          <div className="bg-white/95 backdrop-blur-md p-3 sm:p-4 rounded-2xl border border-emerald-200 shadow-xl flex items-center justify-between gap-4">
-            <div>
-              <span className="text-xs text-slate-500 block">Total estimat {activeList.name}</span>
-              <span className="text-lg sm:text-xl font-extrabold text-slate-900">
+          <div className="bg-white/95 backdrop-blur-md p-3 sm:p-4 rounded-2xl border border-emerald-200/90 shadow-lg flex items-center justify-between gap-4">
+            <div className="tabular-nums">
+              <span className="text-xs text-slate-500 block">Total estimat · {activeList.name}</span>
+              <span className="font-display text-lg sm:text-xl font-bold text-slate-900">
                 {PriceComparisonService.formatRon(totalEstimatedCost)}
               </span>
             </div>
             <button
               onClick={onCompare}
-              className="py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-600/30 flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-all"
+              className="py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center gap-2 transition-colors cursor-pointer"
             >
               <Sparkles className="w-4 h-4 fill-white" />
               <span>Compară prețurile în magazine</span>

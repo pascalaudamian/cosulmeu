@@ -55,6 +55,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>(initialCategory || 'toate');
   const [selectedSubcategory, setSelectedSubcategory] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>('');
   const [selectedBrand, setSelectedBrand] = useState<string>('toate');
   const [selectedRetailer, setSelectedRetailer] = useState<string>('toate');
   const [onlyPromo, setOnlyPromo] = useState<boolean>(false);
@@ -110,9 +111,18 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
       });
   }, []);
 
+  // Debounce search input to avoid firing API calls on every keystroke
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
   // Fetch products based on filters and pagination
   useEffect(() => {
     let isMounted = true;
+    const controller = new AbortController();
     setLoading(true);
 
     const params = new URLSearchParams({
@@ -127,8 +137,8 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
     if (selectedSubcategory) {
       params.set('subcategory', selectedSubcategory);
     }
-    if (searchQuery.trim()) {
-      params.set('search', searchQuery.trim());
+    if (debouncedSearchQuery.trim()) {
+      params.set('search', debouncedSearchQuery.trim());
     }
     if (selectedBrand && selectedBrand !== 'toate') {
       params.set('brand', selectedBrand);
@@ -143,7 +153,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
       params.set('onlyAvailable', 'true');
     }
 
-    fetch(`/api/products?${params.toString()}`)
+    fetch(`/api/products?${params.toString()}`, { signal: controller.signal })
       .then(res => res.json())
       .then(data => {
         if (!isMounted) return;
@@ -160,8 +170,8 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           });
         }
       })
-      .catch(() => {
-        if (!isMounted) return;
+      .catch((err) => {
+        if (!isMounted || err?.name === 'AbortError') return;
         // Client-side fallback from StorageService
         const all = StorageService.getAllProducts();
         const allOffers = StorageService.getProductOffers();
@@ -194,8 +204,8 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
         if (selectedSubcategory) {
           filtered = filtered.filter(p => p.subcategory === selectedSubcategory);
         }
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase().trim();
+        if (debouncedSearchQuery.trim()) {
+          const q = debouncedSearchQuery.toLowerCase().trim();
           filtered = filtered.filter(p => p.name.toLowerCase().includes(q) || p.brand.toLowerCase().includes(q));
         }
         if (selectedBrand && selectedBrand !== 'toate') {
@@ -217,16 +227,17 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
         });
       })
       .finally(() => {
-        if (isMounted) setLoading(false);
+        if (isMounted && !controller.signal.aborted) setLoading(false);
       });
 
     return () => {
       isMounted = false;
+      controller.abort();
     };
   }, [
     selectedCategory,
     selectedSubcategory,
-    searchQuery,
+    debouncedSearchQuery,
     selectedBrand,
     selectedRetailer,
     onlyPromo,
@@ -346,37 +357,42 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
       )}
 
       {/* Hero Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200/60 text-emerald-800 text-xs font-semibold mb-2">
-            <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-            Catalog Național de Produse & Comparație Prețuri
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+          <p className="text-xs font-medium text-slate-500 mb-1.5 tabular-nums">
+            Catalog național · {productsData.totalCount} produse indexate · Prețuri verificate
+          </p>
+          <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-950 tracking-tight">
             Produse & Prețuri Supermarket
           </h1>
-          <p className="text-slate-600 text-xs sm:text-sm mt-0.5 max-w-2xl">
-            Descoperă prețurile verificate la raft din Lidl, Kaufland, Carrefour, Penny, Auchan, Profi, Mega Image și Metro. Comparații transparente, fără simulări.
+          <p className="text-slate-600 text-sm mt-1 max-w-2xl">
+            Compară prețurile actualizate din Lidl, Kaufland, Carrefour, Penny, Auchan, Profi, Mega Image și Metro.
           </p>
         </div>
 
         {/* Căutare rapidă */}
-        <div className="w-full md:w-80 relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+        <div className="w-full md:w-80 relative shrink-0">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
-            placeholder="Caută după nume, brand sau EAN..."
+            aria-label="Caută produse după nume, brand sau EAN"
+            placeholder="Caută produs, brand sau EAN..."
             value={searchQuery}
             onChange={e => {
               setSearchQuery(e.target.value);
               setCurrentPage(1);
             }}
-            className="w-full bg-white border border-slate-200 pl-10 pr-9 py-2.5 rounded-2xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden shadow-2xs"
+            className="w-full bg-white border border-slate-200 pl-10 pr-9 py-2.5 rounded-xl text-sm text-slate-800 placeholder-slate-400 font-medium focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-hidden"
           />
           {searchQuery && (
             <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setDebouncedSearchQuery('');
+              }}
+              aria-label="Șterge căutarea"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-0.5 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -384,24 +400,25 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
         </div>
       </div>
 
-      {/* Bară Categorii (Pills Orizontale Scrollabile) */}
+      {/* Bară Categorii */}
       <div className="mb-4 overflow-x-auto no-scrollbar pb-1">
-        <div className="flex items-center gap-2 min-w-max">
+        <div className="flex items-center gap-1.5 min-w-max">
           <button
+            type="button"
             onClick={() => {
               setSelectedCategory('toate');
               setSelectedSubcategory('');
               setCurrentPage(1);
             }}
-            className={`px-3.5 py-2 rounded-2xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
+            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
               selectedCategory === 'toate'
-                ? 'bg-slate-900 text-white shadow-xs'
+                ? 'bg-slate-900 text-white'
                 : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
             }`}
           >
             <span>Toate produsele</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
-              selectedCategory === 'toate' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+            <span className={`text-xs tabular-nums ${
+              selectedCategory === 'toate' ? 'text-slate-300' : 'text-slate-400'
             }`}>
               {productsData.totalCount}
             </span>
@@ -411,15 +428,16 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
             const isSelected = selectedCategory === cat.name;
             return (
               <button
+                type="button"
                 key={cat.id}
                 onClick={() => {
                   setSelectedCategory(cat.name);
                   setSelectedSubcategory('');
                   setCurrentPage(1);
                 }}
-                className={`px-3.5 py-2 rounded-2xl text-xs sm:text-sm font-semibold transition-all flex items-center gap-2 ${
+                className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
                   isSelected
-                    ? 'bg-emerald-600 text-white shadow-xs'
+                    ? 'bg-emerald-600 text-white'
                     : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
@@ -428,8 +446,8 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 </span>
                 <span>{cat.name}</span>
                 {cat.availableWithOffersCount !== undefined && (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
-                    isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+                  <span className={`text-xs tabular-nums ${
+                    isSelected ? 'text-emerald-100' : 'text-slate-400'
                   }`}>
                     {cat.availableWithOffersCount}
                   </span>
@@ -596,152 +614,140 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
 
       {/* Grid Produse */}
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="animate-pulse bg-white p-4 rounded-3xl border border-slate-200 h-80 flex flex-col justify-between">
-              <div className="h-32 bg-slate-100 rounded-2xl mb-3"></div>
+            <div key={i} className="animate-pulse bg-white p-4 rounded-2xl border border-slate-200/90 h-[340px] flex flex-col justify-between">
+              <div className="h-36 bg-slate-100 rounded-xl mb-3"></div>
               <div className="space-y-2">
-                <div className="h-4 bg-slate-100 rounded w-3/4"></div>
-                <div className="h-3 bg-slate-100 rounded w-1/2"></div>
+                <div className="h-3 bg-slate-100 rounded w-1/3"></div>
+                <div className="h-4 bg-slate-100 rounded w-4/5"></div>
               </div>
               <div className="h-10 bg-slate-100 rounded-xl mt-4"></div>
             </div>
           ))}
         </div>
       ) : productsData.products.length === 0 ? (
-        <div className="py-16 text-center bg-white rounded-3xl border border-slate-200 p-8 shadow-xs">
+        <div className="py-16 text-center bg-white rounded-2xl border border-slate-200 p-8">
           <ShoppingBag className="w-12 h-12 text-slate-300 mx-auto mb-3" />
           <h3 className="text-base font-bold text-slate-800">Nu am găsit niciun produs conform filtrelor</h3>
           <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-4">
             Încearcă să resetezi filtrele sau să cauți alt termen pentru a descoperi catalogul disponibil.
           </p>
           <button
+            type="button"
             onClick={handleResetFilters}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" /> Resetează toate filtrele
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
           {productsData.products.map(product => {
             const hasOffers = product.offersCount > 0 && product.minPrice !== null;
             const lowestStore = product.lowestStoreId ? storeMap.get(product.lowestStoreId) : null;
+            const safeImageSrc = getSafeProductImageSrc(product.imageUrl);
 
             return (
               <div
                 key={product.id}
                 onClick={() => onSelectProduct(product.id)}
-                className="group bg-white rounded-3xl border border-slate-200/90 hover:border-emerald-400 p-4 sm:p-5 flex flex-col justify-between shadow-2xs hover:shadow-md transition-all cursor-pointer relative"
+                className="group surface-card surface-card-interactive rounded-2xl p-4 flex flex-col justify-between cursor-pointer"
               >
-                {/* Header Card: Badges */}
                 <div>
-                  <div className="flex items-center justify-between gap-1 mb-2">
-                    <span className="text-[11px] font-bold text-slate-500 truncate max-w-[140px]">
-                      {product.brand}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      {product.isRomanianProduct && (
-                        <span className="text-xs" title="Produs românesc">🇷🇴</span>
-                      )}
-                      {product.isBio && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800">
-                          BIO
-                        </span>
-                      )}
-                    </div>
+                  {/* Imagine Produs (lead with clean neutral image stage) */}
+                  <div className="h-36 w-full bg-slate-50/90 rounded-xl flex items-center justify-center p-3 mb-3.5 overflow-hidden">
+                    {safeImageSrc && !failedImageIds.has(product.id) ? (
+                      <img
+                        src={safeImageSrc}
+                        alt={product.name}
+                        referrerPolicy="no-referrer"
+                        decoding="async"
+                        className="max-h-full max-w-full object-contain rounded-lg transition-transform duration-200 group-hover:scale-[1.04]"
+                        loading="lazy"
+                        onError={() => {
+                          setFailedImageIds(prev => {
+                            if (prev.has(product.id)) return prev;
+                            const next = new Set(prev);
+                            next.add(product.id);
+                            return next;
+                          });
+                        }}
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-700 font-display font-bold text-xl">
+                        {product.name.charAt(0)}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Imagine Produs */}
-                  {(() => {
-                    const safeImageSrc = getSafeProductImageSrc(product.imageUrl);
-                    return (
-                      <div className="h-32 w-full bg-slate-50/80 rounded-2xl flex items-center justify-center p-3 mb-3 group-hover:scale-105 transition-transform">
-                        {safeImageSrc && !failedImageIds.has(product.id) ? (
-                          <img
-                            src={safeImageSrc}
-                            alt={product.name}
-                            className="max-h-full max-w-full object-contain rounded-lg"
-                            loading="lazy"
-                            onError={() => {
-                              setFailedImageIds(prev => {
-                                if (prev.has(product.id)) return prev;
-                                const next = new Set(prev);
-                                next.add(product.id);
-                                return next;
-                              });
-                            }}
-                          />
-                        ) : (
-                          <div className="w-16 h-16 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-700 font-extrabold text-2xl">
-                            {product.name.charAt(0)}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
+                  {/* Clean unboxed metadata kicker */}
+                  <div className="flex items-center justify-between gap-2 text-xs text-slate-500 mb-1">
+                    <span className="font-medium truncate">
+                      {[product.brand, `${product.packageWeightOrVolume} ${product.packageUnit}`].filter(Boolean).join(' · ')}
+                    </span>
+                    {(product.isRomanianProduct || product.isBio) && (
+                      <span className="shrink-0 font-semibold text-emerald-700">
+                        {[product.isRomanianProduct ? 'RO' : null, product.isBio ? 'BIO' : null].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
+                  </div>
 
-                  {/* Titlu & Cantitate */}
-                  <h3 className="font-extrabold text-sm text-slate-900 group-hover:text-emerald-700 line-clamp-2 leading-snug mb-1">
+                  {/* Titlu */}
+                  <h3 className="font-semibold text-[15px] text-slate-900 group-hover:text-emerald-700 line-clamp-2 leading-snug transition-colors">
                     {product.name}
                   </h3>
-                  <span className="text-xs text-slate-500 font-medium block">
-                    {product.packageWeightOrVolume} {product.packageUnit}
-                  </span>
                 </div>
 
                 {/* Preț & Retaileri */}
                 <div className="mt-4 pt-3 border-t border-slate-100">
                   {hasOffers ? (
                     <div>
-                      <div className="flex items-baseline justify-between">
+                      <div className="flex items-baseline justify-between gap-2">
                         <div>
-                          <span className="text-[10px] text-slate-400 font-semibold block uppercase">
-                            De la:
+                          <span className="text-[11px] text-slate-400 font-medium block">
+                            Cel mai mic preț
                           </span>
-                          <span className="text-xl font-black text-emerald-700">
+                          <span className="font-display text-xl font-bold text-emerald-700 tabular-nums">
                             {PriceComparisonService.formatRon(product.minPrice)}
                           </span>
                         </div>
 
-                        {/* Retailer badge */}
                         {lowestStore && (
-                          <div className="text-right">
-                            <span className="text-[10px] text-slate-400 block">Cel mai bun preț:</span>
-                            <span className="text-xs font-bold text-slate-800 flex items-center gap-1 justify-end">
-                              <span className={`w-2 h-2 rounded-full ${lowestStore.brandColor}`}></span>
+                          <div className="text-right min-w-0">
+                            <span className="text-[11px] text-slate-400 block">Magazin</span>
+                            <span className="text-xs font-semibold text-slate-800 truncate block">
                               {lowestStore.name}
                             </span>
                           </div>
                         )}
                       </div>
 
-                      {/* Info promoție / card */}
-                      <div className="flex items-center gap-2 mt-2 text-[11px]">
-                        <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                          <Store className="w-3 h-3 text-slate-500" />
+                      {/* Clean unboxed metadata */}
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-slate-500 tabular-nums">
+                        <span className="font-medium text-slate-600">
                           {product.offersCount} {product.offersCount === 1 ? 'magazin' : 'magazine'}
                         </span>
-
-                        {product.loyaltyCardRequired && (
-                          <span className="text-amber-700 font-semibold flex items-center gap-0.5 text-[10px]" title="Necesită card fidelitate">
-                            <CreditCard className="w-3 h-3" /> Card
-                          </span>
-                        )}
-
                         {product.isPromo && (
-                          <span className="text-rose-700 font-bold flex items-center gap-0.5 text-[10px]">
-                            <Tag className="w-3 h-3" /> Promo
-                          </span>
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-rose-700 font-semibold">Promo</span>
+                          </>
+                        )}
+                        {product.loyaltyCardRequired && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-amber-700 font-medium">Card</span>
+                          </>
                         )}
                       </div>
                     </div>
                   ) : (
                     <div className="py-2">
-                      <span className="text-xs text-slate-400 font-semibold italic block">
-                        Nicio ofertă recent verificată
+                      <span className="text-xs text-slate-500 font-medium block">
+                        Nicio ofertă activă verificată
                       </span>
-                      <span className="text-[10px] text-slate-400 block mt-0.5">
+                      <span className="text-[11px] text-slate-400 block mt-0.5">
                         În curs de indexare
                       </span>
                     </div>
@@ -755,7 +761,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                         e.stopPropagation();
                         onSelectProduct(product.id);
                       }}
-                      className="flex-1 py-2 px-3 rounded-xl bg-slate-900 group-hover:bg-emerald-600 text-white text-xs font-bold transition-colors flex items-center justify-center gap-1"
+                      className="flex-1 py-2 px-3 rounded-xl bg-slate-900 group-hover:bg-emerald-600 text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap"
                     >
                       <span>Compară prețuri</span>
                       <ChevronRight className="w-3.5 h-3.5" />
@@ -767,7 +773,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                           type="button"
                           onClick={e => { void handleQuickAdd(e, product); }}
                           aria-label={`Adaugă ${product.name} în lista mea`}
-                          className={`p-2 rounded-xl border transition-colors ${
+                          className={`p-2 rounded-xl border transition-colors cursor-pointer ${
                             inList
                               ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                               : 'border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'

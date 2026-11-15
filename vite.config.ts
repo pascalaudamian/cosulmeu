@@ -14,9 +14,22 @@ export default defineConfig(({ command }) => {
     resolve: {
       dedupe: ['react', 'react-dom'],
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
         // `pg` is server-only; always replace it in the browser bundle.
-        pg: path.resolve(__dirname, 'src/db/pg-browser-stub.ts'),
+        pg: path.resolve(import.meta.dirname, 'src/db/pg-browser-stub.ts'),
+      },
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('react-dom') || id.includes('/react/')) return 'vendor-react';
+            if (id.includes('@supabase/')) return 'vendor-supabase';
+            if (id.includes('lucide-react')) return 'vendor-icons';
+            return 'vendor-misc';
+          },
+        },
       },
     },
     // Prevent Vite from pre-bundling `pg` before the browser alias is applied.

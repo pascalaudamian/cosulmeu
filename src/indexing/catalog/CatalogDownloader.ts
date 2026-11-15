@@ -124,8 +124,8 @@ export class CatalogDownloader {
   };
 
   public static requestTransport: RequestTransport = {
-    httpRequest: http.request,
-    httpsRequest: https.request
+    httpRequest: ((...args: any[]) => (http.request as any)(...args)) as typeof http.request,
+    httpsRequest: ((...args: any[]) => (https.request as any)(...args)) as typeof https.request
   };
 
   /**

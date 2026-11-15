@@ -18,7 +18,7 @@ import {
   CatalogExtractedOffer,
   CatalogImportError
 } from '../indexing/catalog/catalogTypes.ts';
-import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/CatalogSourceDiscovery.ts';
+import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/initialCatalogSources.ts';
 import {
   PRODUCTS,
   STORES,

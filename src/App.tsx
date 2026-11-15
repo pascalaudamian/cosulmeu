@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
 import { useDashboardData } from './services/useDashboardData.js';
 import {
   countLocalDashboardData,
@@ -14,22 +14,68 @@ import {
 import { Navbar } from './components/Navbar.js';
 import { MobileNav } from './components/MobileNav.js';
 import { DashboardView } from './components/DashboardView.js';
-import { ShoppingListView } from './components/ShoppingListView.js';
-import { PriceComparisonView } from './components/PriceComparisonView.js';
-import { ReceiptScanView } from './components/ReceiptScanView.js';
-import { ReceiptHistoryView } from './components/ReceiptHistoryView.js';
-import { PriceHistoryView } from './components/PriceHistoryView.js';
-import { StoresView } from './components/StoresView.js';
-import { ProfileView } from './components/ProfileView.js';
-import { AdminSourcesView } from './components/AdminSourcesView.js';
-import { ProductsView } from './components/ProductsView.js';
-import { ProductDetailView } from './components/ProductDetailView.js';
+
+const loadProductsView = () => import('./components/ProductsView.js');
+const loadProductDetailView = () => import('./components/ProductDetailView.js');
+const loadShoppingListView = () => import('./components/ShoppingListView.js');
+const loadPriceComparisonView = () => import('./components/PriceComparisonView.js');
+const loadReceiptScanView = () => import('./components/ReceiptScanView.js');
+const loadReceiptHistoryView = () => import('./components/ReceiptHistoryView.js');
+const loadPriceHistoryView = () => import('./components/PriceHistoryView.js');
+const loadStoresView = () => import('./components/StoresView.js');
+const loadProfileView = () => import('./components/ProfileView.js');
+const loadAdminSourcesView = () => import('./components/AdminSourcesView.js');
+const loadAuthScreen = () => import('./components/AuthScreen.js');
+
+const ProductsView = lazy(() => loadProductsView().then(m => ({ default: m.ProductsView })));
+const ProductDetailView = lazy(() => loadProductDetailView().then(m => ({ default: m.ProductDetailView })));
+const ShoppingListView = lazy(() => loadShoppingListView().then(m => ({ default: m.ShoppingListView })));
+const PriceComparisonView = lazy(() => loadPriceComparisonView().then(m => ({ default: m.PriceComparisonView })));
+const ReceiptScanView = lazy(() => loadReceiptScanView().then(m => ({ default: m.ReceiptScanView })));
+const ReceiptHistoryView = lazy(() => loadReceiptHistoryView().then(m => ({ default: m.ReceiptHistoryView })));
+const PriceHistoryView = lazy(() => loadPriceHistoryView().then(m => ({ default: m.PriceHistoryView })));
+const StoresView = lazy(() => loadStoresView().then(m => ({ default: m.StoresView })));
+const ProfileView = lazy(() => loadProfileView().then(m => ({ default: m.ProfileView })));
+const AdminSourcesView = lazy(() => loadAdminSourcesView().then(m => ({ default: m.AdminSourcesView })));
+const AuthScreen = lazy(() => loadAuthScreen().then(m => ({ default: m.AuthScreen })));
+
+const TAB_PREFETCHERS: Record<string, () => Promise<unknown>> = {
+  products: loadProductsView,
+  'product-detail': loadProductDetailView,
+  'shopping-list': loadShoppingListView,
+  compare: loadPriceComparisonView,
+  'scan-receipt': loadReceiptScanView,
+  receipts: loadReceiptHistoryView,
+  'price-history': loadPriceHistoryView,
+  stores: loadStoresView,
+  profile: loadProfileView,
+  'admin-sources': loadAdminSourcesView,
+  auth: loadAuthScreen
+};
+
+const TabContentSkeleton: React.FC = () => (
+  <div className="space-y-6 pb-16 animate-pulse" aria-busy="true" aria-label="Se încarcă secțiunea">
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="space-y-2.5">
+        <div className="h-3.5 w-44 rounded bg-slate-200/80" />
+        <div className="h-8 w-72 rounded-lg bg-slate-200/90" />
+        <div className="h-4 w-96 max-w-full rounded bg-slate-200/70" />
+      </div>
+      <div className="h-10 w-44 rounded-xl bg-slate-200/80" />
+    </div>
+    <div className="h-36 rounded-2xl bg-white border border-slate-200/80 p-6" />
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="h-52 rounded-2xl bg-white border border-slate-200/80" />
+      <div className="h-52 rounded-2xl bg-white border border-slate-200/80" />
+      <div className="h-52 rounded-2xl bg-white border border-slate-200/80 hidden md:block" />
+    </div>
+  </div>
+);
 
 import { StorageService } from './services/StorageService.js';
 import { ShoppingList, Receipt, UserProfile, PriceAlert, Product, ProductOffer, Store } from './types.js';
-import { ShieldCheck, Heart } from 'lucide-react';
+import { ShieldCheck } from 'lucide-react';
 import { useAuth } from './auth/AuthProvider.js';
-import { AuthScreen } from './components/AuthScreen.js';
 import { supabase } from './lib/supabase.js';
 
 const normalizeStoreKey = (value: string): string =>
@@ -88,23 +134,47 @@ export default function App() {
   const [catalogProducts, setCatalogProducts] = useState<Product[]>([]);
   const [catalogOffers, setCatalogOffers] = useState<ProductOffer[]>([]);
   const [catalogStores, setCatalogStores] = useState<Store[]>([]);
+  const catalogLoadedRef = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadCatalogDatasets = useCallback(() => {
+    if (catalogLoadedRef.current) return;
+    catalogLoadedRef.current = true;
     Promise.all([
       fetch('/api/catalog/products').then(r => r.json()).catch(() => null),
       fetch('/api/catalog/offers').then(r => r.json()).catch(() => null),
       fetch('/api/stores').then(r => r.json()).catch(() => null)
     ]).then(([prodRes, offRes, storeRes]) => {
-      if (cancelled) return;
       if (prodRes?.success && Array.isArray(prodRes.products)) setCatalogProducts(prodRes.products);
       if (offRes?.success && Array.isArray(offRes.offers)) setCatalogOffers(offRes.offers);
       if (storeRes?.success && Array.isArray(storeRes.stores)) setCatalogStores(canonicalizeStores(storeRes.stores));
     });
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  // Load catalog immediately when needed by catalog/list/compare/stores, otherwise prefetch lazily after first paint
+  useEffect(() => {
+    if (['shopping-list', 'compare', 'products', 'stores', 'product-detail'].includes(currentTab)) {
+      loadCatalogDatasets();
+      return;
+    }
+    const win = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof win.requestIdleCallback === 'function') {
+      const id = win.requestIdleCallback(() => loadCatalogDatasets(), { timeout: 1500 });
+      return () => win.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(() => loadCatalogDatasets(), 900);
+    return () => window.clearTimeout(timer);
+  }, [currentTab, loadCatalogDatasets]);
+
+  const handlePrefetchTab = useCallback((tab: string) => {
+    const loader = TAB_PREFETCHERS[tab];
+    if (loader) void loader();
+    if (['shopping-list', 'compare', 'products', 'stores'].includes(tab)) {
+      loadCatalogDatasets();
+    }
+  }, [loadCatalogDatasets]);
   const localDashboardSnapshot: LocalDashboardSnapshot = {
     receipts,
     shoppingLists,
@@ -265,11 +335,25 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen grid place-items-center bg-slate-50 text-sm font-bold text-slate-500">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-          <span>Se verifică sesiunea securizată…</span>
-        </div>
+      <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-slate-900 font-sans">
+        <header className="sticky top-0 z-40 h-16 bg-white/90 backdrop-blur-xl border-b border-slate-200/80">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-full flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-emerald-600/15 animate-pulse" />
+              <div className="h-5 w-28 rounded bg-slate-200 animate-pulse" />
+            </div>
+            <div className="hidden md:flex items-center gap-6">
+              <div className="h-4 w-16 rounded bg-slate-200/80 animate-pulse" />
+              <div className="h-4 w-16 rounded bg-slate-200/80 animate-pulse" />
+              <div className="h-4 w-20 rounded bg-slate-200/80 animate-pulse" />
+              <div className="h-4 w-24 rounded bg-slate-200/80 animate-pulse" />
+            </div>
+            <div className="h-9 w-32 rounded-xl bg-emerald-600/20 animate-pulse" />
+          </div>
+        </header>
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-8">
+          <TabContentSkeleton />
+        </main>
       </div>
     );
   }
@@ -596,11 +680,12 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans selection:bg-emerald-100 selection:text-emerald-900">
+    <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-slate-900 font-sans selection:bg-emerald-100 selection:text-emerald-950">
       {/* Top Navbar */}
       <Navbar
         currentTab={currentTab}
         onSelectTab={handleSelectTab}
+        onPrefetchTab={handlePrefetchTab}
         userProfile={userProfile}
         onUpdateProfile={handleProfileUpdate}
         onSignOut={signOut}
@@ -617,132 +702,138 @@ export default function App() {
             {dataWriteError}
           </div>
         )}
-        {currentTab === 'auth' && (
-          <AuthScreen
-            onSuccess={() => handleSelectTab('dashboard')}
-            onCancel={() => handleSelectTab('dashboard')}
-          />
-        )}
 
-        {currentTab === 'dashboard' && (
-          <DashboardView
-            userProfile={userProfile}
-            activeList={activeList}
-            receipts={dashboardReceipts}
-            trackedCount={dashboardTrackedProductIds.length}
-            activeAlertCount={dashboardAlerts.filter(alert => alert.isActive).length}
-            dataSource={user ? 'supabase' : 'local'}
-            dashboardData={dashboardData}
-            dashboardLoading={Boolean(user && dashboardLoading)}
-            dashboardError={user && dashboardLoadError ? 'Datele Supabase nu au putut fi încărcate.' : null}
-            localImportCounts={localImportCounts}
-            canImportLocalData={canImportLocalData}
-            isImportingLocalData={isImportingLocalData}
-            importError={dashboardImportError}
-            importResult={dashboardImportResult}
-            onImportLocalData={handleImportLocalData}
-            onNavigate={handleSelectTab}
-            onOpenReceipt={() => handleSelectTab('receipts')}
-          />
-        )}
+        <Suspense fallback={<TabContentSkeleton />}>
+          {currentTab === 'auth' && (
+            <AuthScreen
+              onSuccess={() => handleSelectTab('dashboard')}
+              onCancel={() => handleSelectTab('dashboard')}
+            />
+          )}
 
-        {currentTab === 'products' && (
-          <ProductsView
-            onSelectProduct={handleSelectProduct}
-            activeList={activeList}
-            onAddToList={handleAddProductToList}
-            initialCategory={productFilterCategory}
-          />
-        )}
+          {currentTab === 'dashboard' && (
+            <DashboardView
+              userProfile={userProfile}
+              activeList={activeList}
+              receipts={dashboardReceipts}
+              trackedCount={dashboardTrackedProductIds.length}
+              activeAlertCount={dashboardAlerts.filter(alert => alert.isActive).length}
+              dataSource={user ? 'supabase' : 'local'}
+              dashboardData={dashboardData}
+              dashboardLoading={Boolean(user && dashboardLoading)}
+              dashboardError={user && dashboardLoadError ? 'Datele Supabase nu au putut fi încărcate.' : null}
+              localImportCounts={localImportCounts}
+              canImportLocalData={canImportLocalData}
+              isImportingLocalData={isImportingLocalData}
+              importError={dashboardImportError}
+              importResult={dashboardImportResult}
+              onImportLocalData={handleImportLocalData}
+              onNavigate={handleSelectTab}
+              onOpenReceipt={() => handleSelectTab('receipts')}
+            />
+          )}
 
-        {currentTab === 'product-detail' && selectedProductId && (
-          <ProductDetailView
-            productId={selectedProductId}
-            onBack={handleBackFromDetail}
-            onNavigateToCategory={handleNavigateToCategory}
-            activeList={activeList}
-            onAddToList={handleAddProductToList}
-          />
-        )}
+          {currentTab === 'products' && (
+            <ProductsView
+              onSelectProduct={handleSelectProduct}
+              activeList={activeList}
+              onAddToList={handleAddProductToList}
+              initialCategory={productFilterCategory}
+            />
+          )}
 
-        {currentTab === 'shopping-list' && (
-          <ShoppingListView
-            lists={screenShoppingLists}
-            activeList={activeList}
-            onUpdateLists={handleUpdateShoppingLists}
-            onSelectActiveList={handleActiveListSelect}
-            onCompare={() => handleSelectTab('compare')}
-            catalogProducts={catalogProducts}
-          />
-        )}
+          {currentTab === 'product-detail' && selectedProductId && (
+            <ProductDetailView
+              productId={selectedProductId}
+              onBack={handleBackFromDetail}
+              onNavigateToCategory={handleNavigateToCategory}
+              activeList={activeList}
+              onAddToList={handleAddProductToList}
+            />
+          )}
 
-        {currentTab === 'compare' && (
-          <PriceComparisonView
-            activeList={activeList}
-            onNavigateToList={() => handleSelectTab('shopping-list')}
-            onViewProductDetail={handleSelectProduct}
-            catalogProducts={catalogProducts}
-            catalogOffers={catalogOffers}
-            catalogStores={catalogStores}
-          />
-        )}
+          {currentTab === 'shopping-list' && (
+            <ShoppingListView
+              lists={screenShoppingLists}
+              activeList={activeList}
+              onUpdateLists={handleUpdateShoppingLists}
+              onSelectActiveList={handleActiveListSelect}
+              onCompare={() => handleSelectTab('compare')}
+              catalogProducts={catalogProducts}
+            />
+          )}
 
-        {currentTab === 'scan-receipt' && (
-          <ReceiptScanView
-            onReceiptSaved={handleReceiptSaved}
-            onNavigateToHistory={() => handleSelectTab('receipts')}
-          />
-        )}
+          {currentTab === 'compare' && (
+            <PriceComparisonView
+              activeList={activeList}
+              onNavigateToList={() => handleSelectTab('shopping-list')}
+              onViewProductDetail={handleSelectProduct}
+              catalogProducts={catalogProducts}
+              catalogOffers={catalogOffers}
+              catalogStores={catalogStores}
+            />
+          )}
 
-        {currentTab === 'receipts' && (
-          <ReceiptHistoryView
-            receipts={dashboardReceipts}
-            onUpdateReceipts={handleUpdateReceipts}
-            onNavigateToScan={() => handleSelectTab('scan-receipt')}
-          />
-        )}
+          {currentTab === 'scan-receipt' && (
+            <ReceiptScanView
+              onReceiptSaved={handleReceiptSaved}
+              onNavigateToHistory={() => handleSelectTab('receipts')}
+            />
+          )}
 
-        {currentTab === 'price-history' && (
-          <PriceHistoryView
-            alerts={dashboardAlerts}
-            trackedProductIds={dashboardTrackedProductIds}
-            onUpdateAlerts={handleUpdatePriceAlerts}
-            onUpdateTrackedProductIds={handleUpdateTrackedProducts}
-          />
-        )}
+          {currentTab === 'receipts' && (
+            <ReceiptHistoryView
+              receipts={dashboardReceipts}
+              onUpdateReceipts={handleUpdateReceipts}
+              onNavigateToScan={() => handleSelectTab('scan-receipt')}
+            />
+          )}
 
-        {currentTab === 'stores' && (
-          <StoresView userCity={userProfile.city} />
-        )}
+          {currentTab === 'price-history' && (
+            <PriceHistoryView
+              alerts={dashboardAlerts}
+              trackedProductIds={dashboardTrackedProductIds}
+              onUpdateAlerts={handleUpdatePriceAlerts}
+              onUpdateTrackedProductIds={handleUpdateTrackedProducts}
+            />
+          )}
 
-        {currentTab === 'admin-sources' && (
-          <AdminSourcesView />
-        )}
+          {currentTab === 'stores' && (
+            <StoresView userCity={userProfile.city} />
+          )}
 
-        {currentTab === 'profile' && (
-          <ProfileView
-            userProfile={userProfile}
-            onUpdateProfile={handleProfileUpdate}
-            onResetAllData={handleResetAllData}
-            onSignOut={signOut}
-            onNavigateToAuth={() => setCurrentTab('auth')}
-          />
-        )}
+          {currentTab === 'admin-sources' && (
+            <AdminSourcesView />
+          )}
+
+          {currentTab === 'profile' && (
+            <ProfileView
+              userProfile={userProfile}
+              onUpdateProfile={handleProfileUpdate}
+              onResetAllData={handleResetAllData}
+              onSignOut={signOut}
+              onNavigateToAuth={() => setCurrentTab('auth')}
+            />
+          )}
+        </Suspense>
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto border-t border-slate-200/80 bg-white py-8 text-xs text-slate-500 no-print pb-20 md:pb-8">
+      <footer className="mt-auto border-t border-slate-200/80 bg-white py-7 text-xs text-slate-500 no-print pb-20 md:pb-7">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <span className="font-extrabold text-slate-800">
+            <span className="font-display font-bold text-slate-900">
               Coșul<span className="text-emerald-600">Meu</span>
             </span>
-            <span>• Ghid civic de economisire & comparare prețuri în România</span>
+            <span aria-hidden="true">·</span>
+            <span>Comparator independent de prețuri în România</span>
           </div>
-          <div className="flex items-center gap-4 text-slate-400">
-            <span>Monedă: RON (lei)</span>
-            <span>• Fus orar: Europe/Bucharest</span>
-            <span className="flex items-center gap-1 text-emerald-700 font-medium">
+          <div className="flex items-center gap-3 text-slate-500">
+            <span>RON (lei)</span>
+            <span aria-hidden="true">·</span>
+            <span>Europe/Bucharest</span>
+            <span aria-hidden="true">·</span>
+            <span className="flex items-center gap-1.5 text-emerald-700 font-medium">
               <ShieldCheck className="w-3.5 h-3.5" /> {user ? 'Date protejate în cont' : 'Date locale pe dispozitiv'}
             </span>
           </div>
@@ -753,6 +844,7 @@ export default function App() {
       <MobileNav
         currentTab={currentTab}
         onSelectTab={handleSelectTab}
+        onPrefetchTab={handlePrefetchTab}
         itemsCount={activeList.items.length}
       />
     </div>

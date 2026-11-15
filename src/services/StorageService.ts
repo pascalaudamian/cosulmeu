@@ -32,7 +32,7 @@ import {
   CatalogImportError,
   CatalogImporterStats
 } from '../indexing/catalog/catalogTypes.js';
-import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/CatalogSourceDiscovery.js';
+import { INITIAL_CATALOG_SOURCES } from '../indexing/catalog/initialCatalogSources.js';
 import {
   INITIAL_USER_PROFILE,
   PRODUCTS,

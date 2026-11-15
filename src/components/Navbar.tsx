@@ -26,6 +26,7 @@ import { UserProfile, PriceAlert } from '../types.js';
 interface NavbarProps {
   currentTab: string;
   onSelectTab: (tab: string) => void;
+  onPrefetchTab?: (tab: string) => void;
   userProfile: UserProfile;
   onUpdateProfile: (updated: UserProfile) => void;
   onSignOut?: () => Promise<void>;
@@ -38,6 +39,7 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({
   currentTab,
   onSelectTab,
+  onPrefetchTab,
   userProfile,
   onUpdateProfile,
   onSignOut,
@@ -133,22 +135,22 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const isMoreTabActive = ['receipts', 'scan-receipt', 'stores', 'price-history'].includes(currentTab);
 
+  const prefetch = (tab: string) => {
+    onPrefetchTab?.(tab);
+  };
+
   return (
-    <header className="sticky top-0 z-40 bg-white border-b border-slate-200/80 shadow-xs">
-      {/* =========================================================================
-          NIVELUL 1: UTILITY BAR (BANDA DE SUS) — Desktop, Tablet & Mobil
-          Elemente: Locație („București”), Alerte preț, Profil / Autentificare
-         ========================================================================= */}
-      <div className="relative z-30 border-b border-slate-100 bg-slate-50/90 py-1.5 transition-colors">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 flex items-center justify-between text-xs text-slate-600 font-medium">
+    <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-xl border-b border-slate-200/75">
+      {/* Utility Bar */}
+      <div className="relative z-30 border-b border-slate-100/90 bg-slate-50/75 py-1.5">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between text-xs text-slate-600 font-medium">
           {/* Left: Info de încredere */}
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-800 hidden sm:inline">Comparator independent</span>
-            <span className="text-slate-300 hidden sm:inline">·</span>
-            <span className="text-emerald-700 font-bold flex items-center gap-1">
-              8 retaileri
-            </span>
-            <span className="text-slate-400 hidden md:inline">· Catalog live actualizat</span>
+            <span className="font-semibold text-slate-700 hidden sm:inline">Comparator independent</span>
+            <span className="text-slate-300 hidden sm:inline" aria-hidden="true">·</span>
+            <span className="text-emerald-700 font-semibold tabular-nums">8 retaileri naționali</span>
+            <span className="text-slate-300 hidden md:inline" aria-hidden="true">·</span>
+            <span className="text-slate-500 hidden md:inline">Catalog actualizat</span>
           </div>
 
           {/* Right: Utility Elements */}
@@ -477,118 +479,111 @@ export const Navbar: React.FC<NavbarProps> = ({
           Paginile esențiale: Acasă, Produse, Lista mea, Compară prețuri, Bonuri, Magazine
           CTA Primar Solid: "Compară coșul"
          ========================================================================= */}
-      <div className="relative z-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-        {/* Brand Logo & Wordmark */}
+      <div className="relative z-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-6">
+        {/* Brand Logo & Wordmark (single clean line) */}
         <button
           type="button"
           onClick={() => handleNavigate('dashboard')}
           aria-label="Mergi la pagina principală Coșul Meu"
-          className="flex items-center gap-2.5 cursor-pointer group shrink-0 text-left focus-visible:outline-emerald-600"
+          className="flex items-center gap-2.5 cursor-pointer group shrink-0 text-left focus-visible:outline-emerald-600 whitespace-nowrap"
         >
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 group-hover:scale-105 transition-transform">
-            <ShoppingBasket className="w-5 h-5" />
+          <div className="w-9 h-9 rounded-xl bg-slate-900 group-hover:bg-emerald-700 flex items-center justify-center text-white transition-colors">
+            <ShoppingBasket className="w-4.5 h-4.5" />
           </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="font-extrabold text-lg sm:text-xl tracking-tight text-slate-900">
-                Coșul<span className="text-emerald-600">Meu</span>
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-500 font-medium hidden sm:block leading-none">
-              Economisește la supermarket
-            </p>
-          </div>
+          <span className="font-display font-bold text-xl tracking-tight text-slate-900 whitespace-nowrap shrink-0">
+            Coșul<span className="text-emerald-600">Meu</span>
+          </span>
         </button>
 
-        {/* -----------------------------------------------------------------------
-            DESKTOP MAIN NAV (> 1024px / lg:flex)
-           ----------------------------------------------------------------------- */}
-        <nav aria-label="Navigație principală" className="hidden lg:flex items-center gap-1 xl:gap-2">
-          {/* Acasă */}
+        {/* DESKTOP MAIN NAV */}
+        <nav aria-label="Navigație principală" className="hidden lg:flex items-center gap-1">
           <button
             type="button"
             onClick={() => handleNavigate('dashboard')}
-            className={`px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+            onMouseEnter={() => prefetch('dashboard')}
+            onFocus={() => prefetch('dashboard')}
+            className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'dashboard'
-                ? 'bg-emerald-50 text-emerald-700'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                ? 'bg-emerald-50/90 text-emerald-800 font-semibold'
+                : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/70'
             }`}
           >
             Acasă
           </button>
 
-          {/* Produse */}
           <button
             type="button"
             onClick={() => handleNavigate('products')}
-            className={`px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+            onMouseEnter={() => prefetch('products')}
+            onFocus={() => prefetch('products')}
+            className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'products' || currentTab === 'product-detail'
-                ? 'bg-emerald-50 text-emerald-700'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                ? 'bg-emerald-50/90 text-emerald-800 font-semibold'
+                : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/70'
             }`}
           >
-            <ShoppingBag className="w-4 h-4 text-slate-500" />
-            <span>Produse</span>
+            Produse
           </button>
 
-          {/* Lista mea */}
           <button
             type="button"
             onClick={() => handleNavigate('shopping-list')}
-            className={`px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+            onMouseEnter={() => prefetch('shopping-list')}
+            onFocus={() => prefetch('shopping-list')}
+            className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'shopping-list'
-                ? 'bg-emerald-50 text-emerald-700'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                ? 'bg-emerald-50/90 text-emerald-800 font-semibold'
+                : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/70'
             }`}
           >
             <span>Lista mea</span>
             {itemsCount > 0 && (
-              <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-1.5 py-0.2 rounded-full min-w-[18px] text-center">
-                {itemsCount}
+              <span className="text-xs font-bold text-emerald-700 tabular-nums">
+                ({itemsCount})
               </span>
             )}
           </button>
 
-          {/* Compară prețuri */}
           <button
             type="button"
             onClick={() => handleNavigate('compare')}
-            className={`px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+            onMouseEnter={() => prefetch('compare')}
+            onFocus={() => prefetch('compare')}
+            className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'compare'
-                ? 'bg-emerald-50 text-emerald-700'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                ? 'bg-emerald-50/90 text-emerald-800 font-semibold'
+                : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/70'
             }`}
           >
-            <Sparkles className="w-4 h-4 text-emerald-600" />
-            <span>Compară prețuri</span>
+            Compară prețuri
           </button>
 
-          {/* Bonuri */}
           <button
             type="button"
             onClick={() => handleNavigate('receipts')}
-            className={`px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+            onMouseEnter={() => prefetch('receipts')}
+            onFocus={() => prefetch('receipts')}
+            className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'receipts' || currentTab === 'scan-receipt'
-                ? 'bg-emerald-50 text-emerald-700'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                ? 'bg-emerald-50/90 text-emerald-800 font-semibold'
+                : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/70'
             }`}
           >
-            <ReceiptText className="w-4 h-4 text-slate-500" />
-            <span>Bonuri</span>
+            Bonuri
           </button>
 
-          {/* Magazine */}
           <button
             type="button"
             onClick={() => handleNavigate('stores')}
-            className={`px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+            onMouseEnter={() => prefetch('stores')}
+            onFocus={() => prefetch('stores')}
+            className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'stores'
-                ? 'bg-emerald-50 text-emerald-700'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                ? 'bg-emerald-50/90 text-emerald-800 font-semibold'
+                : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100/70'
             }`}
           >
-            <StoreIcon className="w-4 h-4 text-slate-500" />
-            <span>Magazine</span>
+            Magazine
           </button>
         </nav>
 

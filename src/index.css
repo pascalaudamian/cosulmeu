@@ -1,8 +1,64 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-display: 'Outfit', 'Plus Jakarta Sans', system-ui, sans-serif;
+    --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+
   body {
-    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    font-family: var(--font-sans);
+    background-color: #f8fafc;
+    color: #0f172a;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.surface-card {
+  background-color: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  transition: border-color 180ms var(--ease-smooth), box-shadow 180ms var(--ease-smooth), transform 180ms var(--ease-smooth);
+}
+
+.surface-card-interactive:hover {
+  border-color: rgba(16, 185, 129, 0.45);
+  box-shadow: 0 10px 28px -12px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .surface-card,
+  .surface-card-interactive:hover {
+    transition: none;
+    transform: none;
   }
 }
 
