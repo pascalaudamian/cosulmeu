@@ -187,7 +187,7 @@ export class CatalogStagingManager {
 
     if (downloadRes.ok && downloadRes.data) {
       const effectiveFormat = detectEffectiveFormat(document.format, downloadRes.contentType, downloadRes.data);
-      parseRes = await CatalogParserEngine.parseCatalog(downloadRes.data, effectiveFormat, document.retailerId);
+      parseRes = await CatalogParserEngine.parseCatalog(downloadRes.data, effectiveFormat, document.retailerId, resolvedUrl);
     }
 
     // 2b. Fallback automat pe pagina web a retailerului când catalogul lipsește, dă eroare sau nu are oferte/produse
@@ -221,7 +221,7 @@ export class CatalogStagingManager {
         });
         if (!webRes.ok || !webRes.data) continue;
 
-        const webParse = await CatalogParserEngine.parseCatalog(webRes.data, 'html', document.retailerId);
+        const webParse = await CatalogParserEngine.parseCatalog(webRes.data, 'html', document.retailerId, webRes.finalUrl || webUrl);
         if (webParse.offers.length > 0) {
           downloadRes = webRes;
           parseRes = webParse;
@@ -259,7 +259,7 @@ export class CatalogStagingManager {
           sha256: crypto.createHash('sha256').update(buf).digest('hex'),
           fileSizeBytes: buf.length
         };
-        parseRes = await CatalogParserEngine.parseCatalog(downloadRes.data, document.format, document.retailerId);
+        parseRes = await CatalogParserEngine.parseCatalog(buf, document.format, document.retailerId, resolvedUrl);
       }
     }
 
@@ -298,7 +298,8 @@ export class CatalogStagingManager {
       parseRes = await CatalogParserEngine.parseCatalog(
         downloadRes.data,
         effectiveFormat,
-        document.retailerId
+        document.retailerId,
+        resolvedUrl
       );
     }
 
@@ -468,6 +469,7 @@ export class CatalogStagingManager {
         loyaltyCardName: raw.loyaltyCardName,
         validFrom: raw.validFrom || document.validFrom,
         validUntil: raw.validUntil || document.validUntil,
+        imageUrl: raw.imageUrl || undefined,
         matchedProductId,
         matchedProductName,
         matchConfidence: matchResult.confidence,
@@ -866,6 +868,10 @@ export class CatalogStagingManager {
       const persistedMatch = productsForMatching.find(product => product.id === item.matchedProductId);
       if (persistedMatch) {
         item.matchedProductName = persistedMatch.name;
+        if (!persistedMatch.imageUrl && item.imageUrl) {
+          persistedMatch.imageUrl = item.imageUrl;
+          StorageService.addCustomProduct({ ...persistedMatch, imageUrl: item.imageUrl });
+        }
       } else {
         const matchResult = ProductMatcher.matchProduct({
           rawName: item.rawTitle,
@@ -879,6 +885,10 @@ export class CatalogStagingManager {
         item.matchedProductName = matchResult.matchedProduct?.name;
         if (matchResult.matchedProduct) {
           item.matchConfidence = matchResult.confidence;
+          if (!matchResult.matchedProduct.imageUrl && item.imageUrl) {
+            matchResult.matchedProduct.imageUrl = item.imageUrl;
+            StorageService.addCustomProduct({ ...matchResult.matchedProduct, imageUrl: item.imageUrl });
+          }
         }
       }
 

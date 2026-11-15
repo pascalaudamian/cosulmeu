@@ -379,7 +379,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           ) : (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {storeComparisons.slice(0, 4).map(comp => (
+                {Array.from(new Map(storeComparisons.map(c => [c.store.id, c])).values()).slice(0, 4).map(comp => (
                   <button
                     type="button"
                     key={comp.store.id}

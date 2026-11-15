@@ -412,6 +412,7 @@ export class DatabaseService {
           );
 
           ALTER TABLE stores ADD COLUMN IF NOT EXISTS official_url TEXT;
+          ALTER TABLE catalog_extracted_offers ADD COLUMN IF NOT EXISTS image_url TEXT;
           ALTER TABLE product_offers ADD COLUMN IF NOT EXISTS freshness_score NUMERIC(5,2);
           ALTER TABLE product_offers ADD COLUMN IF NOT EXISTS quality_score NUMERIC(5,2);
           ALTER TABLE product_offers ADD COLUMN IF NOT EXISTS freshness_status VARCHAR(32) DEFAULT 'very_recent';
@@ -686,13 +687,19 @@ export class DatabaseService {
     };
 
     const mergeWithFallbackStores = (rawStores: Store[]): Store[] => {
-      const uniqueById = new Map<string, Store>();
+      const uniqueByKey = new Map<string, Store>();
       for (const store of rawStores) {
-        if (!store?.id || uniqueById.has(store.id)) continue;
-        uniqueById.set(store.id, store);
+        if (!store?.id || store.id === 'validation-only-retailer' || store.slug === 'validation-only-retailer') {
+          continue;
+        }
+        const key = normalizeStoreKey(store.slug || store.id) || store.id.toLowerCase();
+        const existing = uniqueByKey.get(key);
+        if (!existing || (existing.id !== key && store.id === key)) {
+          uniqueByKey.set(key, store);
+        }
       }
 
-      const deduplicated = Array.from(uniqueById.values());
+      const deduplicated = Array.from(uniqueByKey.values());
       const existingIds = new Set(deduplicated.map(s => s.id.toLowerCase()));
       const existingSlugs = new Set(deduplicated.map(s => (s.slug || s.id).toLowerCase()));
       const existingKeys = new Set(
@@ -1513,15 +1520,16 @@ export class DatabaseService {
             raw_category, normal_price, promo_price, loyalty_price, effective_price,
             currency, package_quantity, package_unit, unit_price, unit_price_measure,
             is_promo, promo_details, loyalty_card_required, loyalty_card_name,
-            valid_from, valid_until, matched_product_id, match_confidence, match_method,
+            valid_from, valid_until, image_url, matched_product_id, match_confidence, match_method,
             staging_status, validation_errors, reviewed_by, reviewed_at, rejection_reason,
             created_at, updated_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
           ON CONFLICT (id) DO UPDATE SET
             normal_price = EXCLUDED.normal_price,
             promo_price = EXCLUDED.promo_price,
             loyalty_price = EXCLUDED.loyalty_price,
             effective_price = EXCLUDED.effective_price,
+            image_url = COALESCE(EXCLUDED.image_url, catalog_extracted_offers.image_url),
             staging_status = EXCLUDED.staging_status,
             matched_product_id = EXCLUDED.matched_product_id,
             match_confidence = EXCLUDED.match_confidence,
@@ -1552,6 +1560,7 @@ export class DatabaseService {
             o.loyaltyCardName || null,
             o.validFrom || null,
             o.validUntil || null,
+            o.imageUrl || null,
             o.matchedProductId || null,
             o.matchConfidence || 0,
             o.matchMethod || 'unmatched',
@@ -1607,6 +1616,7 @@ export class DatabaseService {
         loyaltyCardName: r.loyalty_card_name || undefined,
         validFrom: toIso(r.valid_from)?.split('T')[0],
         validUntil: toIso(r.valid_until)?.split('T')[0],
+        imageUrl: r.image_url || undefined,
         matchedProductId: r.matched_product_id || undefined,
         matchConfidence: parseFloat(r.match_confidence || '0'),
         matchMethod: r.match_method || 'unmatched',
@@ -1744,6 +1754,7 @@ export class DatabaseService {
         packageUnit: r.package_unit,
         normalizedUnit: r.normalized_unit,
         barcode: r.barcode || undefined,
+        imageUrl: r.image_url || undefined,
         baseReferencePrice: parseFloat(r.base_reference_price),
         isRomanianProduct: r.is_romanian_product
       }));
@@ -1810,6 +1821,7 @@ export class DatabaseService {
               packageUnit: r.package_unit,
               normalizedUnit: r.normalized_unit,
               barcode: r.barcode || undefined,
+              imageUrl: r.image_url || undefined,
               baseReferencePrice: parseFloat(r.base_reference_price),
               isRomanianProduct: r.is_romanian_product
             };
@@ -1841,6 +1853,14 @@ export class DatabaseService {
             canonicalProduct.barcode = item.rawBarcode.trim();
             await client.query('UPDATE products SET barcode = $1, updated_at = NOW() WHERE id = $2', [
               canonicalProduct.barcode,
+              canonicalProduct.id
+            ]);
+            updated = true;
+          }
+          if (!canonicalProduct.imageUrl && item.imageUrl) {
+            canonicalProduct.imageUrl = item.imageUrl;
+            await client.query('UPDATE products SET image_url = $1, updated_at = NOW() WHERE id = $2', [
+              item.imageUrl,
               canonicalProduct.id
             ]);
             updated = true;
@@ -1878,6 +1898,7 @@ export class DatabaseService {
             packageUnit: safeUnit as any,
             normalizedUnit: safeNormUnit as any,
             barcode: safeBarcode || undefined,
+            imageUrl: item.imageUrl || undefined,
             baseReferencePrice: item.normalPrice || item.effectivePrice,
             isRomanianProduct: true
           };
@@ -1933,11 +1954,21 @@ export class DatabaseService {
               packageUnit: existing.package_unit,
               normalizedUnit: existing.normalized_unit,
               barcode: existing.barcode || undefined,
+              imageUrl: existing.image_url || undefined,
               baseReferencePrice: parseFloat(existing.base_reference_price),
               isRomanianProduct: existing.is_romanian_product
             };
             stats.identifiedExistingCount++;
-            stats.unchangedProductsCount++;
+            if (!canonicalProduct.imageUrl && item.imageUrl) {
+              canonicalProduct.imageUrl = item.imageUrl;
+              await client.query('UPDATE products SET image_url = $1, updated_at = NOW() WHERE id = $2', [
+                item.imageUrl,
+                canonicalProduct.id
+              ]);
+              stats.updatedProductsCount++;
+            } else {
+              stats.unchangedProductsCount++;
+            }
             dbProducts.push(canonicalProduct);
           }
         }
@@ -3426,7 +3457,7 @@ export class DatabaseService {
         loyaltyCardName: r.loyalty_card_name || undefined,
         validFrom: toIso(r.valid_from)?.split('T')[0],
         validUntil: toIso(r.valid_until)?.split('T')[0],
-        imageUrl: r.canonical_image || undefined,
+        imageUrl: r.image_url || r.canonical_image || undefined,
         documentTitle: r.document_title || undefined,
         documentUrl: r.document_url || undefined,
         matchedProductId: r.matched_product_id || undefined,
@@ -4177,7 +4208,7 @@ export class DatabaseService {
       loyaltyCardName: r.loyalty_card_name || undefined,
       validFrom: toIso(r.valid_from)?.split('T')[0],
       validUntil: toIso(r.valid_until)?.split('T')[0],
-      imageUrl: r.canonical_image || undefined,
+      imageUrl: r.image_url || r.canonical_image || undefined,
       documentTitle: r.document_title || undefined,
       documentUrl: r.document_url || undefined,
       matchedProductId: r.matched_product_id || undefined,

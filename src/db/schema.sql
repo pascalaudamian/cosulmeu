@@ -469,6 +469,7 @@ CREATE TABLE IF NOT EXISTS catalog_extracted_offers (
     loyalty_card_name VARCHAR(64),
     valid_from DATE,
     valid_until DATE,
+    image_url TEXT,
     matched_product_id VARCHAR(64) REFERENCES products(id) ON DELETE SET NULL,
     match_confidence NUMERIC(4,3) NOT NULL DEFAULT 0,
     match_method VARCHAR(32) NOT NULL DEFAULT 'unmatched',

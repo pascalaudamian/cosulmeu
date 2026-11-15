@@ -322,7 +322,14 @@ export class StorageService {
 
   static addCustomProduct(product: Product): void {
     const list = this.getCustomProducts();
-    safeSetItem(KEYS.CUSTOM_PRODUCTS, JSON.stringify([...list, product]));
+    const idx = list.findIndex(p => p.id === product.id);
+    if (idx !== -1) {
+      const updated = [...list];
+      updated[idx] = { ...updated[idx], ...product };
+      safeSetItem(KEYS.CUSTOM_PRODUCTS, JSON.stringify(updated));
+    } else {
+      safeSetItem(KEYS.CUSTOM_PRODUCTS, JSON.stringify([...list, product]));
+    }
   }
 
   static getDeletedProductIds(): string[] {
@@ -370,7 +377,17 @@ export class StorageService {
   static getAllProducts(): Product[] {
     const deleted = new Set(this.getDeletedProductIds());
     const custom = this.getCustomProducts();
-    return [...PRODUCTS, ...custom].filter(p => !deleted.has(p.id));
+    const byId = new Map<string, Product>();
+    for (const p of PRODUCTS) {
+      if (!deleted.has(p.id)) byId.set(p.id, p);
+    }
+    for (const c of custom) {
+      if (c?.id && !deleted.has(c.id)) {
+        const existing = byId.get(c.id);
+        byId.set(c.id, existing ? { ...existing, ...c } : c);
+      }
+    }
+    return Array.from(byId.values());
   }
 
   static getProducts(): Product[] {

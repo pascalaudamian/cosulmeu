@@ -141,11 +141,24 @@ export class PriceComparisonService {
 
     const allProducts = customProducts ?? StorageService.getAllProducts();
     const allOffers = customOffers ?? StorageService.getProductOffers();
-    const allStores = customStores ?? STORES;
+    const rawStores = customStores ?? STORES;
     const userProfile = StorageService.getUserProfile();
 
     const normalizeStoreKey = (val: string) =>
       (val || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+
+    const canonicalStoresMap = new Map<string, Store>();
+    for (const st of rawStores) {
+      if (!st?.id || st.id === 'validation-only-retailer' || st.slug === 'validation-only-retailer') {
+        continue;
+      }
+      const key = normalizeStoreKey(st.slug || st.id) || st.id;
+      const existing = canonicalStoresMap.get(key);
+      if (!existing || (existing.id !== key && st.id === key)) {
+        canonicalStoresMap.set(key, st);
+      }
+    }
+    const allStores = Array.from(canonicalStoresMap.values());
 
     const useLoyaltyCards =
       options?.useLoyaltyCards !== undefined

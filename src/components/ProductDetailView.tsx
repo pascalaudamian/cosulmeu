@@ -68,11 +68,13 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
   // Copiere link
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [imageFailed, setImageFailed] = useState<boolean>(false);
 
   // Fetch product data
   useEffect(() => {
     let isMounted = true;
     setLoading(true);
+    setImageFailed(false);
 
     // Call API with fallback to local calculation
     fetch(`/api/products/${productId}`)
@@ -395,11 +397,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             )}
 
             <div className="w-40 h-40 flex items-center justify-center text-slate-400">
-              {product.imageUrl ? (
+              {product.imageUrl && !imageFailed ? (
                 <img
                   src={product.imageUrl}
                   alt={product.name}
-                  className="max-h-full max-w-full object-contain"
+                  className="max-h-full max-w-full object-contain rounded-xl"
+                  onError={() => setImageFailed(true)}
                 />
               ) : (
                 <div className="w-32 h-32 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 font-extrabold text-3xl">

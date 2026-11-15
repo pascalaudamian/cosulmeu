@@ -116,6 +116,8 @@ export interface RetailerConfig {
   type?: Store['type'];
   brandColor?: string;
   accentColor?: string;
+  officialUrl?: string;
+  websiteUrl?: string;
 }
 
 const ALL_8_RETAILERS: RetailerConfig[] = [
@@ -124,9 +126,9 @@ const ALL_8_RETAILERS: RetailerConfig[] = [
   { id: 'carrefour', name: 'Carrefour România', format: 'HTML Store', defaultStatus: 'ACTIVE', color: 'sky' },
   { id: 'penny', name: 'Penny România', format: 'HTML & Card', defaultStatus: 'ACTIVE', color: 'amber' },
   { id: 'auchan', name: 'Auchan România', format: 'Online Store & VTEX', defaultStatus: 'ACTIVE', color: 'rose' },
-  { id: 'profi', name: 'Profi Rom Food', format: 'PDF / WAF', defaultStatus: 'BLOCKED', color: 'emerald' },
+  { id: 'profi', name: 'Profi Rom Food', format: 'HTML & Web Fallback', defaultStatus: 'ACTIVE', color: 'emerald' },
   { id: 'mega-image', name: 'Mega Image', format: 'Publitas Spreads', defaultStatus: 'ACTIVE', color: 'red' },
-  { id: 'metro', name: 'Metro Cash & Carry', format: 'PDF / Akamai', defaultStatus: 'BLOCKED', color: 'yellow' }
+  { id: 'metro', name: 'Metro Cash & Carry', format: 'HTML & Web Fallback', defaultStatus: 'ACTIVE', color: 'yellow' }
 ];
 
 export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll }) => {
@@ -258,7 +260,6 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
   // Execution states
   const [isRunningActive, setIsRunningActive] = useState<boolean>(false);
-  const [isLoadingImportTargets, setIsLoadingImportTargets] = useState<boolean>(false);
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
   const [isCleaningUnpublished, setIsCleaningUnpublished] = useState<boolean>(false);
   const [publishErrorMessage, setPublishErrorMessage] = useState<string | null>(null);
@@ -358,82 +359,6 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       }
     } catch {}
   }, [fetchWithAuth]);
-
-  const openActiveImportConfirm = async () => {
-    setIsLoadingImportTargets(true);
-    try {
-      const [retailersResponse, sourcesResponse] = await Promise.all([
-        fetchWithAuth('/api/admin/retailers'),
-        fetchWithAuth('/api/admin/catalog-importer/sources')
-      ]);
-
-      if (!retailersResponse.ok || !sourcesResponse.ok) {
-        throw new Error('Nu s-a putut verifica lista actuală de retaileri și surse oficiale.');
-      }
-
-      const [retailersData, sourcesData] = await Promise.all([
-        retailersResponse.json(),
-        sourcesResponse.json()
-      ]);
-      const latestRetailers = Array.isArray(retailersData.retailers)
-        ? retailersData.retailers as RetailerConfig[]
-        : [];
-      const latestSources = Array.isArray(sourcesData.sources)
-        ? sourcesData.sources as CatalogSource[]
-        : [];
-
-      if (latestRetailers.length > 0) setRetailersList(latestRetailers);
-      setSources(latestSources);
-
-      const retailerById = new Map<string, RetailerConfig>();
-      for (const retailer of retailersList) retailerById.set(retailer.id, retailer);
-      for (const retailer of latestRetailers) retailerById.set(retailer.id, retailer);
-
-      const activeSourcesByRetailer = new Map<string, CatalogSource[]>();
-      const activeSources = latestSources.filter(source => source.status === 'active');
-      for (const source of activeSources) {
-        const retailerSources = activeSourcesByRetailer.get(source.retailerId) || [];
-        retailerSources.push(source);
-        activeSourcesByRetailer.set(source.retailerId, retailerSources);
-      }
-
-      const importTargets: RetailerConfig[] = Array.from(activeSourcesByRetailer.entries()).map(
-        ([retailerId, retailerSources]) => {
-          const retailer = retailerById.get(retailerId);
-          const sourceDetails = retailerSources.map(source => {
-            const sourceName = source.name?.trim();
-            const sourceFormat = source.format?.toUpperCase() || 'FORMAT NEPRECIZAT';
-            return sourceName ? `${sourceName} (${sourceFormat})` : sourceFormat;
-          });
-
-          return {
-            id: retailerId,
-            name: retailer?.name || retailerSources[0]?.retailerName || retailerId,
-            format: sourceDetails.join('; '),
-            defaultStatus: 'ACTIVE',
-            color: retailer?.color || 'emerald'
-          };
-        }
-      );
-
-      setShowImportConfirmModal({
-        open: true,
-        title: 'Rulează Importurile Active',
-        description: activeSources.length > 0
-          ? `Se vor procesa ${activeSources.length} surse oficiale active pentru ${importTargets.length} retaileri. Sursele dezactivate sunt excluse.`
-          : 'Nu există surse oficiale active configurate. Sursele dezactivate nu vor fi procesate.',
-        retailers: importTargets,
-        actionType: 'active'
-      });
-    } catch (error) {
-      setActionMessage({
-        type: 'error',
-        text: error instanceof Error ? error.message : 'Nu s-au putut încărca sursele active.'
-      });
-    } finally {
-      setIsLoadingImportTargets(false);
-    }
-  };
 
   // Load Documents
   const loadDocuments = useCallback(async () => {
@@ -685,7 +610,6 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   // Safe Import Trigger via Confirmation Modal (Requirement 5)
   const handleConfirmRunImport = async () => {
     if (!showImportConfirmModal) return;
-    if (showImportConfirmModal.actionType === 'active' && showImportConfirmModal.retailers.length === 0) return;
     setIsRunningActive(true);
     const { actionType, targetId } = showImportConfirmModal;
     setShowImportConfirmModal(null);
@@ -702,18 +626,26 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       }
 
       if (res && res.ok) {
-        const json = await res.json();
-        setActionMessage({
-          type: 'success',
-          text: json.message || 'Importul a fost executat cu succes. Datele au fost încărcate în Staging Queue.'
-        });
+        const json = await res.json().catch(() => ({}));
+        const innerSuccess = json.success !== false && json.result?.success !== false;
+        if (!innerSuccess) {
+          const failureText = json.message || json.error || json.result?.error || 'Importul nu a putut extrage oferte nici din catalog, nici din pagina web.';
+          setActionMessage({ type: 'error', text: failureText });
+        } else {
+          setActionMessage({
+            type: 'success',
+            text: json.message || 'Importul a fost executat cu succes. Datele au fost încărcate în Staging Queue.'
+          });
+        }
       } else {
-        throw new Error('Importul a întâmpinat o problemă la procesare.');
+        const errJson = res ? await res.json().catch(() => ({})) : {};
+        throw new Error(errJson.error || errJson.message || 'Importul a întâmpinat o problemă la procesare.');
       }
     } catch (err: any) {
       setActionMessage({ type: 'error', text: err.message || 'Eroare la rularea importului.' });
     } finally {
       setIsRunningActive(false);
+      loadSources();
       loadDashboard();
       loadStaging();
       loadRunsAndErrors();
@@ -1310,11 +1242,19 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
               <div className="flex flex-wrap items-center gap-2 lg:self-center">
                 <button
-                  onClick={openActiveImportConfirm}
-                  disabled={isRunningActive || isLoadingImportTargets}
+                  onClick={() =>
+                    setShowImportConfirmModal({
+                      open: true,
+                      title: 'Rulează Importurile Active',
+                      description: 'Importul va descărca și sincroniza ofertele pentru Lidl, Kaufland, Carrefour, PENNY, Auchan și Mega Image.',
+                      retailers: ALL_8_RETAILERS.filter(r => r.defaultStatus === 'ACTIVE'),
+                      actionType: 'active'
+                    })
+                  }
+                  disabled={isRunningActive}
                   className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm hover:shadow flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
-                  {isRunningActive || isLoadingImportTargets ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                  {isRunningActive ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                   <span>Rulează Importurile Active</span>
                 </button>
 
@@ -1631,11 +1571,18 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 <span>Adaugă Retailer Nou</span>
               </button>
               <button
-                onClick={openActiveImportConfirm}
-                disabled={isRunningActive || isLoadingImportTargets}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                onClick={() => {
+                  setShowImportConfirmModal({
+                    open: true,
+                    title: 'Rulează Importurile Active',
+                    description: 'Sincronizare completă a retailerilor operaționali în Supabase PostgreSQL.',
+                    retailers: retailersList.filter(r => r.defaultStatus === 'ACTIVE'),
+                    actionType: 'active'
+                  });
+                }}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer"
               >
-                {isRunningActive || isLoadingImportTargets ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                <Play className="w-3.5 h-3.5 fill-current" />
                 <span>Rulează Toate Sursele Active</span>
               </button>
             </div>
@@ -1674,8 +1621,20 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                             {isBlocked ? 'BLOCKED (WAF/Bot Guard)' : 'ACTIV & OPERAȚIONAL'}
                           </span>
                         </div>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          Format: {retailer.format} • {retailerSources.length} surse configurate
+                        <p className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span>Format: {retailer.format} • {retailerSources.length} surse configurate</span>
+                          {(retailer.officialUrl || retailer.websiteUrl) && (
+                            <a
+                              href={retailer.officialUrl || retailer.websiteUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              className="text-emerald-600 hover:underline inline-flex items-center gap-0.5 truncate max-w-[260px]"
+                            >
+                              <span>{retailer.officialUrl || retailer.websiteUrl}</span>
+                              <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                            </a>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -1843,11 +1802,19 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
             <div className="flex flex-wrap items-center gap-2">
               <button
-                onClick={openActiveImportConfirm}
-                disabled={isRunningActive || isLoadingImportTargets}
+                onClick={() =>
+                  setShowImportConfirmModal({
+                    open: true,
+                    title: 'Rulează Importurile Active',
+                    description: 'Importul va descărca și sincroniza ofertele pentru toți retailerii activi (inclusiv fallback din pagina web oficială).',
+                    retailers: retailersList.filter(r => r.defaultStatus === 'ACTIVE'),
+                    actionType: 'active'
+                  })
+                }
+                disabled={isRunningActive}
                 className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
-                {isRunningActive || isLoadingImportTargets ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                {isRunningActive ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
                 <span>Rulează Importurile Active</span>
               </button>
             </div>

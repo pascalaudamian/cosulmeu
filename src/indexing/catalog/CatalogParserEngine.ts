@@ -63,38 +63,39 @@ export class CatalogParserEngine {
   static async parseCatalog(
     content: Buffer | string,
     format: CatalogFormat,
-    retailerId?: string
+    retailerId?: string,
+    baseUrl?: string
   ): Promise<ParseResult> {
     try {
       if (format === 'pdf') {
         const buffer = typeof content === 'string' ? Buffer.from(content) : content;
         const head = buffer.subarray(0, 512).toString('utf-8').trim().toLowerCase();
         if (!head.startsWith('%pdf') && (head.startsWith('<!doctype') || head.startsWith('<html') || head.includes('<body') || head.includes('<head'))) {
-          return CatalogParserEngine.parseCatalog(buffer.toString('utf-8'), 'html', retailerId);
+          return CatalogParserEngine.parseCatalog(buffer.toString('utf-8'), 'html', retailerId, baseUrl);
         }
         return await CatalogParserEngine.parsePdfCatalog(buffer);
       } else if (format === 'html') {
         const htmlText = typeof content === 'string' ? content : content.toString('utf-8');
         if (retailerId === 'carrefour') {
-          const res = CatalogParserEngine.parseCarrefourCatalog(htmlText);
-          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
+          const res = CatalogParserEngine.parseCarrefourCatalog(htmlText, baseUrl);
+          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId, baseUrl);
         } else if (retailerId === 'penny') {
-          const res = CatalogParserEngine.parsePennyCatalog(htmlText);
-          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
+          const res = CatalogParserEngine.parsePennyCatalog(htmlText, baseUrl);
+          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId, baseUrl);
         } else if (retailerId === 'mega-image') {
-          const res = CatalogParserEngine.parseMegaImageCatalog(htmlText);
-          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
+          const res = CatalogParserEngine.parseMegaImageCatalog(htmlText, baseUrl);
+          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId, baseUrl);
         } else if (retailerId === 'auchan') {
-          const res = CatalogParserEngine.parseAuchanOnlineStore(htmlText);
-          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
+          const res = CatalogParserEngine.parseAuchanOnlineStore(htmlText, baseUrl);
+          return res.offers.length > 0 ? res : CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId, baseUrl);
         }
-        return CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId);
+        return CatalogParserEngine.parseHtmlCatalog(htmlText, retailerId, baseUrl);
       } else if (format === 'csv') {
         const csvText = typeof content === 'string' ? content : content.toString('utf-8');
-        return CatalogParserEngine.parseCsvCatalog(csvText);
+        return CatalogParserEngine.parseCsvCatalog(csvText, baseUrl);
       } else if (format === 'xml') {
         const xmlText = typeof content === 'string' ? content : content.toString('utf-8');
-        return CatalogParserEngine.parseXmlCatalog(xmlText);
+        return CatalogParserEngine.parseXmlCatalog(xmlText, baseUrl);
       } else {
         return {
           success: false,
@@ -124,26 +125,108 @@ export class CatalogParserEngine {
     return Number.isFinite(val) ? val : 0;
   }
 
-  private static extractOffersFromJsonLdNode(node: any, offers: RawParsedOffer[]): void {
+  private static resolveImageUrl(rawUrl?: unknown, baseUrl?: string): string | undefined {
+    let candidate = '';
+    if (Array.isArray(rawUrl)) {
+      for (const item of rawUrl) {
+        const resolved = this.resolveImageUrl(item, baseUrl);
+        if (resolved) return resolved;
+      }
+      return undefined;
+    }
+    if (rawUrl && typeof rawUrl === 'object') {
+      const obj = rawUrl as Record<string, unknown>;
+      candidate = String(obj.url || obj.src || obj.imageUrl || obj.contentUrl || '').trim();
+    } else if (typeof rawUrl === 'string') {
+      candidate = rawUrl.trim();
+    }
+
+    if (!candidate) return undefined;
+    const lower = candidate.toLowerCase();
+    if (
+      lower.startsWith('data:image/svg+xml') ||
+      lower.includes('1x1.') ||
+      lower.includes('pixel.') ||
+      lower.includes('spacer') ||
+      lower.includes('blank.gif')
+    ) {
+      return undefined;
+    }
+
+    try {
+      if (candidate.startsWith('//')) {
+        candidate = `https:${candidate}`;
+      }
+      const resolved = baseUrl ? new URL(candidate, baseUrl) : new URL(candidate);
+      if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+        return undefined;
+      }
+      return resolved.href;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private static extractCardImageUrl(
+    $: cheerio.CheerioAPI,
+    card: cheerio.Cheerio<any>,
+    baseUrl?: string
+  ): string | undefined {
+    const imgs = card.find('img');
+    for (let i = 0; i < imgs.length; i++) {
+      const img = imgs.eq(i);
+      const attrs = [
+        img.attr('data-src'),
+        img.attr('data-lazy-src'),
+        img.attr('data-original'),
+        img.attr('data-image'),
+        img.attr('src')
+      ];
+      for (const attr of attrs) {
+        const resolved = this.resolveImageUrl(attr, baseUrl);
+        if (resolved) return resolved;
+      }
+      const srcset = img.attr('data-srcset') || img.attr('srcset');
+      if (srcset) {
+        const firstSrc = srcset.split(',')[0]?.trim().split(/\s+/)[0];
+        const resolved = this.resolveImageUrl(firstSrc, baseUrl);
+        if (resolved) return resolved;
+      }
+    }
+
+    const sources = card.find('picture source');
+    for (let i = 0; i < sources.length; i++) {
+      const srcset = sources.eq(i).attr('data-srcset') || sources.eq(i).attr('srcset');
+      if (srcset) {
+        const firstSrc = srcset.split(',')[0]?.trim().split(/\s+/)[0];
+        const resolved = this.resolveImageUrl(firstSrc, baseUrl);
+        if (resolved) return resolved;
+      }
+    }
+
+    return undefined;
+  }
+
+  private static extractOffersFromJsonLdNode(node: any, offers: RawParsedOffer[], baseUrl?: string): void {
     if (!node || typeof node !== 'object') return;
     if (Array.isArray(node)) {
       for (const child of node) {
-        this.extractOffersFromJsonLdNode(child, offers);
+        this.extractOffersFromJsonLdNode(child, offers, baseUrl);
       }
       return;
     }
 
     if (Array.isArray(node['@graph'])) {
-      this.extractOffersFromJsonLdNode(node['@graph'], offers);
+      this.extractOffersFromJsonLdNode(node['@graph'], offers, baseUrl);
     }
 
     if (node.mainEntity) {
-      this.extractOffersFromJsonLdNode(node.mainEntity, offers);
+      this.extractOffersFromJsonLdNode(node.mainEntity, offers, baseUrl);
     }
 
     if (Array.isArray(node.itemListElement)) {
       for (const listEl of node.itemListElement) {
-        this.extractOffersFromJsonLdNode(listEl?.item || listEl, offers);
+        this.extractOffersFromJsonLdNode(listEl?.item || listEl, offers, baseUrl);
       }
     }
 
@@ -168,8 +251,7 @@ export class CatalogParserEngine {
         const listPrice = this.parseNumericPrice(offerObj.highPrice ?? offerObj.priceSpecification?.price);
         const normalPrice = listPrice > price ? listPrice : price;
         const promoPrice = listPrice > price ? price : undefined;
-        const imageVal = Array.isArray(node.image) ? node.image[0] : node.image;
-        const imageUrl = typeof imageVal === 'string' ? imageVal : imageVal?.url;
+        const imageUrl = this.resolveImageUrl(node.image, baseUrl);
 
         let packageQuantity: number | undefined;
         let packageUnit: string | undefined;
@@ -203,7 +285,7 @@ export class CatalogParserEngine {
   /**
    * Parsează cataloage HTML (inclusiv suport avansat pentru structura Lidl România și pagini web retaileri)
    */
-  static parseHtmlCatalog(html: string, retailerId?: string): ParseResult {
+  static parseHtmlCatalog(html: string, retailerId?: string, baseUrl?: string): ParseResult {
     const $ = cheerio.load(html);
     const offers: RawParsedOffer[] = [];
     const products: RawCatalogProduct[] = [];
@@ -215,7 +297,7 @@ export class CatalogParserEngine {
         const text = $(el).html();
         if (!text) return;
         const data = JSON.parse(text);
-        this.extractOffersFromJsonLdNode(data, offers);
+        this.extractOffersFromJsonLdNode(data, offers, baseUrl);
       } catch {
         // Ignorăm blocurile JSON-LD invalide
       }
@@ -353,7 +435,7 @@ export class CatalogParserEngine {
             loyaltyCardName: isLidlPlus ? 'Lidl Plus' : undefined,
             validFrom,
             validUntil,
-            imageUrl: data.image || $(el).find('img').first().attr('src'),
+            imageUrl: this.resolveImageUrl(data.image, baseUrl) || this.extractCardImageUrl($, $(el), baseUrl),
             confidenceScore: 0.95
           });
         } catch (err: any) {
@@ -398,7 +480,7 @@ export class CatalogParserEngine {
         const promoPrice = !loyaltyPrice && normalPrice > effectivePrice ? effectivePrice : undefined;
         const brand = card.find('.brand, .manufacturer, [data-qa="product-brand"]').first().text().trim() || undefined;
         const barcode = card.attr('data-ean') || card.attr('data-sku') || undefined;
-        const imageUrl = card.find('img').first().attr('src') || card.find('img').first().attr('data-src') || undefined;
+        const imageUrl = this.extractCardImageUrl($, card, baseUrl);
 
         let packageQuantity: number | undefined;
         let packageUnit: string | undefined;
@@ -456,7 +538,7 @@ export class CatalogParserEngine {
           rawBarcode: data.gtin13 || data.gtin8 || data.sku,
           packageQuantity: packageMatch ? parseFloat(packageMatch[1].replace(',', '.')) : undefined,
           packageUnit: packageMatch?.[2]?.toLowerCase(),
-          imageUrl: data.image || $(el).find('img').first().attr('src'),
+          imageUrl: this.resolveImageUrl(data.image, baseUrl) || this.extractCardImageUrl($, $(el), baseUrl),
           confidenceScore: rawAttr ? 0.8 : 0.55
         });
       });
@@ -720,7 +802,7 @@ export class CatalogParserEngine {
   /**
    * Parsează catalogul oficial Carrefour Market & Promoții Săptămânale
    */
-  static parseCarrefourCatalog(html: string): ParseResult {
+  static parseCarrefourCatalog(html: string, baseUrl?: string): ParseResult {
     const $ = cheerio.load(html);
     const offers: RawParsedOffer[] = [];
     const warnings: string[] = [];
@@ -784,6 +866,13 @@ export class CatalogParserEngine {
           }
         }
 
+        const cardContainer = $(el).closest('.product_card, .product-card, .product_wrapper, article, li').first();
+        const imageUrl =
+          this.extractCardImageUrl($, $(el), baseUrl || 'https://carrefour.ro') ||
+          (cardContainer.length > 0
+            ? this.extractCardImageUrl($, cardContainer, baseUrl || 'https://carrefour.ro')
+            : undefined);
+
         offers.push({
           rawTitle: title,
           normalPrice: normalPrice || effectivePrice,
@@ -803,6 +892,7 @@ export class CatalogParserEngine {
             : (discountPercentage ? `Reducere promoțională -${discountPercentage}%` : undefined),
           loyaltyCardName: isLoyalty ? 'Act For Good' : undefined,
           loyaltyCardRequired: isLoyalty,
+          imageUrl,
           storeOrRegion: 'Carrefour Market',
           targetAudience: 'general',
           confidenceScore: 0.95
@@ -824,7 +914,7 @@ export class CatalogParserEngine {
   /**
    * Parsează catalogul de oferte săptămânale oficiale PENNY România
    */
-  static parsePennyCatalog(html: string): ParseResult {
+  static parsePennyCatalog(html: string, baseUrl?: string): ParseResult {
     const $ = cheerio.load(html);
     const offers: RawParsedOffer[] = [];
     const warnings: string[] = [];
@@ -833,6 +923,7 @@ export class CatalogParserEngine {
       try {
         const title = $(el).find('[data-test="product-title"]').text().trim();
         if (!title) return;
+        const imageUrl = this.extractCardImageUrl($, $(el), baseUrl || 'https://www.penny.ro');
 
         const pieceDesc = $(el).find('[data-test="product-information-piece-description"]').text().trim();
         const validityText = $(el).find('[data-test="product-price-validity"]').text().trim();
@@ -915,6 +1006,7 @@ export class CatalogParserEngine {
           loyaltyCardRequired: Boolean(loyaltyPrice),
           validFrom,
           validUntil,
+          imageUrl,
           storeOrRegion: 'PENNY România Național',
           targetAudience: 'general',
           confidenceScore: 0.98
@@ -936,7 +1028,7 @@ export class CatalogParserEngine {
   /**
    * Parsează revista promoțională și catalogul lunar Mega Image (Publitas spreads.json)
    */
-  static parseMegaImageCatalog(content: string): ParseResult {
+  static parseMegaImageCatalog(content: string, baseUrl?: string): ParseResult {
     const offers: RawParsedOffer[] = [];
     const warnings: string[] = [];
 
@@ -956,6 +1048,10 @@ export class CatalogParserEngine {
         for (const spread of spreads) {
           for (const page of (spread.pages || [])) {
             if (!page.text) continue;
+            const pageImageUrl = this.resolveImageUrl(
+              page.images?.[0]?.url || page.image || page.thumbnailUrl || spread.images?.[0]?.url,
+              baseUrl || 'https://www.mega-image.ro'
+            );
             const text: string = page.text;
             const normalizedText = text.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
             const lines = normalizedText.split('\n').map((l: string) => l.trim()).filter(Boolean);
@@ -1048,6 +1144,7 @@ export class CatalogParserEngine {
                     loyaltyCardRequired: hasLoyalty,
                     validFrom,
                     validUntil,
+                    imageUrl: pageImageUrl,
                     storeOrRegion: 'Mega Image România',
                     targetAudience: 'general',
                     confidenceScore: 0.92
@@ -1058,7 +1155,7 @@ export class CatalogParserEngine {
           }
         }
       } else {
-        return this.parseHtmlCatalog(content, 'mega-image');
+        return this.parseHtmlCatalog(content, 'mega-image', baseUrl);
       }
     } catch (err: any) {
       warnings.push(`Eroare la parsarea Publitas Mega Image: ${err.message}`);
@@ -1173,7 +1270,7 @@ export class CatalogParserEngine {
               }
 
               const isPromo = isMyClub || Boolean(effectivePrice < normalPrice);
-              const imageUrl = sku.images?.[0]?.imageUrl;
+              const imageUrl = this.resolveImageUrl(sku.images?.[0]?.imageUrl, pageUrl || 'https://www.auchan.ro');
               const productUrl = p.link ? (p.link.startsWith('http') ? p.link : `https://www.auchan.ro${p.link}`) : undefined;
 
               offers.push({
@@ -1254,7 +1351,9 @@ export class CatalogParserEngine {
               if (sku.images && sku.images.length > 0) {
                 const imgRef = sku.images[0];
                 const img = (imgRef.id && state[imgRef.id]) ? state[imgRef.id] : imgRef;
-                if (img && img.imageUrl) imageUrl = img.imageUrl;
+                if (img && img.imageUrl) {
+                  imageUrl = this.resolveImageUrl(img.imageUrl, pageUrl || 'https://www.auchan.ro');
+                }
               }
 
               let isMyClub = false;
@@ -1383,7 +1482,7 @@ export class CatalogParserEngine {
                       priceType: 'standard',
                       isPromo: false,
                       validUntil: offerObj?.priceValidUntil ? offerObj.priceValidUntil.split('T')[0] : undefined,
-                      imageUrl: typeof item.image === 'string' ? item.image : (Array.isArray(item.image) ? item.image[0] : undefined),
+                      imageUrl: this.resolveImageUrl(item.image, pageUrl || 'https://www.auchan.ro'),
                       catalogUrl: item['@id'] || pageUrl,
                       sourcePageUrl: pageUrl || 'https://www.auchan.ro/',
                       storeOrRegion: 'Magazin Online Național Auchan România',
@@ -1425,7 +1524,7 @@ export class CatalogParserEngine {
   /**
    * Parsează cataloage în format CSV
    */
-  static parseCsvCatalog(csvText: string): ParseResult {
+  static parseCsvCatalog(csvText: string, baseUrl?: string): ParseResult {
     const lines = csvText.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length < 2) {
       return { success: false, offers: [], totalExtracted: 0, format: 'csv', error: 'Fișier CSV fără rânduri de date.' };
@@ -1436,6 +1535,7 @@ export class CatalogParserEngine {
     const priceIdx = header.findIndex(h => h.includes('pret') || h.includes('price') || h.includes('valoare'));
     const barcodeIdx = header.findIndex(h => h.includes('barcode') || h.includes('ean') || h.includes('gtin') || h.includes('cod'));
     const brandIdx = header.findIndex(h => h.includes('brand') || h.includes('marca'));
+    const imageIdx = header.findIndex(h => h.includes('image') || h.includes('imagine') || h.includes('img') || h.includes('poza') || h.includes('photo'));
 
     if (nameIdx === -1 || priceIdx === -1) {
       return { success: false, offers: [], totalExtracted: 0, format: 'csv', error: 'Coloanele "denumire" și "pret" nu au fost identificate în antetul CSV.' };
@@ -1454,6 +1554,7 @@ export class CatalogParserEngine {
           rawTitle: title,
           rawBrand: brandIdx !== -1 ? cols[brandIdx] : undefined,
           rawBarcode: barcodeIdx !== -1 ? cols[barcodeIdx] : undefined,
+          imageUrl: imageIdx !== -1 ? this.resolveImageUrl(cols[imageIdx], baseUrl) : undefined,
           normalPrice: price,
           effectivePrice: price,
           currency: 'RON',
@@ -1474,7 +1575,7 @@ export class CatalogParserEngine {
   /**
    * Parsează cataloage în format XML
    */
-  static parseXmlCatalog(xmlText: string): ParseResult {
+  static parseXmlCatalog(xmlText: string, baseUrl?: string): ParseResult {
     const $ = cheerio.load(xmlText, { xmlMode: true });
     const offers: RawParsedOffer[] = [];
 
@@ -1484,12 +1585,15 @@ export class CatalogParserEngine {
       const price = parseFloat(rawPrice);
       const barcode = $(el).find('barcode, ean, gtin').first().text().trim();
       const brand = $(el).find('brand, marca').first().text().trim();
+      const rawImage = $(el).find('image, image_url, imageUrl, img, imagine, picture').first().text().trim();
+      const imageUrl = this.resolveImageUrl(rawImage, baseUrl);
 
       if (title && !isNaN(price) && price > 0) {
         offers.push({
           rawTitle: title,
           rawBrand: brand || undefined,
           rawBarcode: barcode || undefined,
+          imageUrl,
           normalPrice: price,
           effectivePrice: price,
           currency: 'RON',

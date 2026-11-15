@@ -22,6 +22,8 @@ interface AdminRetailerRecord {
   type?: RetailerStoreType;
   color?: string;
   brandColor?: string;
+  officialUrl?: string;
+  websiteUrl?: string;
 }
 
 interface AdminAddRetailerModalProps {
@@ -60,6 +62,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
   const [storeType, setStoreType] = useState<'supermarket' | 'hypermarket' | 'discounter' | 'proximity'>('supermarket');
   const [defaultStatus, setDefaultStatus] = useState<'ACTIVE' | 'BLOCKED'>('ACTIVE');
   const [color, setColor] = useState<string>('emerald');
+  const [officialUrl, setOfficialUrl] = useState<string>('');
 
   // Initial source config
   const [hasInitialSource, setHasInitialSource] = useState<boolean>(true);
@@ -82,6 +85,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
       setChain(retailer.chain || '');
       setStoreType(retailer.type || 'supermarket');
       setColor(COLOR_OPTIONS.some(option => option.id === normalizedColor) ? normalizedColor : 'emerald');
+      setOfficialUrl(retailer.officialUrl || retailer.websiteUrl || '');
       setHasInitialSource(false);
     } else {
       setName('');
@@ -92,6 +96,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
       setStoreType('supermarket');
       setDefaultStatus('ACTIVE');
       setColor('emerald');
+      setOfficialUrl('');
       setHasInitialSource(true);
       setSourceName('');
       setCatalogUrl('');
@@ -130,6 +135,15 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
       return;
     }
 
+    if (officialUrl.trim()) {
+      try {
+        new URL(officialUrl.trim());
+      } catch {
+        setErrorMessage('Adresa URL a site-ului oficial nu este validă.');
+        return;
+      }
+    }
+
     if (!retailer && hasInitialSource && catalogUrl.trim()) {
       try {
         new URL(catalogUrl.trim());
@@ -148,7 +162,8 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             name: name.trim(),
             chain: chain.trim() || name.trim(),
             storeType,
-            color
+            color,
+            officialUrl: officialUrl.trim() || ''
           }
         : {
             id: id.trim().toLowerCase(),
@@ -158,6 +173,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             storeType,
             defaultStatus,
             color,
+            officialUrl: officialUrl.trim() || undefined,
             catalogUrl: hasInitialSource ? catalogUrl.trim() : undefined,
             sourceName: hasInitialSource ? (sourceName.trim() || `Catalog ${name.trim()}`) : undefined,
             sourceFormat
@@ -295,6 +311,25 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                 <option value="proximity">Proximitate / Magazin local</option>
               </select>
             </div>
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">
+              Website Oficial / Pagină Fallback Web
+            </label>
+            <div className="relative">
+              <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="url"
+                value={officialUrl}
+                onChange={e => setOfficialUrl(e.target.value)}
+                placeholder="https://www.retailer.ro/oferte"
+                className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+              />
+            </div>
+            <p className="text-[10px] text-slate-400 mt-1">
+              Utilizat automat pentru importul din pagina web atunci când revista săptămânală sau catalogul PDF nu este disponibil.
+            </p>
           </div>
 
           <div>

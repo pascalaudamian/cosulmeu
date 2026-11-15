@@ -29,8 +29,22 @@ export class OptimizationService {
       };
     }
 
+    const normalizeStoreKey = (val: string) =>
+      (val || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+
     const allProducts = customProducts ?? StorageService.getAllProducts();
-    const allStores = customStores ?? STORES;
+    const canonicalStoresMap = new Map<string, Store>();
+    for (const st of (customStores ?? STORES)) {
+      if (!st?.id || st.id === 'validation-only-retailer' || st.slug === 'validation-only-retailer') {
+        continue;
+      }
+      const key = normalizeStoreKey(st.slug || st.id) || st.id;
+      const existing = canonicalStoresMap.get(key);
+      if (!existing || (existing.id !== key && st.id === key)) {
+        canonicalStoresMap.set(key, st);
+      }
+    }
+    const allStores = Array.from(canonicalStoresMap.values());
     const comparisons = PriceComparisonService.compareBasketAcrossStores(
       items,
       undefined,
@@ -40,9 +54,6 @@ export class OptimizationService {
     );
     const singleStoreWinner = comparisons[0] || null;
     const singleWinnerTotal = singleStoreWinner ? singleStoreWinner.grandTotal : 0;
-
-    const normalizeStoreKey = (val: string) =>
-      (val || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
 
     // Map each item to its absolute lowest available price store
     const itemAssignments: {

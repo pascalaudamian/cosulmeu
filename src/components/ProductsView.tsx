@@ -80,6 +80,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
 
   const [categories, setCategories] = useState<any[]>(CATEGORIES_TAXONOMY);
   const [addedItemName, setAddedItemName] = useState<string | null>(null);
+  const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
 
   // Store lookup map
   const storeMap = useMemo(() => new Map<string, StoreType>(STORES.map(s => [s.id, s])), []);
@@ -652,12 +653,20 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
 
                   {/* Imagine Produs */}
                   <div className="h-32 w-full bg-slate-50/80 rounded-2xl flex items-center justify-center p-3 mb-3 group-hover:scale-105 transition-transform">
-                    {product.imageUrl ? (
+                    {product.imageUrl && !failedImageIds.has(product.id) ? (
                       <img
                         src={product.imageUrl}
                         alt={product.name}
-                        className="max-h-full max-w-full object-contain"
+                        className="max-h-full max-w-full object-contain rounded-lg"
                         loading="lazy"
+                        onError={() => {
+                          setFailedImageIds(prev => {
+                            if (prev.has(product.id)) return prev;
+                            const next = new Set(prev);
+                            next.add(product.id);
+                            return next;
+                          });
+                        }}
                       />
                     ) : (
                       <div className="w-16 h-16 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-700 font-extrabold text-2xl">

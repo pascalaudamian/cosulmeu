@@ -347,10 +347,44 @@ async function loadPublicCatalog(productIds: string[]): Promise<{
   throwIfError(productsResult.error, 'Nu am putut prelua produsele din catalog');
   throwIfError(offersResult.error, 'Nu am putut prelua ofertele curente');
   throwIfError(storesResult.error, 'Nu am putut prelua magazinele');
+
+  const normalizeStoreKey = (value: string): string =>
+    (value || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+
+  const storesByKey = new Map<string, Store>();
+  for (const row of (storesResult.data || [])) {
+    const mapped = mapStore(row);
+    if (!mapped?.id || mapped.id === 'validation-only-retailer' || mapped.slug === 'validation-only-retailer') {
+      continue;
+    }
+    const key = normalizeStoreKey(mapped.slug || mapped.id);
+    if (!key) continue;
+    const existing = storesByKey.get(key);
+    if (!existing || (existing.id !== key && mapped.id === key)) {
+      storesByKey.set(key, mapped);
+    }
+  }
+
+  const productsById = new Map<string, Product>();
+  for (const row of (productsResult.data || [])) {
+    const mapped = mapProduct(row);
+    if (mapped?.id && !productsById.has(mapped.id)) {
+      productsById.set(mapped.id, mapped);
+    }
+  }
+
+  const offersById = new Map<string, ProductOffer>();
+  for (const row of (offersResult.data || [])) {
+    const mapped = mapOffer(row);
+    if (mapped?.id && !offersById.has(mapped.id)) {
+      offersById.set(mapped.id, mapped);
+    }
+  }
+
   return {
-    products: (productsResult.data || []).map(mapProduct),
-    productOffers: (offersResult.data || []).map(mapOffer),
-    stores: (storesResult.data || []).map(mapStore)
+    products: Array.from(productsById.values()),
+    productOffers: Array.from(offersById.values()),
+    stores: Array.from(storesByKey.values())
   };
 }
 
