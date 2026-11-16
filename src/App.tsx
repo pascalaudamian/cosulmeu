@@ -73,7 +73,8 @@ const TabContentSkeleton: React.FC = () => (
 );
 
 import { StorageService } from './services/StorageService.js';
-import { ShoppingList, Receipt, UserProfile, PriceAlert, Product, ProductOffer, Store } from './types.js';
+import { ShoppingList, Receipt, UserProfile, PriceAlert, Product, ProductOffer, Store, UnitType } from './types.js';
+import { PriceComparisonService } from './services/PriceComparisonService.js';
 import { ShieldCheck } from 'lucide-react';
 import { useAuth } from './auth/AuthProvider.js';
 import { supabase } from './lib/supabase.js';
@@ -135,6 +136,48 @@ export default function App() {
   const [catalogOffers, setCatalogOffers] = useState<ProductOffer[]>([]);
   const [catalogStores, setCatalogStores] = useState<Store[]>([]);
   const catalogLoadedRef = useRef(false);
+  const guestDemoList = React.useMemo<ShoppingList>(() => {
+    const popularProductTerms = ['lapte', 'banane', 'paine', 'iaurt', 'apa', 'cafea'];
+    const normalizeProductName = (name: string) =>
+      name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const demoProducts: Product[] = [];
+
+    for (const term of popularProductTerms) {
+      const matchingProducts = catalogProducts
+        .filter(product => new RegExp(`(?:^|[^a-z])${term}(?:$|[^a-z])`).test(normalizeProductName(product.name)))
+        .map(product => ({
+          product,
+          offerCount: catalogOffers.filter(offer =>
+            offer.productId === product.id && PriceComparisonService.isOfferValid(offer)
+          ).length
+        }))
+        .filter(candidate => candidate.offerCount > 0)
+        .sort((a, b) => b.offerCount - a.offerCount);
+      const match = matchingProducts[0]?.product;
+      if (match && !demoProducts.some(product => product.id === match.id)) demoProducts.push(match);
+    }
+
+    const now = new Date().toISOString();
+    return {
+      id: 'guest-demo-list',
+      name: 'Coș demonstrativ',
+      items: demoProducts.map(product => ({
+        id: `guest-demo-${product.id}`,
+        productId: product.id,
+        name: product.name,
+        brand: product.brand,
+        category: product.category,
+        quantity: 1,
+        unit: 'buc' as UnitType,
+        checked: false,
+        barcode: product.barcode,
+        referencePrice: product.baseReferencePrice,
+        estimatedPrice: product.baseReferencePrice
+      })),
+      createdAt: now,
+      updatedAt: now
+    };
+  }, [catalogProducts, catalogOffers]);
 
   const loadCatalogDatasets = useCallback(() => {
     if (catalogLoadedRef.current) return;
@@ -177,7 +220,7 @@ export default function App() {
   }, [loadCatalogDatasets]);
   const localDashboardSnapshot: LocalDashboardSnapshot = {
     receipts,
-    shoppingLists,
+    shoppingLists: shoppingLists.filter(list => list.id !== 'guest-demo-list'),
     priceAlerts,
     trackedProductIds
   };
@@ -365,7 +408,11 @@ export default function App() {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-  const dashboardLists = user ? dashboardData?.shoppingLists || [] : shoppingLists;
+  const dashboardLists = user
+    ? dashboardData?.shoppingLists || []
+    : shoppingLists.length > 0
+      ? shoppingLists
+      : [guestDemoList];
   const screenShoppingLists = dashboardLists.length > 0 ? dashboardLists : [emptyList];
   const activeList =
     screenShoppingLists.find(list => list.id === activeListId && !list.isArchived) ||
@@ -398,7 +445,7 @@ export default function App() {
   const handleUpdateShoppingLists = async (nextLists: ShoppingList[]): Promise<boolean> => {
     if (!user) {
       setShoppingLists(nextLists);
-      StorageService.saveShoppingLists(nextLists);
+      StorageService.saveShoppingLists(nextLists.filter(list => list.id !== 'guest-demo-list'));
       if (nextLists.length > 0 && !nextLists.some(l => l.id === activeListId)) {
         setActiveListId(nextLists[0].id);
         StorageService.setActiveListId(nextLists[0].id);
@@ -714,7 +761,11 @@ export default function App() {
           {currentTab === 'dashboard' && (
             <DashboardView
               userProfile={userProfile}
+              isAuthenticated={Boolean(user)}
               activeList={activeList}
+              catalogProducts={catalogProducts}
+              catalogOffers={catalogOffers}
+              catalogStores={catalogStores}
               receipts={dashboardReceipts}
               trackedCount={dashboardTrackedProductIds.length}
               activeAlertCount={dashboardAlerts.filter(alert => alert.isActive).length}

@@ -14,7 +14,7 @@ import {
   AlertCircle,
   ShoppingBag
 } from 'lucide-react';
-import { UserProfile, ShoppingList, Receipt as ReceiptType } from '../types.js';
+import { UserProfile, ShoppingList, Receipt as ReceiptType, Product, ProductOffer, Store } from '../types.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 import { DashboardKpiDrilldownModal } from './DashboardKpiDrilldownModal.js';
 import type {
@@ -25,7 +25,11 @@ import type {
 
 interface DashboardViewProps {
   userProfile: UserProfile;
+  isAuthenticated: boolean;
   activeList: ShoppingList;
+  catalogProducts?: Product[];
+  catalogOffers?: ProductOffer[];
+  catalogStores?: Store[];
   receipts: ReceiptType[];
   trackedCount: number;
   activeAlertCount: number;
@@ -45,7 +49,11 @@ interface DashboardViewProps {
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   userProfile,
+  isAuthenticated,
   activeList,
+  catalogProducts,
+  catalogOffers,
+  catalogStores,
   receipts,
   trackedCount,
   activeAlertCount,
@@ -63,9 +71,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenReceipt
 }) => {
   const [activeDrilldown, setActiveDrilldown] = useState<'potential-savings' | 'tracked-products' | null>(null);
-  const customProducts = dataSource === 'supabase' ? dashboardData?.products ?? [] : undefined;
-  const customOffers = dataSource === 'supabase' ? dashboardData?.productOffers ?? [] : undefined;
-  const customStores = dataSource === 'supabase' ? dashboardData?.stores ?? [] : undefined;
+  const customProducts = dataSource === 'supabase' ? dashboardData?.products ?? [] : catalogProducts;
+  const customOffers = dataSource === 'supabase' ? dashboardData?.productOffers ?? [] : catalogOffers;
+  const customStores = dataSource === 'supabase' ? dashboardData?.stores ?? [] : catalogStores;
   const comparisonOptions = { useLoyaltyCards: userProfile.useLoyaltyCards };
   const savingsSummary = PriceComparisonService.getPotentialSavingsForList(
     activeList.items,
@@ -93,19 +101,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500 mb-2">
-            <span className="text-emerald-700 font-semibold">Monitorizare activă</span>
+            <span className="text-emerald-700 font-semibold">
+              {isAuthenticated ? 'Monitorizare activă' : 'Previzualizare demonstrativă'}
+            </span>
             <span aria-hidden="true">·</span>
             <span>{userProfile.city}</span>
             <span aria-hidden="true">·</span>
-            <span>{dataSource === 'supabase' ? 'Sincronizat Supabase' : 'Date locale pe dispozitiv'}</span>
+            <span>{isAuthenticated ? 'Sincronizat Supabase' : 'Produse populare · date demo'}</span>
           </div>
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-950 tracking-tight">
-            {userProfile.name && userProfile.name !== 'Utilizator'
-              ? `Bună, ${userProfile.name.split(' ')[0]}`
-              : 'Coșul tău de cumpărături'}
+            {isAuthenticated
+              ? userProfile.name && userProfile.name !== 'Utilizator'
+                ? `Bună, ${userProfile.name.split(' ')[0]}`
+                : 'Coșul tău de cumpărături'
+              : 'Bine ai venit la Coșul Meu'}
           </h1>
           <p className="text-slate-600 text-sm mt-1">
-            Estimări actualizate de preț și economii calculate pentru lista activă.
+            {isAuthenticated
+              ? 'Estimări actualizate de preț și economii calculate pentru lista activă.'
+              : 'Descoperă produse populare și compară prețurile între magazine, fără să-ți creezi un cont.'}
           </p>
         </div>
 
