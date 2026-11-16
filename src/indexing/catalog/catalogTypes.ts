@@ -110,6 +110,9 @@ export interface CatalogExtractedOffer {
   discountPercentage?: number;
   packageQuantity?: number;
   packageUnit?: string;
+  weight?: number;
+  volume?: number;
+  packageSize?: string;
   unitPrice?: number;
   unitPriceMeasure?: string;
   isPromo: boolean;
@@ -130,6 +133,9 @@ export interface CatalogExtractedOffer {
   matchConfidence: number;
   matchMethod: 'gtin_exact' | 'name_brand_similarity' | 'manual' | 'unmatched';
   stagingStatus: StagingItemStatus;
+  priceValidationStatus?: 'VALID' | 'WARNING' | 'INVALID' | 'MISSING';
+  priceValidationCode?: string;
+  priceProofType?: string;
   validationErrors?: string[];
   reviewedBy?: string;
   reviewedAt?: string;

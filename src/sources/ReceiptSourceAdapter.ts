@@ -7,6 +7,7 @@ import {
 } from './PriceSourceAdapter.js';
 import { SourceSyncRun, ProductOffer, ProductMatchCandidate, Receipt } from '../types.js';
 import { StorageService } from '../services/StorageService.js';
+import { PriceExtractor } from '../indexing/catalog/PriceExtractor.js';
 
 export class ReceiptSourceAdapter implements PriceSourceAdapter {
   readonly id = 'src-verified-receipts';
@@ -31,8 +32,8 @@ export class ReceiptSourceAdapter implements PriceSourceAdapter {
     const invalid: any[] = [];
 
     records.forEach((rec, idx) => {
-      const price = parseFloat(String(rec.price).replace(',', '.'));
-      if (isNaN(price) || price <= 0) {
+      const price = PriceExtractor.parseExplicitPriceField(rec.price);
+      if (price === null || price <= 0) {
         invalid.push({ record: rec, reason: 'Preț invalid pe bon', rowNumber: idx + 1 });
         return;
       }

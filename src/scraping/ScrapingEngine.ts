@@ -5,6 +5,7 @@
 import * as cheerio from 'cheerio';
 import { ScrapedProductCandidate, PromotionRecord } from '../indexing/types.js';
 import { UnitType } from '../types.js';
+import { PriceExtractor } from '../indexing/catalog/PriceExtractor.js';
 
 export interface ScrapingRequestOptions {
   retailerId: string;
@@ -75,36 +76,21 @@ export class ScrapingEngine {
   }
 
   /**
-   * Extrage numărul și unitatea de măsură dintr-un text
+   * Extrage numărul și unitatea de măsură dintr-un text fără a corupe codurile de model
    */
   static parseQuantity(text: string): { weightOrVol: number; unit: UnitType } {
-    const match = text.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc|pachet|tablete|capsule)/i);
-    if (!match) {
+    const pkg = PriceExtractor.extractPackagingSafely(text);
+    if (!pkg.packageQuantity || !pkg.packageUnit) {
       return { weightOrVol: 1, unit: 'buc' };
     }
-
-    const rawNum = parseFloat(match[1].replace(',', '.'));
-    const rawUnit = match[2].toLowerCase();
-
-    switch (rawUnit) {
-      case 'kg': return { weightOrVol: rawNum, unit: 'kg' };
-      case 'g': return { weightOrVol: rawNum, unit: 'g' };
-      case 'l': return { weightOrVol: rawNum, unit: 'l' };
-      case 'ml': return { weightOrVol: rawNum, unit: 'ml' };
-      case 'pachet': return { weightOrVol: rawNum, unit: 'pachet' };
-      default: return { weightOrVol: rawNum, unit: 'buc' };
-    }
+    return { weightOrVol: pkg.packageQuantity, unit: pkg.packageUnit };
   }
 
   /**
-   * Normalizare preț numeric românesc (ex: "12,99 Lei" -> 12.99)
+   * Normalizare preț numeric românesc (ex: "12,99 Lei" -> 12.99), respingând gramaje și procente
    */
   static parsePrice(raw: string | number | undefined): number {
-    if (typeof raw === 'number') return isNaN(raw) ? 0 : raw;
-    if (!raw) return 0;
-    const cleaned = String(raw).replace(/[^\d.,]/g, '').replace(',', '.');
-    const val = parseFloat(cleaned);
-    return isNaN(val) ? 0 : val;
+    return PriceExtractor.parseExplicitPriceField(raw) || 0;
   }
 
   /**
@@ -170,8 +156,8 @@ export class ScrapingEngine {
       const brandEl = card.find('.brand, .manufacturer, [data-qa="product-brand"]').first();
       const brand = brandEl.text().trim() || undefined;
 
-      // Prețuri
-      const currentPriceEl = card.find('.price, .current-price, .promo-price, .valoare, [data-qa="price-current"]').first();
+      // Prețuri (excludem explicit unit-price / base-price / per-kg / per-l)
+      const currentPriceEl = card.find('.price:not(.unit-price), .current-price, .promo-price, .valoare, [data-qa="price-current"]').first();
       const oldPriceEl = card.find('.old-price, .original-price, .cut-price, .pret-vechi, [data-qa="price-original"]').first();
       const loyaltyPriceEl = card.find('.loyalty-price, .card-price, .pret-card, [data-qa="price-loyalty"]').first();
 
@@ -179,7 +165,7 @@ export class ScrapingEngine {
       const oldPrice = this.parsePrice(oldPriceEl.text());
       const loyaltyPrice = loyaltyPriceEl.length ? this.parsePrice(loyaltyPriceEl.text()) : undefined;
 
-      if (currentPrice <= 0) return;
+      if (currentPrice <= 0 || PriceExtractor.isNoiseOrNonProductTitle(rawName)) return;
 
       // Carduri fidelitate specifice retailerilor
       let promoDescription: string | undefined = undefined;

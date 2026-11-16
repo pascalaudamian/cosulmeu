@@ -14,6 +14,7 @@ import { RetailerRegistry } from './RetailerRegistry.js';
 import { UnitType } from '../types.js';
 import { CatalogDownloader } from './catalog/CatalogDownloader.js';
 import { CatalogParserEngine } from './catalog/CatalogParserEngine.js';
+import { PriceExtractor } from './catalog/PriceExtractor.js';
 
 export abstract class BaseRetailerCollector implements PriceCollector {
   readonly retailerId: string;
@@ -321,35 +322,29 @@ export abstract class BaseRetailerCollector implements PriceCollector {
 
     for (const item of batch.rawRecords) {
       // 1. Validare denumire
-      if (!item.rawName || item.rawName.trim().length < 2) {
-        invalid.push({ rawRecord: item, reason: 'Denumire produs lipsă sau prea scurtă (< 2 caractere).' });
+      if (!item.rawName || PriceExtractor.isNoiseOrNonProductTitle(item.rawName)) {
+        invalid.push({ rawRecord: item, reason: 'Denumire produs lipsă, non-produs sau prea scurtă.' });
         continue;
       }
 
-      // 2. Parsare și validare preț numeric strict pozitiv
-      const rawPriceStr = String(item.normalPrice).trim().replace(',', '.');
-      if (rawPriceStr.startsWith('-') || !/^[+-]?\d+(\.\d+)?$/.test(rawPriceStr)) {
-        invalid.push({ rawRecord: item, reason: `Preț invalid: ${item.normalPrice}. Prețul trebuie să fie numeric și strict pozitiv.` });
-        continue;
-      }
-
-      const parsedPrice = parseFloat(rawPriceStr);
-      if (isNaN(parsedPrice) || parsedPrice <= 0) {
-        invalid.push({ rawRecord: item, reason: `Preț nul sau negativ: ${parsedPrice} RON.` });
+      // 2. Parsare și validare preț numeric strict pozitiv (respinge gramaje/procente)
+      const parsedPrice = PriceExtractor.parseExplicitPriceField(item.normalPrice);
+      if (parsedPrice === null || parsedPrice <= 0) {
+        invalid.push({ rawRecord: item, reason: `Preț invalid: ${item.normalPrice}. Prețul trebuie să fie monetar și strict pozitiv.` });
         continue;
       }
 
       // 3. Prețuri promoționale sau condiționate de card
       let promoPrice: number | undefined = undefined;
       if (item.promoPrice) {
-        const p = parseFloat(String(item.promoPrice).replace(',', '.'));
-        if (!isNaN(p) && p > 0 && p < parsedPrice) promoPrice = p;
+        const p = PriceExtractor.parseExplicitPriceField(item.promoPrice);
+        if (p !== null && p > 0 && p < parsedPrice) promoPrice = p;
       }
 
       let loyaltyPrice: number | undefined = undefined;
       if (item.loyaltyPrice) {
-        const lp = parseFloat(String(item.loyaltyPrice).replace(',', '.'));
-        if (!isNaN(lp) && lp > 0) loyaltyPrice = lp;
+        const lp = PriceExtractor.parseExplicitPriceField(item.loyaltyPrice);
+        if (lp !== null && lp > 0) loyaltyPrice = lp;
       }
 
       const effectivePrice = promoPrice || parsedPrice;
@@ -384,12 +379,27 @@ export abstract class BaseRetailerCollector implements PriceCollector {
           pkgSize = parsedWeight;
         }
       } else {
-        // Extragere din denumire dacă lipsește coloana (ex: "Lapte 1L", "Toast 500g")
-        const matchWeight = item.rawName.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-        if (matchWeight) {
-          pkgSize = parseFloat(matchWeight[1].replace(',', '.'));
-          rawUnit = matchWeight[2].toLowerCase();
+        const safePkg = PriceExtractor.extractPackagingSafely(item.rawName);
+        if (safePkg.packageQuantity && safePkg.packageUnit) {
+          pkgSize = safePkg.packageQuantity;
+          rawUnit = safePkg.packageUnit;
         }
+      }
+
+      const priceCheck = PriceExtractor.validateOfferPrice({
+        title: item.rawName,
+        normalPrice: parsedPrice,
+        promoPrice,
+        loyaltyPrice,
+        effectivePrice,
+        packageQuantity: pkgSize,
+        packageUnit: rawUnit || undefined,
+        rawPriceText: String(item.normalPrice),
+        proofType: 'explicit_field'
+      });
+      if (priceCheck.status === 'INVALID' || priceCheck.status === 'MISSING') {
+        invalid.push({ rawRecord: item, reason: priceCheck.reasons.join(' ') || 'Preț invalid sau confundat cu cantitatea.' });
+        continue;
       }
 
       let packageUnit: UnitType = 'buc';

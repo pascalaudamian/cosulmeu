@@ -31,8 +31,39 @@ import {
 import { ProductMatcher } from '../services/ProductMatcher.ts';
 import { mapRetailerCategoryToStandard } from '../data/categories.ts';
 import { supabase } from '../lib/supabase.ts';
+import { PriceExtractor } from '../indexing/catalog/PriceExtractor.ts';
 
 const { Pool } = pg;
+
+/**
+ * Supabase PostgREST limitează răspunsurile la 1000 rânduri per cerere.
+ * Această funcție paginează automat prin .range(from, to) pentru a prelua toate înregistrările.
+ */
+export async function fetchAllSupabaseRows<T = any>(
+  buildQuery: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>
+): Promise<{ data: T[]; error: any }> {
+  const PAGE_SIZE = 1000;
+  const allRows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await buildQuery(from, to);
+    if (error) {
+      return { data: allRows, error };
+    }
+    if (!data || data.length === 0) {
+      break;
+    }
+    allRows.push(...data);
+    if (data.length < PAGE_SIZE) {
+      break;
+    }
+    from += PAGE_SIZE;
+  }
+
+  return { data: allRows, error: null };
+}
 
 export interface DbConfig {
   configured: boolean;
@@ -547,6 +578,10 @@ export class DatabaseService {
 
   // --- PRODUCTS ---
   static async getProducts(): Promise<Product[]> {
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      return StorageService.getAllProducts();
+    }
     const pool = getPool();
     if (pool) {
       try {
@@ -574,7 +609,14 @@ export class DatabaseService {
     }
 
     try {
-      const { data, error } = await supabase.from('products').select('*').is('canonical_product_id', null).order('name', { ascending: true });
+      const { data, error } = await fetchAllSupabaseRows((from, to) =>
+        supabase
+          .from('products')
+          .select('*')
+          .is('canonical_product_id', null)
+          .order('name', { ascending: true })
+          .range(from, to)
+      );
       if (!error && data && data.length > 0) {
         return data.map(r => ({
           id: r.id,
@@ -781,24 +823,39 @@ export class DatabaseService {
 
   // --- PRODUCT OFFERS (CURRENT STATE) ---
   static async getOffers(): Promise<ProductOffer[]> {
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      return StorageService.getProductOffers().filter(
+        o =>
+          o.price > 0 &&
+          !o.isFlaggedAnomaly &&
+          !['demo', 'isolated', 'rejected'].includes(o.verificationStatus || 'verified')
+      );
+    }
     const pool = getPool();
     if (pool) {
       try {
-  const res = await pool.query(
-  `SELECT po.*, COALESCE(p.canonical_product_id, p.id) AS canonical_product_id
-  FROM product_offers po
-  JOIN products p ON p.id = po.product_id
-  WHERE po.source != 'demo' AND po.verification_status != 'demo'
-  ORDER BY po.observation_date ASC, po.last_checked ASC`
-  );
-  if (res.rows.length > 0) {
-  const offers = res.rows.map(r => ({
-  id: r.id,
-  productId: r.canonical_product_id || r.product_id,
+        const res = await pool.query(
+          `SELECT po.*, COALESCE(p.canonical_product_id, p.id) AS canonical_product_id
+           FROM product_offers po
+           JOIN products p ON p.id = po.product_id
+           WHERE po.source != 'demo'
+             AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+             AND COALESCE(po.is_flagged_anomaly, false) = false
+             AND po.price > 0
+           ORDER BY po.observation_date ASC, po.last_checked ASC`
+        );
+        if (res.rows.length > 0) {
+          const offers = res.rows.map(r => ({
+            id: r.id,
+            productId: r.canonical_product_id || r.product_id,
             storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
             sourceId: r.source_id || undefined,
             price: parseFloat(r.price),
             originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+            normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
+            promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+            loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
             unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
             unitPriceMeasure: r.unit_price_measure || 'lei/buc',
             isPromo: Boolean(r.is_promo),
@@ -811,32 +868,48 @@ export class DatabaseService {
             confidenceLevel: r.confidence_level || 'high',
             verificationStatus: r.verification_status || 'verified',
             lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
-  isSponsored: Boolean(r.is_sponsored)
-  }));
-  return latestCanonicalOffers(offers);
-  }
-  } catch (err: any) {
-  console.warn('Postgres pool getOffers failed, falling back to Supabase:', err.message);
+            isSponsored: Boolean(r.is_sponsored),
+            isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
+            anomalyReason: r.anomaly_reason || undefined
+          }));
+          return latestCanonicalOffers(offers);
+        }
+      } catch (err: any) {
+        console.warn('Postgres pool getOffers failed, falling back to Supabase:', err.message);
       }
     }
 
     try {
-  const [{ data, error }, { data: productRows }] = await Promise.all([
-  supabase.from('product_offers').select('*').neq('source', 'demo').neq('verification_status', 'demo'),
-  supabase.from('products').select('id, canonical_product_id')
-  ]);
-  const canonicalIdByProductId = new Map(
-  (productRows || []).map(product => [product.id, product.canonical_product_id || product.id])
-  );
+      const [offersRes, productsRes] = await Promise.all([
+        fetchAllSupabaseRows((from, to) =>
+          supabase
+            .from('product_offers')
+            .select('*')
+            .neq('source', 'demo')
+            .not('verification_status', 'in', '("demo","isolated","rejected")')
+            .gt('price', 0)
+            .range(from, to)
+        ),
+        fetchAllSupabaseRows((from, to) =>
+          supabase.from('products').select('id, canonical_product_id').range(from, to)
+        )
+      ]);
+      const data = offersRes.data.filter(r => !r.is_flagged_anomaly && Number(r.price) > 0);
+      const canonicalIdByProductId = new Map(
+        productsRes.data.map(product => [product.id, product.canonical_product_id || product.id])
+      );
 
-  if (!error && data && data.length > 0) {
-  const offers = data.map(r => ({
-  id: r.id,
-  productId: canonicalIdByProductId.get(r.product_id) || r.product_id,
+      if (!offersRes.error && data.length > 0) {
+        const offers = data.map(r => ({
+          id: r.id,
+          productId: canonicalIdByProductId.get(r.product_id) || r.product_id,
           storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
           sourceId: r.source_id || undefined,
           price: parseFloat(r.price),
           originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+          normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
+          promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+          loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
           unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
           unitPriceMeasure: r.unit_price_measure || 'lei/buc',
           isPromo: Boolean(r.is_promo),
@@ -849,12 +922,14 @@ export class DatabaseService {
           confidenceLevel: r.confidence_level || 'high',
           verificationStatus: r.verification_status || 'verified',
           lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
-  isSponsored: Boolean(r.is_sponsored)
-  }));
-  return latestCanonicalOffers(offers);
-  }
-  } catch (err: any) {
-  console.warn('Supabase getOffers failed:', err.message);
+          isSponsored: Boolean(r.is_sponsored),
+          isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
+          anomalyReason: r.anomaly_reason || undefined
+        }));
+        return latestCanonicalOffers(offers);
+      }
+    } catch (err: any) {
+      console.warn('Supabase getOffers failed:', err.message);
     }
 
     return [];
@@ -1779,9 +1854,26 @@ export class DatabaseService {
           continue;
         }
 
-        // Validare preț
+        // Validare strictă preț vs cantitate înainte de publicare
         if (!item.effectivePrice || item.effectivePrice <= 0 || isNaN(item.effectivePrice)) {
           stats.itemsWithoutPriceCount++;
+          continue;
+        }
+        const prePublishPriceCheck = PriceExtractor.validateOfferPrice({
+          title: item.rawTitle,
+          normalPrice: item.normalPrice,
+          promoPrice: item.promoPrice,
+          loyaltyPrice: item.loyaltyPrice,
+          effectivePrice: item.effectivePrice,
+          unitPrice: item.unitPrice,
+          packageQuantity: item.packageQuantity,
+          packageUnit: item.packageUnit,
+          proofType: (item.priceProofType as any) || undefined,
+          isVerifiedOverride: dbStagingStatus === 'APPROVED' && Boolean(item.reviewedBy)
+        });
+        if (prePublishPriceCheck.status !== 'VALID') {
+          stats.itemsWithoutPriceCount++;
+          stats.errors.push(`Ofertă blocată la publicare (${item.rawTitle}): ${prePublishPriceCheck.reasons.join(' ')}`);
           continue;
         }
 
@@ -2955,6 +3047,9 @@ export class DatabaseService {
         conditions.push(`EXISTS (
           SELECT 1 FROM product_offers po_ret
           WHERE (po_ret.product_id = p.id OR po_ret.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
+            AND COALESCE(po_ret.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+            AND COALESCE(po_ret.is_flagged_anomaly, false) = false
+            AND po_ret.price > 0
             AND (lower(po_ret.store_id) = $${idx} OR lower(po_ret.store_id) = ('store-' || $${idx}) OR replace(lower(po_ret.store_id), 'store-', '') = $${idx})
         )`);
         values.push(cleanRet);
@@ -2982,26 +3077,38 @@ export class DatabaseService {
   (SELECT count(*) FROM (
   SELECT DISTINCT ON (po.store_id) po.store_id
   FROM product_offers po
-  WHERE po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id)
+  WHERE (po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
+    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+    AND COALESCE(po.is_flagged_anomaly, false) = false
+    AND po.price > 0
   ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
   ) current_offers) AS "offersCount",
   (SELECT min(current_offers.price) FROM (
   SELECT DISTINCT ON (po.store_id) po.store_id, po.price
   FROM product_offers po
-  WHERE po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id)
+  WHERE (po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
+    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+    AND COALESCE(po.is_flagged_anomaly, false) = false
+    AND po.price > 0
   ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
   ) current_offers) AS "minPrice",
   (SELECT max(current_offers.price) FROM (
   SELECT DISTINCT ON (po.store_id) po.store_id, po.price
   FROM product_offers po
-  WHERE po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id)
+  WHERE (po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
+    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+    AND COALESCE(po.is_flagged_anomaly, false) = false
+    AND po.price > 0
   ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
   ) current_offers) AS "maxPrice",
   (SELECT json_agg(json_build_object('storeId', current_offers.store_id, 'price', current_offers.price, 'isPromo', current_offers.is_promo, 'normalPrice', current_offers.normal_price, 'promoPrice', current_offers.promo_price, 'loyaltyPrice', current_offers.loyalty_price))
   FROM (
   SELECT DISTINCT ON (po.store_id) po.store_id, po.price, po.is_promo, po.normal_price, po.promo_price, po.loyalty_price
   FROM product_offers po
-  WHERE po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id)
+  WHERE (po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
+    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+    AND COALESCE(po.is_flagged_anomaly, false) = false
+    AND po.price > 0
   ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
   ) current_offers) AS "offers"
         FROM products p
@@ -3082,6 +3189,26 @@ export class DatabaseService {
    * Returnează datele complete pentru un produs canonic (istoric, oferte, mapări retailer)
    */
   static async getProductDetailById(productId: string): Promise<any> {
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      const prod = StorageService.getAllProducts().find(p => p.id === productId);
+      if (!prod) return null;
+      const validOffers = StorageService.getProductOffers().filter(
+        o =>
+          o.productId === productId &&
+          o.price > 0 &&
+          !o.isFlaggedAnomaly &&
+          !['demo', 'isolated', 'rejected'].includes(o.verificationStatus || 'verified')
+      );
+      const priceHistory = StorageService.getPriceObservations().filter(obs => obs.productId === productId);
+      return {
+        product: prod,
+        offers: validOffers,
+        priceHistory,
+        retailerMappings: [],
+        promotions: []
+      };
+    }
     const pool = getPool();
     if (pool) {
       try {
@@ -3097,7 +3224,10 @@ export class DatabaseService {
   SELECT DISTINCT ON (po.store_id) po.*, s.name AS store_name, s.brand_color AS store_brand_color, s.logo_url AS store_logo_url
   FROM product_offers po
   LEFT JOIN stores s ON s.id = po.store_id
-  WHERE po.product_id = $1 OR po.product_id IN (SELECT id FROM products WHERE canonical_product_id = $1)
+  WHERE (po.product_id = $1 OR po.product_id IN (SELECT id FROM products WHERE canonical_product_id = $1))
+    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+    AND COALESCE(po.is_flagged_anomaly, false) = false
+    AND po.price > 0
   ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
   `, [canonicalProductId]);
 
@@ -3215,14 +3345,17 @@ export class DatabaseService {
         baseReferencePrice: parseFloat(prodData.base_reference_price) || 0
       };
 
-      const { data: offersData } = await supabase
+      const { data: rawOffersData } = await supabase
         .from('product_offers')
         .select('*')
         .in('product_id', linkedProductIds)
         .neq('source', 'demo')
-        .neq('verification_status', 'demo')
+        .not('verification_status', 'in', '("demo","isolated","rejected")')
+        .gt('price', 0)
         .order('observation_date', { ascending: true })
         .order('last_checked', { ascending: true });
+
+      const offersData = (rawOffersData || []).filter(r => !r.is_flagged_anomaly && Number(r.price) > 0);
 
       const { data: historyData } = await supabase
         .from('price_observations')
@@ -3231,7 +3364,7 @@ export class DatabaseService {
         .order('date', { ascending: false })
         .limit(50);
 
-      const offers: ProductOffer[] = latestCanonicalOffers((offersData || []).map(r => ({
+      const offers: ProductOffer[] = latestCanonicalOffers(offersData.map(r => ({
         id: r.id,
         productId: product.id,
         storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
@@ -3812,7 +3945,13 @@ export class DatabaseService {
 
     if (!pool) {
       try {
-        let query = supabase.from('product_offers').select('*', { count: 'exact' });
+        let query = supabase
+          .from('product_offers')
+          .select('*', { count: 'exact' })
+          .neq('source', 'demo')
+          .not('verification_status', 'in', '("demo","isolated","rejected")')
+          .eq('is_flagged_anomaly', false)
+          .gt('price', 0);
         if (params.retailerId && params.retailerId !== 'toate') query = query.eq('store_id', params.retailerId);
         const { data, count, error } = await query.order('price', { ascending: true }).range(offset, offset + limit - 1);
         if (!error && data) {
@@ -3839,7 +3978,11 @@ export class DatabaseService {
     }
 
     try {
-      const conditions: string[] = ['1=1'];
+      const conditions: string[] = [
+        "COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')",
+        'COALESCE(po.is_flagged_anomaly, false) = false',
+        'po.price > 0'
+      ];
       const values: any[] = [];
       let idx = 1;
 
@@ -4284,34 +4427,23 @@ export class DatabaseService {
     } = params;
 
     const errors: string[] = [];
+    const titleTrimmed = (offer.rawTitle || '').trim();
     const currentStatus = String(offer.stagingStatus || 'NEEDS_REVIEW').toUpperCase();
     if (currentStatus === 'PUBLISHED') {
       errors.push('Oferta este deja publicată în catalogul public.');
     }
 
-    const titleTrimmed = (offer.rawTitle || '').trim();
-    if (titleTrimmed.length < 2) {
-      errors.push('Denumirea produsului lipsește sau are mai puțin de 2 caractere.');
-    }
-
-    if (!Number.isFinite(offer.effectivePrice) || offer.effectivePrice <= 0) {
-      errors.push(`Prețul efectiv (${Number.isFinite(offer.effectivePrice) ? offer.effectivePrice : 0} RON) trebuie să fie pozitiv (> 0).`);
-    } else if (offer.effectivePrice > 50000) {
-      errors.push(`Prețul efectiv (${offer.effectivePrice} RON) depășește pragul maxim admis (50.000 RON).`);
-    }
-
-    if (!Number.isFinite(offer.normalPrice) || offer.normalPrice < 0) {
-      errors.push('Prețul normal este invalid (negativ sau nespecificat).');
-    } else if (offer.normalPrice > 0 && Number.isFinite(offer.effectivePrice) && offer.effectivePrice > offer.normalPrice + 0.01) {
-      errors.push(`Prețul efectiv (${offer.effectivePrice} RON) nu poate depăși prețul normal (${offer.normalPrice} RON).`);
-    }
-
-    if (offer.promoPrice !== null && offer.promoPrice !== undefined) {
-      if (!Number.isFinite(offer.promoPrice) || offer.promoPrice <= 0) {
-        errors.push('Prețul promoțional specificat trebuie să fie mai mare decât 0.');
-      } else if (offer.normalPrice > 0 && offer.promoPrice > offer.normalPrice + 0.01) {
-        errors.push(`Prețul promoțional (${offer.promoPrice} RON) depășește prețul normal (${offer.normalPrice} RON).`);
-      }
+    const priceCheck = PriceExtractor.validateOfferPrice({
+      title: titleTrimmed,
+      normalPrice: offer.normalPrice,
+      promoPrice: offer.promoPrice,
+      loyaltyPrice: offer.loyaltyPrice,
+      effectivePrice: offer.effectivePrice,
+      packageQuantity: offer.packageQuantity,
+      packageUnit: offer.packageUnit
+    });
+    if (priceCheck.status !== 'VALID') {
+      errors.push(...priceCheck.reasons);
     }
 
     if (!offer.retailerId || !validStoreIds.has(offer.retailerId)) {

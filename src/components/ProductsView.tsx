@@ -179,7 +179,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
 
         const enriched = all.map(p => {
           const validOffers = allOffers.filter(
-            o => o.productId === p.id && o.verificationStatus !== 'expired' && (!o.validUntil || o.validUntil >= todayStr)
+            o => o.productId === p.id && PriceComparisonService.isOfferValid(o)
           ).sort((a, b) => a.price - b.price);
 
           const minOffer = validOffers[0];

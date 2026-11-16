@@ -16,7 +16,7 @@ export type DataSourceType = 'verified' | 'user_reported' | 'estimated' | 'demo'
 export type ConfidenceLevel = 'high' | 'medium' | 'low';
 
 export type SourceStatus = 'active' | 'pending_authorization' | 'configured_manual' | 'error' | 'disabled';
-export type VerificationStatus = 'verified' | 'pending' | 'rejected' | 'expired' | 'demo';
+export type VerificationStatus = 'verified' | 'pending' | 'rejected' | 'expired' | 'demo' | 'isolated';
 
 export interface Store {
   id: string;
@@ -435,4 +435,95 @@ export interface SchedulerMetrics {
   manualPublishCount: number;
   automatedPublishCount: number;
 }
+
+export type PriceAuditCategory =
+  | 'anomalies'
+  | 'confirmed_wrong'
+  | 'suspect_unverified'
+  | 'valid_verified'
+  | 'isolated'
+  | 'all';
+
+export interface PriceAuditItem {
+  offerId: string;
+  productId: string;
+  productName: string;
+  brand: string;
+  storeId: string;
+  storeName: string;
+  packageWeightOrVolume: number;
+  packageUnit: UnitType | string;
+  currentPrice: number;
+  normalPrice?: number | null;
+  promoPrice?: number | null;
+  originalPrice?: number | null;
+  unitPrice: number;
+  unitPriceMeasure: string;
+  isPromo: boolean;
+  promoDetails?: string;
+  verificationStatus: VerificationStatus;
+  isFlaggedAnomaly: boolean;
+  anomalyReason?: string;
+  auditCategory: Exclude<PriceAuditCategory, 'all' | 'anomalies'>;
+  auditReason: string;
+  sourceDocumentId?: string;
+  sourceDocumentTitle?: string;
+  sourceDocumentUrl?: string;
+  extractedRawTitle?: string;
+  extractedNormalPrice?: number | null;
+  extractedPromoPrice?: number | null;
+  extractedEffectivePrice?: number | null;
+  lastVerifiedAt?: string;
+  observationDate: string;
+}
+
+export interface PriceAuditSummary {
+  totalPublishedOffers: number;
+  suspectCount: number;
+  quantityConfusedCount: number;
+  isolatedCount: number;
+  verifiedCount: number;
+  lowPriceValidCount: number;
+  retailersAffected: { storeId: string; storeName: string; count: number }[];
+}
+
+export interface PriceAuditBatchPreviewItem {
+  offerId: string;
+  productName: string;
+  storeId: string;
+  action: 'fix_price' | 'isolate' | 'verify';
+  oldPrice: number;
+  newPrice?: number;
+  oldVerificationStatus: VerificationStatus;
+  newVerificationStatus: VerificationStatus;
+  reason: string;
+}
+
+export interface PriceAuditTransactionLog {
+  id: string;
+  userEmail: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  details: Record<string, any>;
+  ipAddress?: string;
+  createdAt: string;
+  persistedInDb: boolean;
+  storageBackend: 'postgresql' | 'supabase' | 'memory_fallback';
+}
+
+export interface PriceAuditRemediationResult {
+  success: boolean;
+  dryRun: boolean;
+  affectedOffersCount: number;
+  updatedProductsCount: number;
+  updatedStagingCount: number;
+  updatedPromotionsCount: number;
+  auditLogRecorded: boolean;
+  auditLogId?: string;
+  auditLogStorage?: 'postgresql' | 'supabase' | 'memory_fallback';
+  previews: PriceAuditBatchPreviewItem[];
+  errors: string[];
+}
+
 

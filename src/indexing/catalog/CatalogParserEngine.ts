@@ -4,6 +4,7 @@
 import * as cheerio from 'cheerio';
 import { CatalogFormat } from './catalogTypes.js';
 import { validatePublicHttpUrl } from '../../utils/urlSecurity.js';
+import { PriceExtractor, PriceProofType } from './PriceExtractor.js';
 
 export interface RawParsedOffer {
   rawTitle: string;
@@ -19,6 +20,10 @@ export interface RawParsedOffer {
   discountPercentage?: number;
   packageQuantity?: number;
   packageUnit?: string;
+  weight?: number;
+  volume?: number;
+  packageSize?: string;
+  priceProofType?: PriceProofType;
   unitPrice?: number;
   unitPriceMeasure?: string;
   isPromo: boolean;
@@ -118,12 +123,9 @@ export class CatalogParserEngine {
   }
 
   private static parseNumericPrice(raw: unknown): number {
-    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0;
+    if (typeof raw === 'number') return Number.isFinite(raw) && raw > 0 ? Number(raw.toFixed(2)) : 0;
     if (typeof raw !== 'string') return 0;
-    const match = raw.trim().match(/(\d+(?:[.,]\d{1,2})?)/);
-    if (!match) return 0;
-    const val = parseFloat(match[1].replace(',', '.'));
-    return Number.isFinite(val) ? val : 0;
+    return PriceExtractor.parseExplicitPriceField(raw) || 0;
   }
 
   private static resolveImageUrl(rawUrl?: unknown, baseUrl?: string): string | undefined {
@@ -246,7 +248,7 @@ export class CatalogParserEngine {
     const types = Array.isArray(rawType) ? rawType.map(String) : rawType ? [String(rawType)] : [];
     const isProduct = types.some(t => t === 'Product' || t === 'IndividualProduct');
 
-    if ((isProduct || node.offers) && typeof node.name === 'string' && node.name.trim().length >= 2) {
+    if ((isProduct || node.offers) && typeof node.name === 'string' && !PriceExtractor.isNoiseOrNonProductTitle(node.name)) {
       const rawOffers = Array.isArray(node.offers)
         ? node.offers
         : Array.isArray(node.offers?.offers)
@@ -259,37 +261,45 @@ export class CatalogParserEngine {
         offerObj.price ?? offerObj.lowPrice ?? node.price
       );
 
-      if (price > 0 && price < 100000) {
+      if (price > 0 && price < 50000) {
         const listPrice = this.parseNumericPrice(offerObj.highPrice ?? offerObj.priceSpecification?.price);
         const normalPrice = listPrice > price ? listPrice : price;
         const promoPrice = listPrice > price ? price : undefined;
         const imageUrl = this.resolveImageUrl(node.image, baseUrl);
-
-        let packageQuantity: number | undefined;
-        let packageUnit: string | undefined;
-        const pkgMatch = node.name.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-        if (pkgMatch) {
-          packageQuantity = parseFloat(pkgMatch[1].replace(',', '.'));
-          packageUnit = pkgMatch[2].toLowerCase();
-        }
-
-        offers.push({
-          rawTitle: node.name.trim(),
-          rawBrand: node.brand?.name || (typeof node.brand === 'string' ? node.brand : undefined),
-          rawBarcode: node.gtin13 || node.gtin8 || node.gtin || node.sku,
-          rawCategory: typeof node.category === 'string' ? node.category : undefined,
+        const pkg = PriceExtractor.extractPackagingSafely(node.name);
+        const check = PriceExtractor.validateOfferPrice({
+          title: node.name.trim(),
           normalPrice,
           promoPrice,
           effectivePrice: price,
-          currency: offerObj.priceCurrency || 'RON',
-          packageQuantity,
-          packageUnit,
-          isPromo: Boolean(promoPrice || offerObj.discount || offerObj.priceValidUntil),
-          validUntil: offerObj.priceValidUntil ? String(offerObj.priceValidUntil).slice(0, 10) : undefined,
-          imageUrl,
-          catalogUrl: node.url || offerObj.url,
-          confidenceScore: 0.95
+          packageQuantity: pkg.packageQuantity,
+          packageUnit: pkg.packageUnit,
+          proofType: 'explicit_field'
         });
+
+        if (check.status !== 'INVALID' && check.status !== 'MISSING') {
+          offers.push({
+            rawTitle: node.name.trim(),
+            rawBrand: node.brand?.name || (typeof node.brand === 'string' ? node.brand : undefined),
+            rawBarcode: node.gtin13 || node.gtin8 || node.gtin || node.sku,
+            rawCategory: typeof node.category === 'string' ? node.category : undefined,
+            normalPrice,
+            promoPrice,
+            effectivePrice: price,
+            currency: offerObj.priceCurrency || 'RON',
+            packageQuantity: pkg.packageQuantity,
+            packageUnit: pkg.packageUnit,
+            weight: pkg.weight,
+            volume: pkg.volume,
+            packageSize: pkg.packageSize,
+            priceProofType: 'explicit_field',
+            isPromo: Boolean(promoPrice || offerObj.discount || offerObj.priceValidUntil),
+            validUntil: offerObj.priceValidUntil ? String(offerObj.priceValidUntil).slice(0, 10) : undefined,
+            imageUrl,
+            catalogUrl: node.url || offerObj.url,
+            confidenceScore: 0.95
+          });
+        }
       }
     }
   }
@@ -404,31 +414,40 @@ export class CatalogParserEngine {
           // Fallback din DOM-ul cardului
           if (normalPrice <= 0) {
             const priceText = $(el).find('.m-price__price, .pricebox__price, .a-price').first().text().trim();
-            const cleanedPrice = priceText.replace(/[^\d,.]/g, '').replace(',', '.');
-            normalPrice = parseFloat(cleanedPrice);
+            const extractedDomPrice = PriceExtractor.extractPriceWithContext(priceText, { isPriceElement: true });
+            normalPrice = extractedDomPrice.value || 0;
           }
 
           if (isNaN(normalPrice) || normalPrice <= 0) return;
+          if (PriceExtractor.isNoiseOrNonProductTitle(title)) return;
 
-          // Determinare gramaj / unitate
+          // Determinare gramaj / unitate în siguranță
           if (!rawPackaging) {
             rawPackaging = data.price?.packaging?.text || data.packaging || $(el).find('.m-price__subline, .pricebox__basic-quantity').text().trim();
           }
 
-          let pkgQty: number | undefined = undefined;
-          let pkgUnit: string | undefined = undefined;
-
-          if (rawPackaging) {
-            const pkgMatch = rawPackaging.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-            if (pkgMatch) {
-              pkgQty = parseFloat(pkgMatch[1].replace(',', '.'));
-              pkgUnit = pkgMatch[2].toLowerCase();
-            }
-          }
+          const pkg = PriceExtractor.extractPackagingSafely(`${rawPackaging || ''} ${title}`);
+          const pkgQty = pkg.packageQuantity;
+          const pkgUnit = pkg.packageUnit;
 
           const effectivePrice = loyaltyPrice || promoPrice || normalPrice;
           if (isLidlPlus || Boolean(data.price?.loyaltyCardPrice || $(el).find('.lidl-plus, [data-loyalty]').length > 0)) {
             isLidlPlus = true;
+          }
+
+          const check = PriceExtractor.validateOfferPrice({
+            title,
+            normalPrice,
+            promoPrice,
+            loyaltyPrice,
+            effectivePrice,
+            packageQuantity: pkgQty,
+            packageUnit: pkgUnit,
+            proofType: 'price_selector'
+          });
+          if (check.status === 'INVALID' || check.status === 'MISSING') {
+            warnings.push(`Ofertă Lidl respinsă la validare (${title}): ${check.reasons.join(' ')}`);
+            return;
           }
 
           offers.push({
@@ -442,6 +461,10 @@ export class CatalogParserEngine {
             currency: 'RON',
             packageQuantity: pkgQty,
             packageUnit: pkgUnit,
+            weight: pkg.weight,
+            volume: pkg.volume,
+            packageSize: pkg.packageSize,
+            priceProofType: 'price_selector',
             isPromo: Boolean(promoPrice || isLidlPlus || data.price?.discount),
             promoDetails: promoDetails || (isLidlPlus ? 'Preț exclusiv cu aplicația Lidl Plus' : promoPrice ? `Reducere promoțională de la ${normalPrice} lei` : undefined),
             loyaltyCardName: isLidlPlus ? 'Lidl Plus' : undefined,
@@ -456,50 +479,186 @@ export class CatalogParserEngine {
       });
     }
 
+    // 2b. Parsare specifică Kaufland România (.k-product-tile) — separă strict prețul de .k-product-tile__unit-price (gramaj/volum)
+    const kauflandTiles = $('.k-product-tile');
+    if (kauflandTiles.length > 0) {
+      const seenKaufland = new Set<string>();
+      kauflandTiles.each((_, el) => {
+        try {
+          const tile = $(el);
+          const subtitle = tile.find('.k-product-tile__subtitle').first().text().trim();
+          const mainTitle = tile.find('.k-product-tile__title').first().text().trim();
+          const rawTitle = subtitle && mainTitle && !mainTitle.toLowerCase().startsWith(subtitle.toLowerCase())
+            ? `${subtitle} ${mainTitle}`.trim()
+            : (mainTitle || subtitle).trim();
+
+          if (!rawTitle || PriceExtractor.isNoiseOrNonProductTitle(rawTitle)) return;
+
+          // Excludem explicit .k-product-tile__unit-price din prețuri; îl folosim strict pentru gramaj/ambalaj!
+          const unitInfoText = tile.find('.k-product-tile__unit-price, .k-product-tile__base-price').first().text().trim();
+          const currentPriceRaw = tile.find('.k-price-tag__price:not(.k-price-tag__old-price):not([class*="old"])').first().text().trim();
+          const oldPriceRaw = tile.find('.k-price-tag__old-price').first().text().trim();
+          const loyaltyPriceRaw = tile.find('.k-price-tag--loyalty .k-price-tag__price, .k-product-tile__loyalty-price').first().text().trim();
+
+          const currentExtracted = PriceExtractor.extractPriceWithContext(currentPriceRaw, { isPriceElement: true });
+          const oldExtracted = PriceExtractor.extractPriceWithContext(oldPriceRaw, { isPriceElement: true });
+          const loyaltyExtracted = PriceExtractor.extractPriceWithContext(loyaltyPriceRaw, { isPriceElement: true });
+
+          const pkg = PriceExtractor.extractPackagingSafely(`${unitInfoText} ${rawTitle}`);
+          const currentPrice = currentExtracted.value || 0;
+          const oldPrice = oldExtracted.value || 0;
+          const loyaltyPrice = loyaltyExtracted.value || undefined;
+          const effectivePrice = loyaltyPrice && loyaltyPrice > 0 ? loyaltyPrice : currentPrice;
+
+          if (!effectivePrice || effectivePrice <= 0) {
+            const pKey = rawTitle.toLowerCase();
+            if (!seenKaufland.has(pKey)) {
+              seenKaufland.add(pKey);
+              products.push({
+                rawTitle,
+                rawBrand: subtitle && mainTitle ? subtitle : undefined,
+                packageQuantity: pkg.packageQuantity,
+                packageUnit: pkg.packageUnit,
+                imageUrl: this.extractCardImageUrl($, tile, baseUrl || 'https://www.kaufland.ro'),
+                confidenceScore: 0.7
+              });
+            }
+            return;
+          }
+
+          const normalPrice = oldPrice > effectivePrice ? oldPrice : (currentPrice > effectivePrice ? currentPrice : effectivePrice);
+          const promoPrice = !loyaltyPrice && normalPrice > effectivePrice ? effectivePrice : undefined;
+          const check = PriceExtractor.validateOfferPrice({
+            title: rawTitle,
+            normalPrice,
+            promoPrice,
+            loyaltyPrice,
+            effectivePrice,
+            packageQuantity: pkg.packageQuantity,
+            packageUnit: pkg.packageUnit,
+            rawPriceText: currentPriceRaw,
+            proofType: currentExtracted.proofType
+          });
+
+          if (check.status === 'INVALID' || check.status === 'MISSING') {
+            warnings.push(`Ofertă Kaufland respinsă (${rawTitle}): ${check.reasons.join(' ')}`);
+            return;
+          }
+
+          const key = `${rawTitle.toLowerCase()}__${effectivePrice}`;
+          if (seenKaufland.has(key)) return;
+          seenKaufland.add(key);
+
+          const discountTag = tile.find('.k-price-tag__discount').first().text().trim();
+          const discNumMatch = discountTag.match(/(\d+)\s*%/);
+          const discountPercentage = discNumMatch
+            ? parseInt(discNumMatch[1], 10)
+            : (normalPrice > effectivePrice ? Math.round(((normalPrice - effectivePrice) / normalPrice) * 100) : undefined);
+
+          let unitPrice: number | undefined;
+          let unitPriceMeasure: string | undefined;
+          const basePerUnitMatch = unitInfoText.match(/1\s*(kg|l|buc)\s*=\s*(\d+(?:[.,]\d+)?)\s*(?:lei|ron)/i);
+          if (basePerUnitMatch) {
+            unitPrice = parseFloat(basePerUnitMatch[2].replace(',', '.'));
+            unitPriceMeasure = `lei/${basePerUnitMatch[1].toLowerCase()}`;
+          }
+
+          offers.push({
+            rawTitle,
+            rawBrand: subtitle && mainTitle && subtitle.length <= 40 ? subtitle : undefined,
+            normalPrice,
+            promoPrice,
+            loyaltyPrice,
+            effectivePrice,
+            currency: 'RON',
+            priceType: loyaltyPrice ? 'loyalty_card' : promoPrice ? 'promotional' : 'standard',
+            discountPercentage,
+            packageQuantity: pkg.packageQuantity,
+            packageUnit: pkg.packageUnit,
+            weight: pkg.weight,
+            volume: pkg.volume,
+            packageSize: pkg.packageSize,
+            unitPrice,
+            unitPriceMeasure,
+            priceProofType: currentExtracted.proofType,
+            isPromo: Boolean(promoPrice || loyaltyPrice || discountTag),
+            promoDetails: loyaltyPrice
+              ? `Ofertă Kaufland Card${discountPercentage ? ` (-${discountPercentage}%)` : ''}`
+              : (discountPercentage ? `Reducere Kaufland -${discountPercentage}%` : (discountTag || undefined)),
+            loyaltyCardName: loyaltyPrice ? 'Kaufland Card' : undefined,
+            loyaltyCardRequired: Boolean(loyaltyPrice),
+            imageUrl: this.extractCardImageUrl($, tile, baseUrl || 'https://www.kaufland.ro'),
+            confidenceScore: 0.94
+          });
+        } catch (err: any) {
+          warnings.push(`Eroare parsare tile Kaufland: ${err.message}`);
+        }
+      });
+    }
+
     // 3. Parsare generică HTML carduri (pentru pagini web ale retailerilor sau cataloage online)
     if (offers.length === 0) {
       const seenTitles = new Set<string>();
       $('.product-card, .product-item, .product-tile, .product-box, [data-product-id], [data-testid*="product"], [class*="product"], [class*="offer"], [class*="card"], article').each((_, el) => {
         const card = $(el);
         const title = card.find('h2, h3, h4, .product-name, .title, .name, [data-qa="product-title"], [class*="title"], [class*="name"]').first().text().trim();
-        if (title.length < 3) return;
+        if (title.length < 3 || PriceExtractor.isNoiseOrNonProductTitle(title)) return;
 
         const titleKey = title.toLowerCase();
         if (seenTitles.has(titleKey)) return;
 
-        const currentPriceEl = card.find('.current-price, .promo-price, [data-qa="price-current"], [class*="price"]:not([class*="old"]):not([class*="original"]):not([class*="strike"]), .pret, .valoare').first();
+        const currentPriceEl = card.find(
+          '.current-price, .promo-price, [data-qa="price-current"], [class*="price"]:not([class*="old"]):not([class*="original"]):not([class*="strike"]):not([class*="unit"]):not([class*="base"]):not([class*="per-kg"]):not([class*="per-l"]):not([class*="weight"]):not([class*="qty"]), .pret, .valoare'
+        ).first();
         const oldPriceEl = card.find('.old-price, .original-price, .cut-price, .pret-vechi, [data-qa="price-original"], [class*="old-price"], [class*="original-price"], del, s').first();
         const loyaltyPriceEl = card.find('.loyalty-price, .card-price, .pret-card, [data-qa="price-loyalty"]').first();
 
-        const extractCardPrice = (rawText: string): number => {
-          if (!rawText) return 0;
-          const currencyMatch = rawText.match(/(\d+(?:[.,]\d{1,2})?)\s*(?:lei|ron)\b/i);
-          if (currencyMatch) return parseFloat(currencyMatch[1].replace(',', '.'));
-          const decimalMatch = rawText.match(/(\d+[.,]\d{2})\b/);
-          if (decimalMatch) return parseFloat(decimalMatch[1].replace(',', '.'));
-          const genericMatch = rawText.match(/(\d+(?:[.,]\d{1,2})?)/);
-          return genericMatch ? parseFloat(genericMatch[1].replace(',', '.')) : 0;
-        };
+        const currentText = currentPriceEl.text().trim();
+        const oldText = oldPriceEl.text().trim();
+        const loyaltyText = loyaltyPriceEl.text().trim();
 
-        const currentPrice = extractCardPrice(currentPriceEl.text().trim());
-        const oldPrice = extractCardPrice(oldPriceEl.text().trim());
-        const loyaltyPrice = extractCardPrice(loyaltyPriceEl.text().trim());
+        const currentRes = PriceExtractor.extractPriceWithContext(currentText, {
+          isPriceElement: currentPriceEl.length > 0,
+          requireCommercialContext: false
+        });
+        const oldRes = PriceExtractor.extractPriceWithContext(oldText, {
+          isPriceElement: oldPriceEl.length > 0,
+          requireCommercialContext: false
+        });
+        const loyaltyRes = PriceExtractor.extractPriceWithContext(loyaltyText, {
+          isPriceElement: loyaltyPriceEl.length > 0,
+          requireCommercialContext: false
+        });
+
+        const currentPrice = currentRes.value || 0;
+        const oldPrice = oldRes.value || 0;
+        const loyaltyPrice = loyaltyRes.value || 0;
 
         const effectivePrice = loyaltyPrice > 0 ? loyaltyPrice : currentPrice;
-        if (!Number.isFinite(effectivePrice) || effectivePrice <= 0 || effectivePrice >= 10000) return;
+        if (!Number.isFinite(effectivePrice) || effectivePrice <= 0 || effectivePrice >= 50000) return;
 
         const normalPrice = oldPrice > effectivePrice ? oldPrice : (currentPrice > effectivePrice ? currentPrice : effectivePrice);
         const promoPrice = !loyaltyPrice && normalPrice > effectivePrice ? effectivePrice : undefined;
         const brand = card.find('.brand, .manufacturer, [data-qa="product-brand"]').first().text().trim() || undefined;
         const barcode = card.attr('data-ean') || card.attr('data-sku') || undefined;
         const imageUrl = this.extractCardImageUrl($, card, baseUrl);
+        const pkg = PriceExtractor.extractPackagingSafely(title);
 
-        let packageQuantity: number | undefined;
-        let packageUnit: string | undefined;
-        const pkgMatch = title.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-        if (pkgMatch) {
-          packageQuantity = parseFloat(pkgMatch[1].replace(',', '.'));
-          packageUnit = pkgMatch[2].toLowerCase();
+        const validation = PriceExtractor.validateOfferPrice({
+          title,
+          normalPrice,
+          promoPrice,
+          loyaltyPrice: loyaltyPrice > 0 ? loyaltyPrice : undefined,
+          effectivePrice,
+          packageQuantity: pkg.packageQuantity,
+          packageUnit: pkg.packageUnit,
+          rawPriceText: loyaltyPrice > 0 ? loyaltyText : currentText,
+          proofType: loyaltyPrice > 0 ? loyaltyRes.proofType : currentRes.proofType
+        });
+
+        if (validation.status === 'INVALID' || validation.status === 'MISSING') {
+          warnings.push(`Ofertă HTML generică respinsă (${title}): ${validation.reasons.join(' ')}`);
+          return;
         }
 
         const promoBadge = card.find('.badge, .promo-label, .reducere, .discount-tag').first().text().trim();
@@ -517,8 +676,12 @@ export class CatalogParserEngine {
           currency: 'RON',
           priceType: loyaltyPrice > 0 ? 'loyalty_card' : promoPrice ? 'promotional' : 'standard',
           discountPercentage: normalPrice > effectivePrice ? Math.round(((normalPrice - effectivePrice) / normalPrice) * 100) : undefined,
-          packageQuantity,
-          packageUnit,
+          packageQuantity: pkg.packageQuantity,
+          packageUnit: pkg.packageUnit,
+          weight: pkg.weight,
+          volume: pkg.volume,
+          packageSize: pkg.packageSize,
+          priceProofType: loyaltyPrice > 0 ? loyaltyRes.proofType : currentRes.proofType,
           isPromo,
           promoDetails: promoBadge || undefined,
           loyaltyCardName: loyaltyPrice > 0 && retailerId ? `${retailerId.toUpperCase()} Card` : undefined,
@@ -539,17 +702,17 @@ export class CatalogParserEngine {
         }
         const title = String(data.fullTitle || data.title || data.keyfacts?.fullTitle || $(el).find('h2, h3, h4, .article-title, [class*="title"], [class*="name"]').first().text() || '').trim();
         const key = title.toLowerCase();
-        if (title.length < 3 || seenProducts.has(key)) return;
+        if (title.length < 3 || PriceExtractor.isNoiseOrNonProductTitle(title) || seenProducts.has(key)) return;
         seenProducts.add(key);
         const packaging = String(data.packaging || data.price?.packaging?.text || $(el).find('.m-price__subline, .pricebox__basic-quantity').text() || '');
-        const packageMatch = packaging.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
+        const pkg = PriceExtractor.extractPackagingSafely(`${packaging} ${title}`);
         products.push({
           rawTitle: title,
           rawBrand: typeof data.brand === 'string' ? data.brand : data.brand?.name,
           rawCategory: typeof data.category === 'string' ? data.category : data.category?.name,
           rawBarcode: data.gtin13 || data.gtin8 || data.sku,
-          packageQuantity: packageMatch ? parseFloat(packageMatch[1].replace(',', '.')) : undefined,
-          packageUnit: packageMatch?.[2]?.toLowerCase(),
+          packageQuantity: pkg.packageQuantity,
+          packageUnit: pkg.packageUnit,
           imageUrl: this.resolveImageUrl(data.image, baseUrl) || this.extractCardImageUrl($, $(el), baseUrl),
           confidenceScore: rawAttr ? 0.8 : 0.55
         });
@@ -564,7 +727,7 @@ export class CatalogParserEngine {
           while ((match = titlePattern.exec(source))) {
             const title = match[1].replace(/\\\\u0026/g, '&').trim();
             const key = title.toLowerCase();
-            if (seenTitles.has(key) || /^(product|item|offer|category|brand)$/i.test(title)) continue;
+            if (seenTitles.has(key) || PriceExtractor.isNoiseOrNonProductTitle(title) || /^(product|item|offer|category|brand)$/i.test(title)) continue;
             seenTitles.add(key);
             products.push({ rawTitle: title, confidenceScore: 0.45 });
           }
@@ -614,6 +777,18 @@ export class CatalogParserEngine {
         };
       }
 
+      // Respinge documente non-comerciale (rapoarte sustenabilitate, taxonomie UE, audituri ESG)
+      if (/\b(?:Taxonomie\s+UE|Activit[ăa][țt]i\s+economice|Raport\s+(?:anual|de\s+sustenabilitate)|CCM\s*\d+(?:[.,]\d+)?|EU\s+Taxonomy)\b/i.test(text) && !/\b(?:lei|ron)\b/i.test(text)) {
+        return {
+          success: false,
+          offers: [],
+          totalExtracted: 0,
+          format: 'pdf',
+          ocrConfidence: 0,
+          error: 'Documentul PDF pare un raport corporativ/sustenabilitate fără prețuri comerciale.'
+        };
+      }
+
       // Calcul scor încredere OCR/Text pe baza frecvenței termenilor specifici de retail alimentar
       const groceryKeywords = ['lei', 'ron', 'kg', 'buc', 'reducere', 'lapte', 'paine', 'carne', 'ulei', 'pret', 'oferta', 'feliat', 'bio'];
       let keywordHits = 0;
@@ -629,15 +804,16 @@ export class CatalogParserEngine {
       const seenTitles = new Set<string>();
 
       // Euristică 1: Linii cu preț explicit și monedă ("4,99 lei", "12.50 RON")
-      const priceRegex = /(\d+(?:[.,]\d{1,2}))\s*(?:lei|ron)/i;
+      const priceRegex = /(\d+(?:[.,]\d{1,2}))\s*(?:lei|ron)\b/i;
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const match = line.match(priceRegex);
 
         if (match) {
-          const price = parseFloat(match[1].replace(',', '.'));
-          if (isNaN(price) || price <= 0 || price > 5000) continue;
+          const extracted = PriceExtractor.extractPriceWithContext(line, { requireCommercialContext: true });
+          const price = extracted.value;
+          if (!price || price <= 0 || price > 50000) continue;
 
           let titleCandidate = line.replace(match[0], '').replace(/[.,\-_:;*]/g, ' ').trim();
 
@@ -646,15 +822,18 @@ export class CatalogParserEngine {
             titleCandidate = lines[i - 1];
           }
 
-          if (titleCandidate.length >= 3) {
-            // Extragere gramaj dacă există
-            const pkgMatch = titleCandidate.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-            let pkgQty: number | undefined = undefined;
-            let pkgUnit: string | undefined = undefined;
-            if (pkgMatch) {
-              pkgQty = parseFloat(pkgMatch[1].replace(',', '.'));
-              pkgUnit = pkgMatch[2].toLowerCase();
-            }
+          if (titleCandidate.length >= 3 && !PriceExtractor.isNoiseOrNonProductTitle(titleCandidate)) {
+            const pkg = PriceExtractor.extractPackagingSafely(titleCandidate);
+            const check = PriceExtractor.validateOfferPrice({
+              title: titleCandidate,
+              normalPrice: price,
+              effectivePrice: price,
+              packageQuantity: pkg.packageQuantity,
+              packageUnit: pkg.packageUnit,
+              rawPriceText: match[0],
+              proofType: extracted.proofType
+            });
+            if (check.status === 'INVALID' || check.status === 'MISSING') continue;
 
             const isPromo = /reducere|promo|discount|-?\d+%/i.test(line) || (i > 0 && /reducere|promo/i.test(lines[i - 1]));
             const normKey = titleCandidate.toLowerCase();
@@ -665,8 +844,12 @@ export class CatalogParserEngine {
                 normalPrice: price,
                 effectivePrice: price,
                 currency: 'RON',
-                packageQuantity: pkgQty,
-                packageUnit: pkgUnit,
+                packageQuantity: pkg.packageQuantity,
+                packageUnit: pkg.packageUnit,
+                weight: pkg.weight,
+                volume: pkg.volume,
+                packageSize: pkg.packageSize,
+                priceProofType: extracted.proofType,
                 isPromo,
                 confidenceScore: Math.round(ocrConfidence * 0.8) / 100
               });
@@ -675,11 +858,12 @@ export class CatalogParserEngine {
         }
       }
 
-      // Euristică 2: Cataloage de supermarket tip revistă/pliant (prețuri decimale standalone adiacente denumirilor de produse)
+      // Euristică 2: Cataloage de supermarket tip revistă/pliant (verificând strict separarea de cantități)
       const disclaimers = [
         'limita stocului', 'consumului personal', 'toate imaginile', 'termeni si conditii',
         'studiu yougov', 'drepturi rezervate', 'oferta se aplica', 'reducerea este valabila',
-        'declaratie', 'black friday', 'kaufland card', 'card fidelitate', 'pagina'
+        'declaratie', 'black friday', 'kaufland card', 'card fidelitate', 'pagina',
+        'de plastic', 'taxonomie', 'activitati economice', 'valabila in perioada'
       ];
 
       const foodKeywords = [
@@ -695,26 +879,57 @@ export class CatalogParserEngine {
         const line = lines[i];
         const lower = line.toLowerCase();
 
-        if (disclaimers.some(d => lower.includes(d))) continue;
+        if (disclaimers.some(d => lower.includes(d)) || PriceExtractor.isNoiseOrNonProductTitle(line)) continue;
         if (line.length > 80 || line.length < 3) continue;
 
         const hasKeyword = foodKeywords.some(kw => lower.includes(kw));
         if (!hasKeyword) continue;
 
-        // Căutare preț numeric standalone în proximitate (+/- 5 linii)
+        // Căutare preț în proximitate (+/- 4 linii), interzicând liniile urmate de unități fizice (ex: "0,33" urmat de "L")
         let foundPrice: number | null = null;
+        let foundProof: PriceProofType = 'none';
+        let foundRawPrice = '';
         let promoPct: string | null = null;
 
-        for (let offset = -5; offset <= 5; offset++) {
-          const neighbor = lines[i + offset];
+        let pkgCtxText = line;
+        for (let o = -2; o <= 2; o++) {
+          if (lines[i + o]) pkgCtxText += ` ${lines[i + o]}`;
+        }
+        const pkg = PriceExtractor.extractPackagingSafely(pkgCtxText);
+
+        for (let offset = -4; offset <= 4; offset++) {
+          const idxNeighbor = i + offset;
+          const neighbor = lines[idxNeighbor];
           if (!neighbor) continue;
-          if (/^\d{1,3}[.,]\d{2}$/.test(neighbor)) {
-            const val = parseFloat(neighbor.replace(',', '.'));
-            if (val >= 0.5 && val <= 500) {
-              foundPrice = val;
+
+          const nextNeighbor = lines[idxNeighbor + 1] || '';
+          const joinedWithNext = `${neighbor} ${nextNeighbor}`.trim();
+          // Dacă numărul este urmat de unitate fizică pe linia următoare (ex: "0,33" \n "L"), nu este preț!
+          if (/^\d{1,4}(?:[.,]\d{1,2})?\s*(?:kg|gr|g|ml|cl|l|buc|role|%)\b/i.test(joinedWithNext)) {
+            continue;
+          }
+
+          const neighborRes = PriceExtractor.extractPriceWithContext(neighbor, {
+            requireCommercialContext: false,
+            contextWindow: lines[idxNeighbor - 1] || ''
+          });
+          if (neighborRes.value !== null && neighborRes.value >= 0.5 && neighborRes.value <= 5000) {
+            const qtyCheck = PriceExtractor.detectQuantityAsPrice({
+              title: line,
+              effectivePrice: neighborRes.value,
+              packageQuantity: pkg.packageQuantity,
+              packageUnit: pkg.packageUnit,
+              rawPriceText: neighbor,
+              proofType: neighborRes.proofType
+            });
+            if (!qtyCheck.isConfused) {
+              foundPrice = neighborRes.value;
+              foundProof = neighborRes.proofType;
+              foundRawPrice = neighbor;
               break;
             }
           }
+
           const pctMatch = neighbor.match(/-(\d{1,2})%/);
           if (pctMatch) {
             promoPct = pctMatch[1];
@@ -725,68 +940,70 @@ export class CatalogParserEngine {
           const productKey = line.toLowerCase();
           if (!seenTitles.has(productKey)) {
             seenTitles.add(productKey);
-            const packageMatch = line.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
             products.push({
               rawTitle: line,
               rawBrand: i > 0 && lines[i - 1].length <= 30 ? lines[i - 1] : undefined,
-              packageQuantity: packageMatch ? parseFloat(packageMatch[1].replace(',', '.')) : undefined,
-              packageUnit: packageMatch?.[2]?.toLowerCase(),
+              packageQuantity: pkg.packageQuantity,
+              packageUnit: pkg.packageUnit,
               confidenceScore: Math.round(ocrConfidence * 0.6) / 100
             });
           }
+          continue;
         }
 
-        if (foundPrice) {
-          let pkgQty: number | undefined = undefined;
-          let pkgUnit: string | undefined = undefined;
+        let brand: string | undefined = undefined;
+        if (i > 0) {
+          const prev = lines[i - 1];
+          if (
+            prev.length >= 2 &&
+            prev.length <= 25 &&
+            !disclaimers.some(d => prev.toLowerCase().includes(d)) &&
+            !PriceExtractor.isNoiseOrNonProductTitle(prev) &&
+            !/^\d+/.test(prev) &&
+            !prev.includes('--')
+          ) {
+            brand = prev;
+          }
+        }
 
-          for (let offset = -2; offset <= 2; offset++) {
-            const neighbor = lines[i + offset];
-            if (!neighbor) continue;
-            const m = neighbor.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-            if (m) {
-              pkgQty = parseFloat(m[1].replace(',', '.'));
-              pkgUnit = m[2].toLowerCase();
-              break;
-            }
+        let cleanTitle = (brand ? `${brand} ${line}` : line)
+          .replace(/^-\d{1,2}%\s*/, '')
+          .replace(/--\s*\d+\s*of\s*\d+\s*--/gi, '')
+          .replace(/S\d+-[A-Z0-9_-]+/g, '')
+          .trim();
+
+        if (cleanTitle.length >= 3 && !disclaimers.some(d => cleanTitle.toLowerCase().includes(d)) && !PriceExtractor.isNoiseOrNonProductTitle(cleanTitle)) {
+          const priceCheck = PriceExtractor.validateOfferPrice({
+            title: cleanTitle,
+            normalPrice: foundPrice,
+            effectivePrice: foundPrice,
+            packageQuantity: pkg.packageQuantity,
+            packageUnit: pkg.packageUnit,
+            rawPriceText: foundRawPrice,
+            proofType: foundProof
+          });
+          if (priceCheck.status === 'INVALID' || priceCheck.status === 'MISSING') {
+            continue;
           }
 
-          let brand: string | undefined = undefined;
-          if (i > 0) {
-            const prev = lines[i - 1];
-            if (
-              prev.length >= 2 &&
-              prev.length <= 25 &&
-              !disclaimers.some(d => prev.toLowerCase().includes(d)) &&
-              !/^\d+/.test(prev) &&
-              !prev.includes('--')
-            ) {
-              brand = prev;
-            }
-          }
-
-          let cleanTitle = (brand ? `${brand} ${line}` : line)
-            .replace(/^-\d{1,2}%\s*/, '')
-            .replace(/--\s*\d+\s*of\s*\d+\s*--/gi, '')
-            .replace(/S\d+-[A-Z0-9_-]+/g, '')
-            .trim();
-
-          if (cleanTitle.length >= 3 && !disclaimers.some(d => cleanTitle.toLowerCase().includes(d))) {
-            const normKey = cleanTitle.toLowerCase();
-            if (!seenTitles.has(normKey)) {
-              seenTitles.add(normKey);
-              offers.push({
-                rawTitle: cleanTitle,
-                rawBrand: brand,
-                normalPrice: foundPrice,
-                effectivePrice: foundPrice,
-                currency: 'RON',
-                packageQuantity: pkgQty,
-                packageUnit: pkgUnit,
-                isPromo: Boolean(promoPct),
-                confidenceScore: 0.85
-              });
-            }
+          const normKey = cleanTitle.toLowerCase();
+          if (!seenTitles.has(normKey)) {
+            seenTitles.add(normKey);
+            offers.push({
+              rawTitle: cleanTitle,
+              rawBrand: brand,
+              normalPrice: foundPrice,
+              effectivePrice: foundPrice,
+              currency: 'RON',
+              packageQuantity: pkg.packageQuantity,
+              packageUnit: pkg.packageUnit,
+              weight: pkg.weight,
+              volume: pkg.volume,
+              packageSize: pkg.packageSize,
+              priceProofType: foundProof,
+              isPromo: Boolean(promoPct),
+              confidenceScore: 0.85
+            });
           }
         }
       }
@@ -822,17 +1039,21 @@ export class CatalogParserEngine {
     $('.product_info').each((_, el) => {
       try {
         const title = ($(el).find('.product_title span').first().text().trim() || $(el).find('.product_title').first().text().trim());
-        if (!title || title.length < 2) return;
+        if (!title || PriceExtractor.isNoiseOrNonProductTitle(title)) return;
 
         // Price wrappers
-        const fullPriceInt = $(el).find('.Price_priceWrapperFull__HAvIg').first().text().trim();
-        const decimalCurrency = $(el).find('.Price_priceWrapperDecimalCurrency__52Dsm').first().text().trim();
-        const promoPriceNum = parseFloat(`${fullPriceInt}.${decimalCurrency.replace(/[^0-9]/g, '')}`);
+        const fullPriceInt = $(el).find('.Price_priceWrapperFull__HAvIg').first().text().trim().replace(/[^\d]/g, '');
+        const decimalCurrency = $(el).find('.Price_priceWrapperDecimalCurrency__52Dsm').first().text().trim().replace(/[^\d]/g, '');
+        const promoPriceNum = fullPriceInt
+          ? parseFloat(decimalCurrency ? `${fullPriceInt}.${decimalCurrency.slice(0, 2)}` : fullPriceInt)
+          : NaN;
 
         // Strike through price (regular price)
-        const strikeInt = $(el).find('.Price_priceWrapperStrikeThrough__EvRr7 .Price_priceWrapperFull__HAvIg').text().trim();
-        const strikeDec = $(el).find('.Price_priceWrapperStrikeThrough__EvRr7 .Price_priceWrapperDecimalCurrency__52Dsm').text().trim();
-        const strikePriceNum = strikeInt ? parseFloat(`${strikeInt}.${strikeDec.replace(/[^0-9]/g, '')}`) : undefined;
+        const strikeInt = $(el).find('.Price_priceWrapperStrikeThrough__EvRr7 .Price_priceWrapperFull__HAvIg').text().trim().replace(/[^\d]/g, '');
+        const strikeDec = $(el).find('.Price_priceWrapperStrikeThrough__EvRr7 .Price_priceWrapperDecimalCurrency__52Dsm').text().trim().replace(/[^\d]/g, '');
+        const strikePriceNum = strikeInt
+          ? parseFloat(strikeDec ? `${strikeInt}.${strikeDec.slice(0, 2)}` : strikeInt)
+          : undefined;
 
         const isLoyalty = $(el).find('.PricesComponent_loyalty__Xl2Oq').length > 0;
 
@@ -846,14 +1067,22 @@ export class CatalogParserEngine {
 
         if (isNaN(effectivePrice) || effectivePrice <= 0) return;
 
-        // Gramaj / volum din titlu
-        let packageQuantity: number | undefined = undefined;
-        let packageUnit: string | undefined = undefined;
-        const pkgMatch = title.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-        if (pkgMatch) {
-          packageQuantity = parseFloat(pkgMatch[1].replace(',', '.'));
-          packageUnit = pkgMatch[2].toLowerCase();
-        }
+        // Gramaj / volum din titlu în siguranță
+        const pkg = PriceExtractor.extractPackagingSafely(title);
+        const packageQuantity = pkg.packageQuantity;
+        const packageUnit = pkg.packageUnit;
+
+        const check = PriceExtractor.validateOfferPrice({
+          title,
+          normalPrice: normalPrice || effectivePrice,
+          promoPrice: !isLoyalty && effectivePrice < normalPrice ? effectivePrice : undefined,
+          loyaltyPrice,
+          effectivePrice,
+          packageQuantity,
+          packageUnit,
+          proofType: 'price_selector'
+        });
+        if (check.status === 'INVALID' || check.status === 'MISSING') return;
 
         let discountPercentage: number | undefined = undefined;
         if (normalPrice > effectivePrice) {
@@ -896,6 +1125,10 @@ export class CatalogParserEngine {
           discountPercentage,
           packageQuantity,
           packageUnit,
+          weight: pkg.weight,
+          volume: pkg.volume,
+          packageSize: pkg.packageSize,
+          priceProofType: 'price_selector',
           unitPrice,
           unitPriceMeasure,
           isPromo: effectivePrice < normalPrice || isLoyalty,
@@ -934,7 +1167,7 @@ export class CatalogParserEngine {
     $('[data-test="product-tile"]').each((_, el) => {
       try {
         const title = $(el).find('[data-test="product-title"]').text().trim();
-        if (!title) return;
+        if (!title || PriceExtractor.isNoiseOrNonProductTitle(title)) return;
         const imageUrl = this.extractCardImageUrl($, $(el), baseUrl || 'https://www.penny.ro');
 
         const pieceDesc = $(el).find('[data-test="product-information-piece-description"]').text().trim();
@@ -956,8 +1189,9 @@ export class CatalogParserEngine {
         $(el).find('[data-test="product-price-type"]').each((_, pt) => {
           const label = $(pt).find('[data-test="product-price-type-price-label"]').text().trim().toLowerCase();
           const valStr = $(pt).find('[data-test="product-price-type-value"] .ws-product-price-value__main').text().trim();
-          const num = parseFloat(valStr.replace(/[^\d,.]/g, '').replace(',', '.'));
-          if (!isNaN(num) && num > 0) {
+          const extracted = PriceExtractor.extractPriceWithContext(valStr, { isPriceElement: true });
+          const num = extracted.value;
+          if (num && num > 0) {
             if (label.includes('fără penny card') || label.includes('fara')) {
               standardPrice = num;
             } else if (label.includes('cu penny card')) {
@@ -975,13 +1209,21 @@ export class CatalogParserEngine {
         const effectivePrice = loyaltyPrice || standardPrice;
         if (isNaN(effectivePrice) || effectivePrice <= 0) return;
 
-        let packageQuantity: number | undefined = undefined;
-        let packageUnit: string | undefined = undefined;
-        const pkgMatch = pieceDesc.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i) || title.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-        if (pkgMatch) {
-          packageQuantity = parseFloat(pkgMatch[1].replace(',', '.'));
-          packageUnit = pkgMatch[2].toLowerCase();
-        }
+        const pkg = PriceExtractor.extractPackagingSafely(`${pieceDesc} ${title}`);
+        const packageQuantity = pkg.packageQuantity;
+        const packageUnit = pkg.packageUnit;
+
+        const check = PriceExtractor.validateOfferPrice({
+          title,
+          normalPrice: standardPrice,
+          promoPrice: !loyaltyPrice && effectivePrice < standardPrice ? effectivePrice : undefined,
+          loyaltyPrice,
+          effectivePrice,
+          packageQuantity,
+          packageUnit,
+          proofType: 'price_selector'
+        });
+        if (check.status === 'INVALID' || check.status === 'MISSING') return;
 
         const unitPriceLabel = $(el).find('[data-test="product-price-type-label"]').first().text().trim();
         let unitPrice: number | undefined = undefined;
@@ -1010,6 +1252,10 @@ export class CatalogParserEngine {
           discountPercentage,
           packageQuantity,
           packageUnit,
+          weight: pkg.weight,
+          volume: pkg.volume,
+          packageSize: pkg.packageSize,
+          priceProofType: 'price_selector',
           unitPrice,
           unitPriceMeasure,
           isPromo: Boolean(loyaltyPrice || (effectivePrice < standardPrice)),
@@ -1060,11 +1306,16 @@ export class CatalogParserEngine {
         for (const spread of spreads) {
           for (const page of (spread.pages || [])) {
             if (!page.text) continue;
+            const text: string = page.text;
+            // Respinge pagini din rapoarte corporative / ESG / Taxonomie UE (ex: CCM 7.3)
+            if (/\b(?:Taxonomie\s+UE|Activit[ăa][țt]i\s+economice|Raport\s+(?:anual|de\s+sustenabilitate)|CCM\s*\d+(?:[.,]\d+)?|EBITDA|EU\s+Taxonomy)\b/i.test(text) && !/\bLEI\b/i.test(text)) {
+              warnings.push('Pagină Publitas Mega Image ignorată (document corporativ/sustenabilitate, nu catalog de prețuri).');
+              continue;
+            }
             const pageImageUrl = this.resolveImageUrl(
               page.images?.[0]?.url || page.image || page.thumbnailUrl || spread.images?.[0]?.url,
               baseUrl || 'https://www.mega-image.ro'
             );
-            const text: string = page.text;
             const normalizedText = text.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
             const lines = normalizedText.split('\n').map((l: string) => l.trim()).filter(Boolean);
 
@@ -1081,17 +1332,24 @@ export class CatalogParserEngine {
 
             for (let i = 0; i < lines.length; i++) {
               const line = lines[i];
-              const priceMatch = line.match(/^(\d+(?:[.,]\d{2})?)\s*(?:LEI(?:\/BUC\.?|\/KG|\/L)?)?$/i);
+              // Necesită explicit LEI/RON pe linie SAU linie decimală neatașată unei unități fizice
+              const nextLine = lines[i + 1] || '';
+              if (/^(?:kg|gr|g|ml|cl|l|buc|role|%)\b/i.test(nextLine)) continue;
+
+              const priceMatch = line.match(/^(\d{1,4}(?:[.,]\d{2})?)\s*(LEI(?:\/BUC\.?|\/KG|\/L)?|RON)$/i)
+                || (normalizedText.toUpperCase().includes('LEI') ? line.match(/^(\d{1,4}[.,]\d{2})$/) : null);
+
               if (priceMatch && i > 0) {
                 const rawPrice = parseFloat(priceMatch[1].replace(',', '.'));
-                if (rawPrice > 0.1 && rawPrice < 1000) {
+                const hasCurrencySuffix = Boolean(priceMatch[2]);
+                if (rawPrice >= 0.2 && rawPrice < 5000) {
                   let title = lines[i - 1];
                   if (i > 1 && (lines[i - 1].startsWith('AMBALAT') || lines[i - 1].startsWith('CAL.') || lines[i - 1].match(/^\d+\s*(?:G|KG|ML|L|BUC)/i))) {
                     title = `${lines[i - 2]} ${lines[i - 1]}`;
                   }
                   if (
                     !title ||
-                    title.length < 3 ||
+                    PriceExtractor.isNoiseOrNonProductTitle(title) ||
                     title.includes('LEI') ||
                     title.includes('Nr.') ||
                     title.startsWith('DOAR') ||
@@ -1107,35 +1365,41 @@ export class CatalogParserEngine {
                   let discount: number | undefined = undefined;
 
                   for (let j = i + 1; j < Math.min(lines.length, i + 8); j++) {
-                    const nextLine = lines[j];
-                    if (nextLine.includes('CARD CONNECT') || nextLine.includes('CONNECT')) {
+                    const lookLine = lines[j];
+                    if (lookLine.includes('CARD CONNECT') || lookLine.includes('CONNECT')) {
                       hasLoyalty = true;
                     }
-                    const discMatch = nextLine.match(/-\s*(\d+)\s*%/);
+                    const discMatch = lookLine.match(/-\s*(\d+)\s*%/);
                     if (discMatch) {
                       discount = parseInt(discMatch[1], 10);
                     }
-                    const pMatch = nextLine.match(/^(\d{1,4}(?:[.,]\d{2})?)\s*(?:LEI)?/i);
+                    // Preț secundar STRICT dacă are LEI/RON sau zecimal explicit după CARD CONNECT (fără p2 / 100!)
+                    const pMatch = lookLine.match(/^(\d{1,4}(?:[.,]\d{2})?)\s*(LEI|RON)\b/i)
+                      || (hasLoyalty ? lookLine.match(/^(\d{1,4}[.,]\d{2})$/) : null);
                     if (pMatch && !loyaltyPrice && j !== i) {
-                      let p2 = parseFloat(pMatch[1].replace(',', '.'));
-                      if (p2 > 100 && !pMatch[1].includes('.') && !pMatch[1].includes(',')) {
-                        p2 = p2 / 100;
-                      }
-                      if (p2 > 0.1 && p2 !== rawPrice) {
+                      const p2 = parseFloat(pMatch[1].replace(',', '.'));
+                      if (p2 >= 0.2 && p2 < 5000 && p2 !== rawPrice) {
                         loyaltyPrice = p2;
                       }
                     }
                   }
 
-                  let packageQuantity: number | undefined = undefined;
-                  let packageUnit: string | undefined = undefined;
-                  const pkgMatch = title.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-                  if (pkgMatch) {
-                    packageQuantity = parseFloat(pkgMatch[1].replace(',', '.'));
-                    packageUnit = pkgMatch[2].toLowerCase();
-                  }
-
+                  const pkg = PriceExtractor.extractPackagingSafely(title);
                   const effectivePrice = loyaltyPrice || rawPrice;
+                  const validation = PriceExtractor.validateOfferPrice({
+                    title,
+                    normalPrice: rawPrice,
+                    promoPrice: !hasLoyalty && loyaltyPrice && loyaltyPrice < rawPrice ? loyaltyPrice : undefined,
+                    loyaltyPrice: hasLoyalty ? loyaltyPrice : undefined,
+                    effectivePrice,
+                    packageQuantity: pkg.packageQuantity,
+                    packageUnit: pkg.packageUnit,
+                    rawPriceText: line,
+                    proofType: hasCurrencySuffix ? 'currency_label' : 'contextual_decimal'
+                  });
+                  if (validation.status === 'INVALID' || validation.status === 'MISSING') {
+                    continue;
+                  }
 
                   offers.push({
                     rawTitle: title,
@@ -1146,8 +1410,12 @@ export class CatalogParserEngine {
                     currency: 'RON',
                     priceType: hasLoyalty ? 'loyalty_card' : (effectivePrice < rawPrice ? 'promotional' : 'standard'),
                     discountPercentage: discount,
-                    packageQuantity,
-                    packageUnit,
+                    packageQuantity: pkg.packageQuantity,
+                    packageUnit: pkg.packageUnit,
+                    weight: pkg.weight,
+                    volume: pkg.volume,
+                    packageSize: pkg.packageSize,
+                    priceProofType: hasCurrencySuffix ? 'currency_label' : 'contextual_decimal',
                     isPromo: hasLoyalty || Boolean(discount),
                     promoDetails: hasLoyalty
                       ? `Ofertă exclusivă cu Card Connect Mega Image (-${discount || 20}%)`
@@ -1252,13 +1520,9 @@ export class CatalogParserEngine {
                 discountPercentage = Math.round(((normalPrice - effectivePrice) / normalPrice) * 100);
               }
 
-              let packageQuantity: number | undefined = undefined;
-              let packageUnit: string | undefined = undefined;
-              const pkgMatch = p.productName.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc|cl|m|cm)\b/i);
-              if (pkgMatch) {
-                packageQuantity = parseFloat(pkgMatch[1].replace(',', '.'));
-                packageUnit = pkgMatch[2].toLowerCase();
-              }
+              const pkg = PriceExtractor.extractPackagingSafely(p.productName);
+              const packageQuantity = pkg.packageQuantity;
+              const packageUnit = pkg.packageUnit;
 
               let unitPrice: number | undefined = undefined;
               let unitPriceMeasure: string | undefined = undefined;
@@ -1402,13 +1666,9 @@ export class CatalogParserEngine {
                 discountPercentage = Math.round(((normalPrice - effectivePrice) / normalPrice) * 100);
               }
 
-              let packageQuantity: number | undefined = undefined;
-              let packageUnit: string | undefined = undefined;
-              const pkgMatch = p.productName.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc|cl|m|cm)\b/i);
-              if (pkgMatch) {
-                packageQuantity = parseFloat(pkgMatch[1].replace(',', '.'));
-                packageUnit = pkgMatch[2].toLowerCase();
-              }
+              const pkg = PriceExtractor.extractPackagingSafely(p.productName);
+              const packageQuantity = pkg.packageQuantity;
+              const packageUnit = pkg.packageUnit;
 
               let unitPrice: number | undefined = undefined;
               let unitPriceMeasure: string | undefined = undefined;
@@ -1542,9 +1802,36 @@ export class CatalogParserEngine {
       return { success: false, offers: [], totalExtracted: 0, format: 'csv', error: 'Fișier CSV fără rânduri de date.' };
     }
 
-    const header = lines[0].toLowerCase().split(/[,;\t]/).map(c => c.trim().replace(/^["']|["']$/g, ''));
+    const splitCsvRow = (row: string, sep: string): string[] => {
+      const cells: string[] = [];
+      let current = '';
+      let inQuotes = false;
+      for (let idx = 0; idx < row.length; idx++) {
+        const ch = row[idx];
+        if (ch === '"') {
+          if (inQuotes && row[idx + 1] === '"') {
+            current += '"';
+            idx++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (!inQuotes && ch === sep) {
+          cells.push(current.trim().replace(/^["']|["']$/g, ''));
+          current = '';
+        } else {
+          current += ch;
+        }
+      }
+      cells.push(current.trim().replace(/^["']|["']$/g, ''));
+      return cells;
+    };
+
+    const firstLine = lines[0];
+    const separator = firstLine.includes('\t') ? '\t' : firstLine.includes(';') ? ';' : ',';
+    const header = splitCsvRow(firstLine.toLowerCase(), separator);
     const nameIdx = header.findIndex(h => h.includes('produs') || h.includes('name') || h.includes('denumire') || h.includes('title'));
-    const priceIdx = header.findIndex(h => h.includes('pret') || h.includes('price') || h.includes('valoare'));
+    const priceIdx = header.findIndex(h => h === 'price' || h === 'pret' || h === 'valoare' || (!h.includes('normal') && (h.includes('pret') || h.includes('price'))));
+    const normalPriceIdx = header.findIndex(h => h.includes('normal') || h.includes('vechi') || h.includes('original'));
     const barcodeIdx = header.findIndex(h => h.includes('barcode') || h.includes('ean') || h.includes('gtin') || h.includes('cod'));
     const brandIdx = header.findIndex(h => h.includes('brand') || h.includes('marca'));
     const imageIdx = header.findIndex(h => h.includes('image') || h.includes('imagine') || h.includes('img') || h.includes('poza') || h.includes('photo'));
@@ -1556,21 +1843,43 @@ export class CatalogParserEngine {
     const offers: RawParsedOffer[] = [];
 
     for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(/[,;\t]/).map(c => c.trim().replace(/^["']|["']$/g, ''));
+      const cols = splitCsvRow(lines[i], separator);
       const title = cols[nameIdx];
-      const rawPrice = cols[priceIdx]?.replace(',', '.');
-      const price = parseFloat(rawPrice);
+      const rawPrice = cols[priceIdx];
+      const price = PriceExtractor.parseExplicitPriceField(rawPrice);
+      const parsedNormal = normalPriceIdx !== -1 ? PriceExtractor.parseExplicitPriceField(cols[normalPriceIdx]) : null;
+      const normalPrice = parsedNormal && parsedNormal >= (price || 0) ? parsedNormal : price;
 
-      if (title && !isNaN(price) && price > 0) {
+      if (title && !PriceExtractor.isNoiseOrNonProductTitle(title) && price !== null && price > 0) {
+        const pkg = PriceExtractor.extractPackagingSafely(title);
+        const check = PriceExtractor.validateOfferPrice({
+          title,
+          normalPrice: normalPrice ?? price,
+          promoPrice: normalPrice && normalPrice > price ? price : undefined,
+          effectivePrice: price,
+          packageQuantity: pkg.packageQuantity,
+          packageUnit: pkg.packageUnit,
+          rawPriceText: rawPrice,
+          proofType: 'explicit_field'
+        });
+        if (check.status === 'INVALID' || check.status === 'MISSING') continue;
+
         offers.push({
           rawTitle: title,
           rawBrand: brandIdx !== -1 ? cols[brandIdx] : undefined,
           rawBarcode: barcodeIdx !== -1 ? cols[barcodeIdx] : undefined,
           imageUrl: imageIdx !== -1 ? this.resolveImageUrl(cols[imageIdx], baseUrl) : undefined,
-          normalPrice: price,
+          normalPrice: normalPrice ?? price,
+          promoPrice: normalPrice && normalPrice > price ? price : undefined,
           effectivePrice: price,
           currency: 'RON',
-          isPromo: false,
+          packageQuantity: pkg.packageQuantity,
+          packageUnit: pkg.packageUnit,
+          weight: pkg.weight,
+          volume: pkg.volume,
+          packageSize: pkg.packageSize,
+          priceProofType: 'explicit_field',
+          isPromo: Boolean(normalPrice && normalPrice > price),
           confidenceScore: 0.95
         });
       }
@@ -1593,14 +1902,26 @@ export class CatalogParserEngine {
 
     $('item, product, offer, element').each((_, el) => {
       const title = $(el).find('name, title, denumire').first().text().trim();
-      const rawPrice = $(el).find('price, pret, valoare').first().text().trim().replace(',', '.');
-      const price = parseFloat(rawPrice);
+      const rawPrice = $(el).find('price, pret, valoare').first().text().trim();
+      const price = PriceExtractor.parseExplicitPriceField(rawPrice);
       const barcode = $(el).find('barcode, ean, gtin').first().text().trim();
       const brand = $(el).find('brand, marca').first().text().trim();
       const rawImage = $(el).find('image, image_url, imageUrl, img, imagine, picture').first().text().trim();
       const imageUrl = this.resolveImageUrl(rawImage, baseUrl);
 
-      if (title && !isNaN(price) && price > 0) {
+      if (title && !PriceExtractor.isNoiseOrNonProductTitle(title) && price !== null && price > 0) {
+        const pkg = PriceExtractor.extractPackagingSafely(title);
+        const check = PriceExtractor.validateOfferPrice({
+          title,
+          normalPrice: price,
+          effectivePrice: price,
+          packageQuantity: pkg.packageQuantity,
+          packageUnit: pkg.packageUnit,
+          rawPriceText: rawPrice,
+          proofType: 'explicit_field'
+        });
+        if (check.status === 'INVALID' || check.status === 'MISSING') return;
+
         offers.push({
           rawTitle: title,
           rawBrand: brand || undefined,
@@ -1609,6 +1930,12 @@ export class CatalogParserEngine {
           normalPrice: price,
           effectivePrice: price,
           currency: 'RON',
+          packageQuantity: pkg.packageQuantity,
+          packageUnit: pkg.packageUnit,
+          weight: pkg.weight,
+          volume: pkg.volume,
+          packageSize: pkg.packageSize,
+          priceProofType: 'explicit_field',
           isPromo: false,
           confidenceScore: 0.95
         });

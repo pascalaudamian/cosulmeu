@@ -27,6 +27,11 @@ import { Store } from './src/types.ts';
 import { createHash } from 'node:crypto';
 import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 import { validatePublicHttpUrl } from './src/utils/urlSecurity.ts';
+import { PriceAuditService } from './src/services/PriceAuditService.ts';
+import {
+  priceAuditQuerySchema,
+  priceAuditRemediationRequestSchema
+} from './src/server/validation.ts';
 
 function sanitizeApiImageUrl(rawUrl?: string | null): string | undefined {
   if (!rawUrl || !rawUrl.trim()) return undefined;
@@ -554,7 +559,9 @@ app.get('/api/categories', async (req, res) => {
     const [allProducts, offers] = isPostgresConfigured()
       ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers()])
       : [StorageService.getAllProducts(), StorageService.getProductOffers()];
-    const validOfferProductIds = new Set(offers.filter(o => o.verificationStatus !== 'expired').map(o => o.productId));
+    const validOfferProductIds = new Set(
+      offers.filter(o => PriceComparisonService.isOfferValid(o)).map(o => o.productId)
+    );
 
     const enriched = CATEGORIES_TAXONOMY.map(cat => {
       const catProducts = allProducts.filter(p => p.category === cat.name);
@@ -597,11 +604,10 @@ app.get('/api/products', async (req, res) => {
       ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers()])
       : [StorageService.getAllProducts(), StorageService.getProductOffers()];
 
-    // Mapare oferte valide per produs
-    const todayStr = new Date().toISOString().split('T')[0];
+    // Mapare oferte valide per produs (exclude isolated, rejected, demo, flagged, expired, <= 0)
     const productOffersMap = new Map<string, typeof allOffers>();
     for (const off of allOffers) {
-      if (off.verificationStatus !== 'expired' && (!off.validUntil || off.validUntil >= todayStr)) {
+      if (PriceComparisonService.isOfferValid(off)) {
         const list = productOffersMap.get(off.productId) || [];
         list.push(off);
         productOffersMap.set(off.productId, list);
@@ -778,7 +784,7 @@ app.get('/api/products/:id', async (req, res) => {
       comparison = PriceComparisonService.getProductComparisonDetails(
         id,
         dbDetail.product,
-        dbDetail.offers && dbDetail.offers.length > 0 ? dbDetail.offers : undefined,
+        Array.isArray(dbDetail.offers) ? dbDetail.offers : [],
         STORES
       );
       observations = dbDetail.priceHistory || [];
@@ -3633,6 +3639,90 @@ app.get('/api/admin/products-detailed/:id', requireAdminAuth, async (req, res) =
     res.json({ success: true, data });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la obținerea detaliilor produsului.' });
+  }
+});
+
+// 13.4.1 Audit Prețuri vs Cantitate și Corectare Importuri
+app.get('/api/admin/price-audit', requireAdminAuth, async (req, res) => {
+  try {
+    const parsed = priceAuditQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Parametri de filtrare audit invalizi.',
+        details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
+      });
+    }
+    const result = await PriceAuditService.getPriceAuditData(parsed.data);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la încărcarea datelor de audit prețuri.' });
+  }
+});
+
+// 13.4.2 Previzualizare lot remediere prețuri (dry-run)
+app.post('/api/admin/price-audit/preview-batch', requireAdminAuth, async (req, res) => {
+  try {
+    const parsed = priceAuditRemediationRequestSchema.safeParse({ ...req.body, dryRun: true });
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Date invalide pentru previzualizarea remedierii.',
+        details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
+      });
+    }
+    const workItems = parsed.data.items ?? [
+      {
+        offerId: parsed.data.offerId!,
+        action: parsed.data.action!,
+        newPrice: parsed.data.newPrice,
+        newNormalPrice: parsed.data.newNormalPrice,
+        newPromoPrice: parsed.data.newPromoPrice,
+        reason: parsed.data.reason
+      }
+    ];
+    const result = await PriceAuditService.remediateOffers({
+      items: workItems,
+      dryRun: true,
+      userEmail: parsed.data.userEmail || 'admin@cosulmeu.ro',
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la generarea previzualizării de remediere.' });
+  }
+});
+
+// 13.4.3 Aplicare remediere prețuri / izolare oferte / validare manuală
+app.post('/api/admin/price-audit/remediate', requireAdminAuth, async (req, res) => {
+  try {
+    const parsed = priceAuditRemediationRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Date invalide pentru remedierea prețurilor.',
+        details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
+      });
+    }
+    const workItems = parsed.data.items ?? [
+      {
+        offerId: parsed.data.offerId!,
+        action: parsed.data.action!,
+        newPrice: parsed.data.newPrice,
+        newNormalPrice: parsed.data.newNormalPrice,
+        newPromoPrice: parsed.data.newPromoPrice,
+        reason: parsed.data.reason
+      }
+    ];
+    const result = await PriceAuditService.remediateOffers({
+      items: workItems,
+      dryRun: parsed.data.dryRun,
+      userEmail: parsed.data.userEmail || 'admin@cosulmeu.ro',
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+    });
+    if (!result.success && result.affectedOffersCount === 0 && !parsed.data.dryRun) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Eroare la aplicarea remedierii de prețuri.' });
   }
 });
 

@@ -78,6 +78,7 @@ import { AdminEditSourceModal } from './AdminEditSourceModal.tsx';
 import { AdminAddRetailerModal } from './AdminAddRetailerModal.tsx';
 import { AdminKpiDrilldownModal, DrilldownType } from './AdminKpiDrilldownModal.tsx';
 import { AdminStagingOfferDrawer } from './AdminStagingOfferDrawer.tsx';
+import { AdminPriceAuditTab } from './AdminPriceAuditTab.tsx';
 
 interface AdminSourcesViewProps {
   onRefreshAll?: () => void;
@@ -89,6 +90,7 @@ export type AdminTabId =
   | 'imports'
   | 'catalog'
   | 'offers'
+  | 'price-audit'
   | 'staging'
   | 'logs'
   | 'security'
@@ -100,6 +102,7 @@ const TABS: { id: AdminTabId; label: string; icon: React.FC<{ className?: string
   { id: 'imports', label: 'Importuri', icon: Play },
   { id: 'catalog', label: 'Catalog și produse', icon: Package },
   { id: 'offers', label: 'Oferte și prețuri', icon: Tag },
+  { id: 'price-audit', label: 'Audit Prețuri', icon: ShieldAlert },
   { id: 'staging', label: 'Validare și publicare', icon: CheckCheck },
   { id: 'logs', label: 'Jurnal și erori', icon: FileText },
   { id: 'security', label: 'Utilizatori și securitate', icon: ShieldCheck },
@@ -2169,6 +2172,13 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         <div className="space-y-6">
           <AdminIndexQualityTab adminToken={adminToken} onRefreshAll={loadDashboard} />
         </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 5.5: AUDIT PREȚURI & CORECTARE IMPORTURI                               */}
+      {/* ========================================================================= */}
+      {activeTab === 'price-audit' && (
+        <AdminPriceAuditTab adminToken={adminToken} onRefreshAll={loadDashboard} />
       )}
 
       {/* ========================================================================= */}

@@ -442,15 +442,15 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                         </div>
 
                         <div className="flex items-baseline gap-2">
-                          {np > ep && (
+                          {np > ep && ep > 0 && (
                             <span className="text-[11px] text-slate-400 line-through">
                               {np.toFixed(2)} lei
                             </span>
                           )}
-                          <span className="text-sm font-extrabold text-emerald-700">
-                            {ep.toFixed(2)} lei
+                          <span className={`text-sm font-extrabold ${ep > 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            {ep > 0 ? `${ep.toFixed(2)} lei` : 'Preț lipsă'}
                           </span>
-                          {disc > 0 && (
+                          {disc > 0 && ep > 0 && (
                             <span className="px-1.5 py-0.2 rounded bg-rose-100 text-rose-700 text-[10px] font-bold">
                               -{disc}%
                             </span>

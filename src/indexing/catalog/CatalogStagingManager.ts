@@ -20,6 +20,7 @@ import { mapRetailerCategoryToStandard } from '../../data/categories.js';
 import { STORES } from '../../data/mockData.js';
 import { CatalogSourceDiscovery } from './CatalogSourceDiscovery.js';
 import { validatePublicHttpUrl } from '../../utils/urlSecurity.js';
+import { PriceExtractor } from './PriceExtractor.js';
 
 function sanitizeImageUrl(url?: string): string | undefined {
   if (!url || !url.trim()) return undefined;
@@ -406,8 +407,8 @@ export class CatalogStagingManager {
       const raw = parseRes.offers[idx];
       const offerId = `stg-${crypto.createHash('sha256').update(`${document.retailerId}:${document.id}:${runId}:${idx + 1}`).digest('hex').slice(0, 48)}`;
 
-      // Normalizare gramaj și calcul preț unitar
-      const { unitPrice, unitPriceMeasure, packageUnit, packageWeight } = this.normalizePackaging(
+      // Normalizare gramaj și calcul preț unitar în siguranță
+      const { unitPrice, unitPriceMeasure, packageUnit, packageWeight, weight, volume, packageSize } = this.normalizePackaging(
         raw.packageQuantity,
         raw.packageUnit,
         raw.rawTitle,
@@ -426,15 +427,20 @@ export class CatalogStagingManager {
 
       const validationErrors: string[] = [];
 
-      // Reguli de validare
-      if (raw.effectivePrice <= 0) {
-        validationErrors.push('Preț nul sau negativ.');
-      }
-      if (raw.effectivePrice > 3000) {
-        validationErrors.push(`Preț suspect de ridicat (${raw.effectivePrice} RON).`);
-      }
-      if (raw.rawTitle.trim().length < 2) {
-        validationErrors.push('Denumire prea scurtă.');
+      const priceCheck = PriceExtractor.validateOfferPrice({
+        title: raw.rawTitle,
+        normalPrice: raw.normalPrice,
+        promoPrice: raw.promoPrice,
+        loyaltyPrice: raw.loyaltyPrice,
+        effectivePrice: raw.effectivePrice,
+        unitPrice,
+        packageQuantity: packageWeight,
+        packageUnit,
+        proofType: raw.priceProofType
+      });
+
+      if (priceCheck.reasons.length > 0) {
+        validationErrors.push(...priceCheck.reasons);
       }
       if (raw.validUntil && raw.validUntil < nowIso.split('T')[0]) {
         validationErrors.push(`Ofertă expirată (valabilitate până la ${raw.validUntil}).`);
@@ -444,7 +450,10 @@ export class CatalogStagingManager {
       let matchedProductId: string | undefined = undefined;
       let matchedProductName: string | undefined = undefined;
 
-      if (matchResult.matchedProduct && validationErrors.length === 0) {
+      if (priceCheck.status === 'INVALID' && (priceCheck.code === 'NOISE_OR_HEADER_TITLE' || priceCheck.code === 'QUANTITY_AS_PRICE')) {
+        stagingStatus = 'REJECTED';
+        needsReviewCount++;
+      } else if (matchResult.matchedProduct && validationErrors.length === 0 && priceCheck.status === 'VALID') {
         matchedProductId = matchResult.matchedProduct.id;
         matchedProductName = matchResult.matchedProduct.name;
 
@@ -458,6 +467,10 @@ export class CatalogStagingManager {
           validationErrors.push(`Încredere asociere sub pragul automat (${Math.round(matchResult.confidence * 100)}%).`);
         }
       } else {
+        if (matchResult.matchedProduct) {
+          matchedProductId = matchResult.matchedProduct.id;
+          matchedProductName = matchResult.matchedProduct.name;
+        }
         needsReviewCount++;
         if (!matchResult.matchedProduct) {
           validationErrors.push('Niciun produs echivalent identificat în catalogul unificat.');
@@ -480,6 +493,9 @@ export class CatalogStagingManager {
         currency: raw.currency || 'RON',
         packageQuantity: packageWeight,
         packageUnit,
+        weight: raw.weight ?? weight,
+        volume: raw.volume ?? volume,
+        packageSize: raw.packageSize ?? packageSize,
         unitPrice,
         unitPriceMeasure,
         isPromo: raw.isPromo,
@@ -494,6 +510,9 @@ export class CatalogStagingManager {
         matchConfidence: matchResult.confidence,
         matchMethod: matchResult.matchedProduct ? matchResult.matchMethod : 'unmatched',
         stagingStatus,
+        priceValidationStatus: priceCheck.status,
+        priceValidationCode: priceCheck.code,
+        priceProofType: raw.priceProofType,
         validationErrors: validationErrors.length > 0 ? validationErrors : undefined,
         createdAt: nowIso,
         updatedAt: nowIso
@@ -567,7 +586,20 @@ export class CatalogStagingManager {
 
     if (usePostgres) {
       const enriched = await DatabaseService.getStagingOffersEnrichedForPublish(cleanFilterIds);
-      toPublish = enriched.eligibleOffers;
+      toPublish = enriched.eligibleOffers.filter(o => {
+        const check = PriceExtractor.validateOfferPrice({
+          title: o.rawTitle,
+          normalPrice: o.normalPrice,
+          promoPrice: o.promoPrice,
+          loyaltyPrice: o.loyaltyPrice,
+          effectivePrice: o.effectivePrice,
+          packageQuantity: o.packageQuantity,
+          packageUnit: o.packageUnit,
+          proofType: (o.priceProofType as any) || undefined,
+          isVerifiedOverride: String(o.stagingStatus || '').toUpperCase() === 'APPROVED' && Boolean(o.reviewedBy)
+        });
+        return check.status === 'VALID';
+      });
       needsReviewCount = enriched.needsReviewCount;
       itemsWithoutPriceCount = enriched.itemsWithoutPriceCount;
     } else {
@@ -577,7 +609,21 @@ export class CatalogStagingManager {
         : allStaged;
       toPublish = targetOffers.filter(o => {
         const st = String(o.stagingStatus || '').toUpperCase();
-        return (st === 'APPROVED' || st === 'VALIDATED') && Number.isFinite(o.effectivePrice) && o.effectivePrice > 0;
+        if ((st !== 'APPROVED' && st !== 'VALIDATED') || !Number.isFinite(o.effectivePrice) || o.effectivePrice <= 0) {
+          return false;
+        }
+        const check = PriceExtractor.validateOfferPrice({
+          title: o.rawTitle,
+          normalPrice: o.normalPrice,
+          promoPrice: o.promoPrice,
+          loyaltyPrice: o.loyaltyPrice,
+          effectivePrice: o.effectivePrice,
+          packageQuantity: o.packageQuantity,
+          packageUnit: o.packageUnit,
+          proofType: (o.priceProofType as any) || undefined,
+          isVerifiedOverride: st === 'APPROVED' && Boolean(o.reviewedBy)
+        });
+        return check.status === 'VALID';
       });
       needsReviewCount = targetOffers.filter(o =>
         ['NEEDS_REVIEW', 'DISCOVERED', 'PARSED'].includes(String(o.stagingStatus || '').toUpperCase())
@@ -853,7 +899,21 @@ export class CatalogStagingManager {
     const toPublish = allStaged.filter(o => {
       if (cleanFilterIds && !cleanFilterIds.includes(o.id)) return false;
       const st = String(o.stagingStatus || '').toUpperCase();
-      return (st === 'APPROVED' || st === 'VALIDATED') && Number.isFinite(o.effectivePrice) && o.effectivePrice > 0;
+      if ((st !== 'APPROVED' && st !== 'VALIDATED') || !Number.isFinite(o.effectivePrice) || o.effectivePrice <= 0) {
+        return false;
+      }
+      const check = PriceExtractor.validateOfferPrice({
+        title: o.rawTitle,
+        normalPrice: o.normalPrice,
+        promoPrice: o.promoPrice,
+        loyaltyPrice: o.loyaltyPrice,
+        effectivePrice: o.effectivePrice,
+        packageQuantity: o.packageQuantity,
+        packageUnit: o.packageUnit,
+        proofType: (o.priceProofType as any) || undefined,
+        isVerifiedOverride: st === 'APPROVED' && Boolean(o.reviewedBy)
+      });
+      return check.status === 'VALID';
     });
 
     if (options?.previewSnapshotHash) {
@@ -1361,15 +1421,19 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
     unitPriceMeasure: string;
     packageUnit: UnitType;
     packageWeight: number;
+    weight?: number;
+    volume?: number;
+    packageSize?: string;
   } {
-    let pkgSize = rawQty || 1;
+    let pkgSize = rawQty && rawQty > 0 ? rawQty : 1;
     let unit = (rawUnit || '').toLowerCase().trim();
+    let safePkg: ReturnType<typeof PriceExtractor.extractPackagingSafely> = {};
 
     if (!rawQty || !rawUnit) {
-      const match = rawTitle.match(/(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|buc)/i);
-      if (match) {
-        pkgSize = parseFloat(match[1].replace(',', '.'));
-        unit = match[2].toLowerCase();
+      safePkg = PriceExtractor.extractPackagingSafely(rawTitle);
+      if (safePkg.packageQuantity && safePkg.packageUnit) {
+        pkgSize = safePkg.packageQuantity;
+        unit = safePkg.packageUnit;
       }
     }
 
@@ -1393,6 +1457,10 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
       packageUnit = 'l';
       unitPrice = effectivePrice / pkgSize;
       measure = 'lei/l';
+    } else if (unit === 'pachet') {
+      packageUnit = 'pachet';
+      unitPrice = effectivePrice / pkgSize;
+      measure = 'lei/buc';
     } else {
       packageUnit = 'buc';
       unitPrice = effectivePrice / pkgSize;
@@ -1405,7 +1473,10 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
       unitPrice,
       unitPriceMeasure: measure,
       packageUnit,
-      packageWeight: pkgSize
+      packageWeight: pkgSize,
+      weight: safePkg.weight ?? ((packageUnit === 'g' || packageUnit === 'kg') ? pkgSize : undefined),
+      volume: safePkg.volume ?? ((packageUnit === 'ml' || packageUnit === 'l') ? pkgSize : undefined),
+      packageSize: safePkg.packageSize
     };
   }
 

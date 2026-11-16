@@ -18,6 +18,7 @@ import { StorageService } from '../services/StorageService.js';
 import { ProductMatcher } from '../services/ProductMatcher.js';
 import { DatabaseService, isPostgresConfigured } from '../db/index.js';
 import { STORES } from '../data/mockData.js';
+import { PriceExtractor } from '../indexing/catalog/PriceExtractor.js';
 
 export class FileImportAdapter implements PriceSourceAdapter {
   readonly id: string;
@@ -180,23 +181,15 @@ export class FileImportAdapter implements PriceSourceAdapter {
       const rowNumber = idx + 1;
 
       // 1. Name validation
-      if (!rec.rawName || rec.rawName.trim().length < 2) {
-        invalid.push({ record: rec, reason: 'Denumire produs lipsă sau invalidă', rowNumber });
+      if (!rec.rawName || PriceExtractor.isNoiseOrNonProductTitle(rec.rawName)) {
+        invalid.push({ record: rec, reason: 'Denumire produs lipsă, non-produs sau invalidă', rowNumber });
         return;
       }
 
-      // 2. Price validation (numeric, positive, non-zero, non-NaN)
-      const rawPriceStr = String(rec.price).trim().replace(',', '.');
-      const parsedPrice = parseFloat(rawPriceStr);
-
-      if (
-        isNaN(parsedPrice) ||
-        parsedPrice <= 0 ||
-        !isFinite(parsedPrice) ||
-        rawPriceStr.startsWith('-') ||
-        !/^[+-]?\d+(\.\d+)?$/.test(rawPriceStr)
-      ) {
-        invalid.push({ record: rec, reason: `Preț invalid (${rec.price}). Trebuie să fie o valoare numerică pozitivă`, rowNumber });
+      // 2. Price validation (numeric, positive, non-zero, rejects quantities/percentages)
+      const parsedPrice = PriceExtractor.parseExplicitPriceField(rec.price);
+      if (parsedPrice === null || parsedPrice <= 0) {
+        invalid.push({ record: rec, reason: `Preț invalid sau contaminat cu unități (${rec.price}). Trebuie să fie o valoare monetară pozitivă`, rowNumber });
         return;
       }
 

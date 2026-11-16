@@ -51,7 +51,9 @@ export class PriceComparisonService {
    * Check if an offer is currently valid (non-expired)
    */
   static isOfferValid(offer: ProductOffer): boolean {
-    if (offer.verificationStatus === 'expired') return false;
+    if (!offer || !Number.isFinite(offer.price) || offer.price <= 0) return false;
+    if (['expired', 'isolated', 'rejected', 'demo'].includes(offer.verificationStatus)) return false;
+    if (offer.isFlaggedAnomaly) return false;
     if (offer.validUntil) {
       const todayStr = new Date().toISOString().split('T')[0];
       if (offer.validUntil < todayStr) return false;
