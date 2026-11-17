@@ -1049,15 +1049,15 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   if (!isAuthenticated) {
     return (
       <div className="min-h-[70vh] grid place-items-center px-4">
-        <form onSubmit={handleAdminLogin} className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-lg">
-          <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-emerald-50 text-emerald-700">
+        <form onSubmit={handleAdminLogin} className="w-full max-w-md rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-lg">
+          <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
             <Lock className="h-6 w-6" />
           </div>
-          <h1 className="text-xl font-extrabold text-slate-900 text-center">Autentificare administrator</h1>
-          <p className="mt-2 text-center text-sm text-slate-500">Introdu tokenul administrativ configurat pentru producție.</p>
-          <label className="mt-5 block text-xs font-bold text-slate-700" htmlFor="admin-token">Token administrativ</label>
-          <input id="admin-token" type="password" value={authInput} onChange={event => { setAuthInput(event.target.value); setAuthError(null); }} autoComplete="current-password" className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" placeholder="Introdu tokenul" />
-          {authError && <p className="mt-2 text-xs font-semibold text-rose-600" role="alert">{authError}</p>}
+          <h1 className="text-xl font-extrabold text-slate-900 dark:text-slate-100 text-center">Autentificare administrator</h1>
+          <p className="mt-2 text-center text-sm text-slate-500 dark:text-slate-400">Introdu tokenul administrativ configurat pentru producție.</p>
+          <label className="mt-5 block text-xs font-bold text-slate-700 dark:text-slate-300" htmlFor="admin-token">Token administrativ</label>
+          <input id="admin-token" type="password" value={authInput} onChange={event => { setAuthInput(event.target.value); setAuthError(null); }} autoComplete="current-password" className="mt-2 w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2.5 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 dark:focus:ring-emerald-900/40" placeholder="Introdu tokenul" />
+          {authError && <p className="mt-2 text-xs font-semibold text-rose-600 dark:text-rose-400" role="alert">{authError}</p>}
           <button type="submit" disabled={isVerifyingAuth} className="mt-5 w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60">
             {isVerifyingAuth ? 'Se verifică…' : 'Intră în panoul admin'}
           </button>
@@ -1069,23 +1069,23 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
   return (
     <div className="space-y-6 pb-24 max-w-7xl mx-auto">
       {/* 1. TOP HEADER & STATUS BAR */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 text-white text-xs font-semibold mb-2">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 dark:bg-slate-800 text-white text-xs font-semibold mb-2 border border-transparent dark:border-slate-700">
             <Database className="w-3.5 h-3.5 text-emerald-400" />
             Coșul Meu • Panou Operațional Administrativ
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
             Dashboard Operațional & Catalog Importer ⚙️
           </h1>
-          <p className="text-slate-600 text-sm mt-0.5">
+          <p className="text-slate-600 dark:text-slate-400 text-sm mt-0.5">
             Monitorizare surse, cataloage, produse canonice, oferte și sincronizare incrementală PostgreSQL.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold">
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+          <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/70 text-emerald-900 dark:text-emerald-200 text-xs font-semibold">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             <span>Admin Autorizat</span>
           </div>
 
@@ -1096,7 +1096,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               loadStaging();
               loadRunsAndErrors();
             }}
-            className="p-2.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+            className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             title="Reîmprospătează toate datele"
           >
             <RefreshCw className="w-4 h-4" />
@@ -1104,7 +1104,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
           <button
             onClick={handleAttemptLogout}
-            className="px-3 py-2 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/70 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Deconectare</span>
@@ -1117,37 +1117,37 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         <div
           className={`p-3.5 rounded-2xl text-xs flex items-center justify-between gap-3 animate-in fade-in duration-150 ${
             actionMessage.type === 'success'
-              ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
+              ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-900/60'
               : actionMessage.type === 'error'
-              ? 'bg-rose-50 text-rose-900 border border-rose-200'
-              : 'bg-blue-50 text-blue-900 border border-blue-200'
+              ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 border border-rose-200 dark:border-rose-900/60'
+              : 'bg-blue-50 dark:bg-blue-950/40 text-blue-900 dark:text-blue-200 border border-blue-200 dark:border-blue-900/60'
           }`}
         >
           <div className="flex items-center gap-2">
             {actionMessage.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
             ) : (
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
             )}
             <span className="font-medium">{actionMessage.text}</span>
           </div>
-          <button onClick={() => setActionMessage(null)} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+          <button onClick={() => setActionMessage(null)} className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
       {/* 2. UNIFIED 9-TAB NAVIGATION (Requirement 10) */}
-      <div className="bg-white p-1.5 rounded-2xl border border-slate-200 shadow-xs">
+      <div className="bg-white dark:bg-slate-900 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
         {/* Mobile Dropdown */}
         <div className="md:hidden">
-          <label className="text-[11px] font-bold text-slate-500 uppercase px-2 mb-1 block">
+          <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase px-2 mb-1 block">
             Secțiune Dashboard:
           </label>
           <select
             value={activeTab}
             onChange={e => setActiveTab(e.target.value as AdminTabId)}
-            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800"
+            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100"
           >
             {TABS.map(tab => (
               <option key={tab.id} value={tab.id}>
@@ -1169,18 +1169,18 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                   isActive
                     ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800'
                 }`}
               >
-                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-slate-400 dark:text-slate-500'}`} />
                 <span>{tab.label}</span>
                 {tab.id === 'staging' && (stagingStatusCounts.NEEDS_REVIEW ?? 0) > 0 && (
-                  <span className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded-full ${isActive ? 'bg-white text-emerald-700' : 'bg-amber-100 text-amber-900'}`}>
+                  <span className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded-full ${isActive ? 'bg-white dark:bg-slate-950 text-emerald-700 dark:text-emerald-300' : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-300'}`}>
                     {(stagingStatusCounts.NEEDS_REVIEW ?? 0).toLocaleString('ro-RO')}
                   </span>
                 )}
                 {tab.id === 'logs' && errors.length > 0 && (
-                  <span className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded-full ${isActive ? 'bg-white text-rose-700' : 'bg-rose-100 text-rose-800'}`}>
+                  <span className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded-full ${isActive ? 'bg-white dark:bg-slate-950 text-rose-700 dark:text-rose-300' : 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'}`}>
                     {errors.length}
                   </span>
                 )}
@@ -1199,12 +1199,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           <div
             className={`p-5 rounded-3xl border shadow-xs transition-all ${
               operationalData?.overallStatus === 'TOTUL FUNCȚIONEAZĂ'
-                ? 'bg-emerald-500/10 border-emerald-300 text-emerald-950'
+                ? 'bg-emerald-500/10 dark:bg-emerald-950/35 border-emerald-300 dark:border-emerald-900/60 text-emerald-950 dark:text-emerald-100'
                 : operationalData?.overallStatus === 'IMPORT ÎN DESFĂȘURARE'
-                ? 'bg-blue-500/10 border-blue-300 text-blue-950'
+                ? 'bg-blue-500/10 dark:bg-blue-950/35 border-blue-300 dark:border-blue-900/60 text-blue-950 dark:text-blue-100'
                 : operationalData?.overallStatus === 'SISTEM PARȚIAL DISPONIBIL'
-                ? 'bg-amber-500/10 border-amber-300 text-amber-950'
-                : 'bg-rose-500/10 border-rose-300 text-rose-950'
+                ? 'bg-amber-500/10 dark:bg-amber-950/35 border-amber-300 dark:border-amber-900/60 text-amber-950 dark:text-amber-100'
+                : 'bg-rose-500/10 dark:bg-rose-950/35 border-rose-300 dark:border-rose-900/60 text-rose-950 dark:text-rose-100'
             }`}
           >
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -1233,11 +1233,11 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     <span className="text-sm font-extrabold tracking-wide uppercase">
                       STATUS SISTEM: {operationalData?.overallStatus || 'SE CALCULEAZĂ...'}
                     </span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white/80 border border-current">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white/80 dark:bg-slate-900/80 border border-current">
                       PostgreSQL Supabase (83ms)
                     </span>
                   </div>
-                  <p className="text-xs text-slate-700 mt-1 max-w-3xl leading-relaxed">
+                  <p className="text-xs text-slate-700 dark:text-slate-300 mt-1 max-w-3xl leading-relaxed">
                     {operationalData?.statusMessage || 'Se interoghează starea conexiunii și surselor de date...'}
                   </p>
                 </div>
@@ -1267,9 +1267,9 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     setStagingFilter('NEEDS_REVIEW');
                     setStagingPage(1);
                   }}
-                  className="px-4 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-800 hover:bg-slate-50 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs hover:border-emerald-500 transition-all"
+                  className="px-4 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs hover:border-emerald-500 transition-all"
                 >
-                  <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  <CheckCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                   <span>
                     Staging Queue ({(stagingStatusCounts.NEEDS_REVIEW ?? 0).toLocaleString('ro-RO')})
                   </span>
@@ -1278,41 +1278,41 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             </div>
 
             {/* Sub-status pills bar with click drill-downs */}
-            <div className="mt-4 pt-3 border-t border-slate-200/60 flex flex-wrap items-center gap-4 text-xs text-slate-600">
+            <div className="mt-4 pt-3 border-t border-slate-200/60 dark:border-slate-700/60 flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-300">
               <button
                 type="button"
                 onClick={() => handleKpiClick('retailersConfigured')}
-                className="hover:text-emerald-700 hover:underline cursor-pointer flex items-center gap-1"
+                className="hover:text-emerald-700 dark:hover:text-emerald-300 hover:underline cursor-pointer flex items-center gap-1"
               >
-                Retaileri Configurați: <strong className="text-slate-900 font-extrabold">{operationalData?.configuredRetailersCount ?? retailersList.length}</strong>
+                Retaileri Configurați: <strong className="text-slate-900 dark:text-slate-100 font-extrabold">{operationalData?.configuredRetailersCount ?? retailersList.length}</strong>
               </button>
               <div>•</div>
               <button
                 type="button"
                 onClick={() => handleKpiClick('sourcesFunctional')}
-                className="hover:text-emerald-700 hover:underline cursor-pointer flex items-center gap-1"
+                className="hover:text-emerald-700 dark:hover:text-emerald-300 hover:underline cursor-pointer flex items-center gap-1"
               >
-                Surse Active: <strong className="text-emerald-700 font-extrabold">{operationalData?.activeSourcesCount ?? 0}</strong> din {operationalData?.configuredSourcesCount ?? sources.length}
+                Surse Active: <strong className="text-emerald-700 dark:text-emerald-400 font-extrabold">{operationalData?.activeSourcesCount ?? 0}</strong> din {operationalData?.configuredSourcesCount ?? sources.length}
               </button>
               <div>•</div>
               <button
                 type="button"
                 onClick={() => handleKpiClick('sourcesBlocked')}
-                className="hover:text-rose-700 hover:underline cursor-pointer flex items-center gap-1"
+                className="hover:text-rose-700 dark:hover:text-rose-300 hover:underline cursor-pointer flex items-center gap-1"
               >
-                Surse Blocate: <strong className="text-rose-700 font-extrabold">{operationalData?.blockedSourcesCount ?? 0}</strong>
+                Surse Blocate: <strong className="text-rose-700 dark:text-rose-400 font-extrabold">{operationalData?.blockedSourcesCount ?? 0}</strong>
               </button>
               <div>•</div>
               <button
                 type="button"
                 onClick={() => handleKpiClick('documentsDownloaded')}
-                className="hover:text-blue-700 hover:underline cursor-pointer flex items-center gap-1"
+                className="hover:text-blue-700 dark:hover:text-blue-300 hover:underline cursor-pointer flex items-center gap-1"
               >
-                Documente Descărcate: <strong className="text-blue-700 font-extrabold">{(operationalData?.kpis?.downloadedDocuments?.value ?? documents.length ?? 0).toLocaleString('ro-RO')}</strong>
+                Documente Descărcate: <strong className="text-blue-700 dark:text-blue-400 font-extrabold">{(operationalData?.kpis?.downloadedDocuments?.value ?? documents.length ?? 0).toLocaleString('ro-RO')}</strong>
               </button>
               <div>•</div>
               <div>
-                Următoarea sincronizare: <strong className="text-slate-900">{operationalData?.nextScheduledSync || '04:00 (Zilnic)'}</strong>
+                Următoarea sincronizare: <strong className="text-slate-900 dark:text-slate-100">{operationalData?.nextScheduledSync || '04:00 (Zilnic)'}</strong>
               </div>
             </div>
           </div>
@@ -1320,7 +1320,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           {/* Active Alerts */}
           {operationalData?.activeAlerts && operationalData.activeAlerts.length > 0 && (
             <div className="space-y-2">
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Alerte & Atenționări Active
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -1329,10 +1329,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     key={alert.id}
                     className={`p-3.5 rounded-2xl border text-xs flex flex-col justify-between gap-2.5 ${
                       alert.severity === 'critical'
-                        ? 'bg-rose-50 border-rose-200 text-rose-950'
+                        ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-900/60 text-rose-950 dark:text-rose-200'
                         : alert.severity === 'warning'
-                        ? 'bg-amber-50 border-amber-200 text-amber-950'
-                        : 'bg-blue-50 border-blue-200 text-blue-950'
+                        ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/60 text-amber-950 dark:text-amber-200'
+                        : 'bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-900/60 text-blue-950 dark:text-blue-200'
                     }`}
                   >
                     <div>
@@ -1340,7 +1340,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                         <AlertCircle className="w-4 h-4 shrink-0 text-current" />
                         <span>{alert.title}</span>
                       </div>
-                      <p className="text-[11px] mt-1 text-slate-600 leading-relaxed">
+                      <p className="text-[11px] mt-1 text-slate-600 dark:text-slate-300 leading-relaxed">
                         {alert.message}
                       </p>
                     </div>
@@ -1355,7 +1355,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                             setActiveTab(alert.targetTab as AdminTabId);
                           }
                         }}
-                        className="self-start text-[11px] font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 cursor-pointer"
+                        className="self-start text-[11px] font-bold text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
                       >
                         <span>{alert.linkActionLabel || 'Rezolvă problema →'}</span>
                         <ArrowRight className="w-3 h-3" />
@@ -1370,10 +1370,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           {/* 16 SEPARATED KPIS GRID (Requirement 2 & 3: Interactive Drill-Downs) */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Indicatori Operaționali de Performanță (16 Metrici Interactive)
               </h3>
-              <span className="text-[11px] text-slate-400">Apasă pe oricare indicator pentru a deschide înregistrările reale din PostgreSQL</span>
+              <span className="text-[11px] text-slate-400 dark:text-slate-500">Apasă pe oricare indicator pentru a deschide înregistrările reale din PostgreSQL</span>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -1383,27 +1383,27 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     key={kpi.key}
                     type="button"
                     onClick={() => handleKpiClick(kpi.key)}
-                    className="p-3.5 rounded-2xl bg-white border border-slate-200 shadow-xs hover:border-emerald-500 hover:shadow-md transition-all space-y-1 text-left cursor-pointer group relative overflow-hidden"
+                    className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs hover:border-emerald-500 dark:hover:border-emerald-500 hover:shadow-md transition-all space-y-1 text-left cursor-pointer group relative overflow-hidden"
                   >
                     <div className="flex items-center justify-between gap-1">
-                      <div className="text-[11px] font-semibold text-slate-500 truncate group-hover:text-emerald-700 transition-colors" title={kpi.label}>
+                      <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 truncate group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition-colors" title={kpi.label}>
                         {kpi.label}
                       </div>
-                      <Eye className="w-3.5 h-3.5 text-slate-300 group-hover:text-emerald-600 transition-colors shrink-0" />
+                      <Eye className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors shrink-0" />
                     </div>
                     <div className="flex items-baseline justify-between gap-2">
-                      <div className="text-xl font-extrabold text-slate-900 tracking-tight group-hover:text-emerald-950">
+                      <div className="text-xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight group-hover:text-emerald-950 dark:group-hover:text-emerald-300">
                         {typeof kpi.value === 'number' ? kpi.value.toLocaleString('ro-RO') : kpi.value}
                       </div>
                       {kpi.delta !== undefined && kpi.delta > 0 && (
-                        <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded-md">
+                        <span className="text-[10px] font-extrabold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.2 rounded-md">
                           +{kpi.delta}
                         </span>
                       )}
                     </div>
-                    <div className="text-[10px] text-slate-400 flex items-center justify-between pt-1 border-t border-slate-50">
+                    <div className="text-[10px] text-slate-400 dark:text-slate-500 flex items-center justify-between pt-1 border-t border-slate-50 dark:border-slate-800">
                       <span>{kpi.period}</span>
-                      <span className="text-emerald-600 font-bold group-hover:underline">Vezi date →</span>
+                      <span className="text-emerald-600 dark:text-emerald-400 font-bold group-hover:underline">Vezi date →</span>
                     </div>
                   </button>
                 ))}
@@ -1411,86 +1411,86 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           </div>
 
           {/* SCHEDULER & AUTOMATED PUBLISHING KPIS (Audit Requirement 2) */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <CalendarClock className="w-4 h-4 text-emerald-600" />
+                <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                  <CalendarClock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   Scheduler Automat & Sincronizare Programată (PostgreSQL Live)
                 </h3>
-                <p className="text-[11px] text-slate-500 mt-0.5">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
                   Monitorizare execuții cron, claim atomic, idempotență și separare publicare manuală vs. automată.
                 </p>
               </div>
               <button
                 onClick={() => setActiveTab('settings')}
-                className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
+                className="text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
               >
                 <span>Configurează Scheduler →</span>
               </button>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 text-xs">
-              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">Programări Active</span>
-                <span className="text-lg font-extrabold text-slate-900 mt-1 block">
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700">
+                <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block">Programări Active</span>
+                <span className="text-lg font-extrabold text-slate-900 dark:text-slate-100 mt-1 block">
                   {operationalData?.scheduler?.activeSchedulesCount ?? 0}
                 </span>
-                <span className="text-[9px] text-slate-500">din {operationalData?.scheduler?.totalSchedulesCount ?? 0} total</span>
+                <span className="text-[9px] text-slate-500 dark:text-slate-400">din {operationalData?.scheduler?.totalSchedulesCount ?? 0} total</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">În Desfășurare</span>
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700">
+                <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block">În Desfășurare</span>
                 <span className={`text-lg font-extrabold mt-1 block ${
-                  (operationalData?.scheduler?.runningSchedulesCount ?? 0) > 0 ? 'text-blue-600 animate-pulse' : 'text-slate-900'
+                  (operationalData?.scheduler?.runningSchedulesCount ?? 0) > 0 ? 'text-blue-600 dark:text-blue-400 animate-pulse' : 'text-slate-900 dark:text-slate-100'
                 }`}>
                   {operationalData?.scheduler?.runningSchedulesCount ?? 0}
                 </span>
-                <span className="text-[9px] text-slate-500">execuții concurente</span>
+                <span className="text-[9px] text-slate-500 dark:text-slate-400">execuții concurente</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-emerald-50/60 border border-emerald-200/60">
-                <span className="text-[10px] font-bold text-emerald-800 uppercase block">Publicări Reușite</span>
-                <span className="text-lg font-extrabold text-emerald-700 mt-1 block">
+              <div className="p-3 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/35 border border-emerald-200/60 dark:border-emerald-900/60">
+                <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase block">Publicări Reușite</span>
+                <span className="text-lg font-extrabold text-emerald-700 dark:text-emerald-400 mt-1 block">
                   {operationalData?.scheduler?.successfulSchedulesCount ?? 0}
                 </span>
-                <span className="text-[9px] text-emerald-600">status SUCCESS</span>
+                <span className="text-[9px] text-emerald-600 dark:text-emerald-400">status SUCCESS</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-amber-50/60 border border-amber-200/60">
-                <span className="text-[10px] font-bold text-amber-800 uppercase block">Publicări Parțiale</span>
-                <span className="text-lg font-extrabold text-amber-700 mt-1 block">
+              <div className="p-3 rounded-2xl bg-amber-50/60 dark:bg-amber-950/35 border border-amber-200/60 dark:border-amber-900/60">
+                <span className="text-[10px] font-bold text-amber-800 dark:text-amber-300 uppercase block">Publicări Parțiale</span>
+                <span className="text-lg font-extrabold text-amber-700 dark:text-amber-400 mt-1 block">
                   {operationalData?.scheduler?.partialSchedulesCount ?? 0}
                 </span>
-                <span className="text-[9px] text-amber-600">cu avertismente per-retailer</span>
+                <span className="text-[9px] text-amber-600 dark:text-amber-400">cu avertismente per-retailer</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-rose-50/60 border border-rose-200/60">
-                <span className="text-[10px] font-bold text-rose-800 uppercase block">Execuții Eșuate</span>
-                <span className="text-lg font-extrabold text-rose-700 mt-1 block">
+              <div className="p-3 rounded-2xl bg-rose-50/60 dark:bg-rose-950/35 border border-rose-200/60 dark:border-rose-900/60">
+                <span className="text-[10px] font-bold text-rose-800 dark:text-rose-300 uppercase block">Execuții Eșuate</span>
+                <span className="text-lg font-extrabold text-rose-700 dark:text-rose-400 mt-1 block">
                   {operationalData?.scheduler?.failedSchedulesCount ?? 0}
                 </span>
-                <span className="text-[9px] text-rose-600">necesită investigare</span>
+                <span className="text-[9px] text-rose-600 dark:text-rose-400">necesită investigare</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 col-span-2 sm:col-span-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">Publicări Manuale</span>
-                <span className="text-lg font-extrabold text-slate-900 mt-1 block">
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700 col-span-2 sm:col-span-1">
+                <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block">Publicări Manuale</span>
+                <span className="text-lg font-extrabold text-slate-900 dark:text-slate-100 mt-1 block">
                   {operationalData?.scheduler?.manualPublishCount ?? 0}
                 </span>
-                <span className="text-[9px] text-slate-500">acțiuni admin</span>
+                <span className="text-[9px] text-slate-500 dark:text-slate-400">acțiuni admin</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 col-span-2 sm:col-span-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase block">Publicări Automate</span>
-                <span className="text-lg font-extrabold text-emerald-700 mt-1 block">
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700 col-span-2 sm:col-span-1">
+                <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block">Publicări Automate</span>
+                <span className="text-lg font-extrabold text-emerald-700 dark:text-emerald-400 mt-1 block">
                   {operationalData?.scheduler?.automatedPublishCount ?? 0}
                 </span>
-                <span className="text-[9px] text-slate-500">cron / scheduler</span>
+                <span className="text-[9px] text-slate-500 dark:text-slate-400">cron / scheduler</span>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500 gap-2">
+            <div className="flex flex-wrap items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 gap-2">
               <div>
                 <strong>Următoarea execuție:</strong>{' '}
                 {operationalData?.scheduler?.nextScheduledRunAt
@@ -1507,14 +1507,14 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           </div>
 
           {/* Visual 6-Stage Pipeline Summary (Requirement 4) */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Pipeline Operațional Unificat (Descoperire → Publicare)
               </h3>
               <button
                 onClick={() => setActiveTab('imports')}
-                className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 cursor-pointer"
+                className="text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 flex items-center gap-1 cursor-pointer"
               >
                 <span>Gestionează fluxul de import →</span>
               </button>
@@ -1522,23 +1522,23 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
               {operationalData?.pipelineStages?.map((stage: any, idx: number) => (
-                <div key={stage.stage} className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
-                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
+                <div key={stage.stage} className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700 space-y-1">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-slate-200">
                     <span>{stage.name}</span>
                     <span
                       className={`px-1.5 py-0.2 rounded-md text-[9px] font-extrabold ${
                         stage.status === 'PASS'
-                          ? 'bg-emerald-100 text-emerald-800'
+                          ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
                           : stage.status === 'BLOCKED'
-                          ? 'bg-rose-100 text-rose-800'
-                          : 'bg-slate-200 text-slate-700'
+                          ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
+                          : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
                       }`}
                     >
                       {stage.status}
                     </span>
                   </div>
-                  <div className="text-lg font-extrabold text-slate-900">{stage.processedCount}</div>
-                  <div className="text-[10px] text-slate-400">
+                  <div className="text-lg font-extrabold text-slate-900 dark:text-slate-100">{stage.processedCount}</div>
+                  <div className="text-[10px] text-slate-400 dark:text-slate-500">
                     {stage.pendingCount > 0 ? `${stage.pendingCount} în așteptare` : 'Complet procesat'}
                   </div>
                 </div>
@@ -1555,10 +1555,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-extrabold text-slate-900">
+              <h2 className="text-lg font-extrabold text-slate-900 dark:text-slate-100">
                 Gestiune Retaileri & Surse Oficiale ({retailersList.length} Retaileri)
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Fiecare retailer include sursele sale oficiale configurate pentru extragerea de oferte și cataloage.
               </p>
             </div>
@@ -1568,9 +1568,9 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                   setEditingRetailer(null);
                   setShowAddRetailerModal(true);
                 }}
-                className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs shadow-2xs flex items-center gap-1.5 cursor-pointer transition-all hover:border-emerald-300"
+                className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs shadow-2xs flex items-center gap-1.5 cursor-pointer transition-all hover:border-emerald-300 dark:hover:border-emerald-600"
               >
-                <PlusCircle className="w-3.5 h-3.5 text-emerald-600" />
+                <PlusCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                 <span>Adaugă Retailer Nou</span>
               </button>
               <button
@@ -1600,31 +1600,31 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               return (
                 <div
                   key={retailer.id}
-                  className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs"
+                  className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs"
                 >
                   {/* Retailer Card Header */}
                   <div
                     onClick={() => toggleRetailerExpand(retailer.id)}
-                    className="p-4 flex items-center justify-between gap-4 cursor-pointer hover:bg-slate-50/70 transition-colors"
+                    className="p-4 flex items-center justify-between gap-4 cursor-pointer hover:bg-slate-50/70 dark:hover:bg-slate-800/60 transition-colors"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center font-extrabold text-slate-700 text-sm">
+                      <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-extrabold text-slate-700 dark:text-slate-200 text-sm">
                         {retailer.name.substring(0, 2).toUpperCase()}
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="font-extrabold text-slate-900 text-sm">{retailer.name}</h3>
+                          <h3 className="font-extrabold text-slate-900 dark:text-slate-100 text-sm">{retailer.name}</h3>
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                               isBlocked
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-emerald-100 text-emerald-800'
+                                ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
+                                : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
                             }`}
                           >
                             {isBlocked ? 'BLOCKED (WAF/Bot Guard)' : 'ACTIV & OPERAȚIONAL'}
                           </span>
                         </div>
-                        <p className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                           <span>Format: {retailer.format} • {retailerSources.length} surse configurate</span>
                           {(retailer.officialUrl || retailer.websiteUrl) && (
                             <a
@@ -1632,7 +1632,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                               target="_blank"
                               rel="noopener noreferrer"
                               onClick={e => e.stopPropagation()}
-                              className="text-emerald-600 hover:underline inline-flex items-center gap-0.5 truncate max-w-[260px]"
+                              className="text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-0.5 truncate max-w-[260px]"
                             >
                               <span>{retailer.officialUrl || retailer.websiteUrl}</span>
                               <ExternalLink className="w-2.5 h-2.5 shrink-0" />
@@ -1652,7 +1652,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                           setEditingRetailer(retailer);
                           setShowAddRetailerModal(true);
                         }}
-                        className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50 transition-colors"
+                        className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-emerald-300 hover:border-emerald-300 dark:hover:border-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition-colors"
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
@@ -1669,13 +1669,13 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                               targetId: retailer.id
                             });
                           }}
-                          className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1 cursor-pointer"
+                          className="px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center gap-1 cursor-pointer"
                         >
-                          <Play className="w-3 h-3 text-emerald-600 fill-current" />
+                          <Play className="w-3 h-3 text-emerald-600 dark:text-emerald-400 fill-current" />
                           <span>Importă</span>
                         </button>
                       )}
-                      <div className="text-slate-400 p-1">
+                      <div className="text-slate-400 dark:text-slate-500 p-1">
                         {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                       </div>
                     </div>
@@ -1683,25 +1683,25 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
                   {/* Expandable Sources Details */}
                   {isExpanded && (
-                    <div className="border-t border-slate-100 p-4 bg-slate-50/50 space-y-3">
+                    <div className="border-t border-slate-100 dark:border-slate-800 p-4 bg-slate-50/50 dark:bg-slate-950/50 space-y-3">
                       {retailerSources.length > 0 ? (
                         retailerSources.map(src => (
                           <div
                             key={src.id}
-                            className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2 text-xs shadow-2xs"
+                            className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2 text-xs shadow-2xs"
                           >
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                               <div>
-                                <div className="flex items-center gap-2 font-bold text-slate-800">
+                                <div className="flex items-center gap-2 font-bold text-slate-800 dark:text-slate-100">
                                   <span>{src.name}</span>
-                                  <span className="px-1.5 py-0.2 rounded-sm bg-slate-100 text-[10px] uppercase font-mono text-slate-600">
+                                  <span className="px-1.5 py-0.2 rounded-sm bg-slate-100 dark:bg-slate-800 text-[10px] uppercase font-mono text-slate-600 dark:text-slate-300">
                                     {src.format}
                                   </span>
                                   <span
                                     className={`px-1.5 py-0.2 rounded-sm text-[10px] font-bold uppercase ${
                                       src.status === 'active'
-                                        ? 'bg-emerald-100 text-emerald-800'
-                                        : 'bg-slate-200 text-slate-700'
+                                        ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
+                                        : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                                     }`}
                                   >
                                     {src.status}
@@ -1711,7 +1711,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                                   href={src.catalogUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="text-[11px] text-emerald-600 hover:underline flex items-center gap-1 mt-0.5 truncate max-w-lg"
+                                  className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 mt-0.5 truncate max-w-lg"
                                 >
                                   <span>{src.catalogUrl}</span>
                                   <ExternalLink className="w-3 h-3 shrink-0" />
@@ -1726,18 +1726,18 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                                     retailerId: retailer.id,
                                     retailerName: retailer.name
                                   })}
-                                  className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold text-xs border border-emerald-200 flex items-center gap-1 cursor-pointer transition-colors"
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 font-semibold text-xs border border-emerald-200 dark:border-emerald-800/70 flex items-center gap-1 cursor-pointer transition-colors"
                                   title="Editează parametrii, URL-ul și formatul acestei surse"
                                 >
-                                  <Pencil className="w-3 h-3 text-emerald-600" />
+                                  <Pencil className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                                   <span>Editează Sursă</span>
                                 </button>
                                 <button
                                   onClick={() => handleToggleSourceStatus(src)}
                                   className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer border transition-colors ${
                                     src.status === 'active'
-                                      ? 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                                      : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                      ? 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                                      : 'border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/80'
                                   }`}
                                 >
                                   {src.status === 'active' ? 'Dezactivează' : 'Activează'}
@@ -1747,20 +1747,20 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                                     setStagingRetailerFilter(retailer.id);
                                     setActiveTab('staging');
                                   }}
-                                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs cursor-pointer"
+                                  className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs cursor-pointer"
                                 >
                                   Vezi Oferte Staging
                                 </button>
                               </div>
                             </div>
 
-                            <p className="text-[11px] text-slate-500 italic">
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 italic">
                               {src.legalStatusNotice}
                             </p>
                           </div>
                         ))
                       ) : (
-                        <p className="text-xs text-slate-500 italic p-1">
+                        <p className="text-xs text-slate-500 dark:text-slate-400 italic p-1">
                           Nicio sursă specifică înregistrată pentru acest retailer.
                         </p>
                       )}
@@ -1773,7 +1773,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                           retailerId: retailer.id,
                           retailerName: retailer.name
                         })}
-                        className="w-full py-2.5 border-2 border-dashed border-slate-200 hover:border-emerald-400 hover:bg-emerald-50/50 rounded-xl text-slate-600 hover:text-emerald-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer mt-2"
+                        className="w-full py-2.5 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-emerald-400 dark:hover:border-emerald-500 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/30 rounded-xl text-slate-600 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer mt-2"
                       >
                         <Plus className="w-3.5 h-3.5" />
                         <span>Adaugă sursă nouă pentru {retailer.name}</span>
@@ -1793,12 +1793,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       {activeTab === 'imports' && (
         <div className="space-y-6">
           {/* Action Toolbar */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-4">
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h2 className="text-base font-extrabold text-slate-900">
+              <h2 className="text-base font-extrabold text-slate-900 dark:text-slate-100">
                 Flux Operațional de Import (Catalog Importer)
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Pornire sigură protejată cu advisory lock împotriva execuțiilor concurente pe același retailer.
               </p>
             </div>
@@ -1824,37 +1824,37 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           </div>
 
           {/* 6-Stage Pipeline Details */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-xs space-y-4">
-            <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+            <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
               Stadiul Etapelor Pipeline-ului de Import
             </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
               {operationalData?.pipelineStages?.map((stage: any) => (
-                <div key={stage.stage} className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                <div key={stage.stage} className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-slate-900">{stage.name}</span>
+                    <span className="font-extrabold text-slate-900 dark:text-slate-100">{stage.name}</span>
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                         stage.status === 'PASS'
-                          ? 'bg-emerald-100 text-emerald-800'
+                          ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
                           : stage.status === 'BLOCKED'
-                          ? 'bg-rose-100 text-rose-800'
-                          : 'bg-slate-200 text-slate-700'
+                          ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
+                          : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
                       }`}
                     >
                       {stage.status}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between text-slate-600 text-[11px]">
+                  <div className="flex items-center justify-between text-slate-600 dark:text-slate-300 text-[11px]">
                     <span>Elemente procesate:</span>
-                    <strong className="text-slate-900">{stage.processedCount}</strong>
+                    <strong className="text-slate-900 dark:text-slate-100">{stage.processedCount}</strong>
                   </div>
-                  <div className="flex items-center justify-between text-slate-600 text-[11px]">
+                  <div className="flex items-center justify-between text-slate-600 dark:text-slate-300 text-[11px]">
                     <span>În așteptare:</span>
-                    <strong className="text-slate-900">{stage.pendingCount}</strong>
+                    <strong className="text-slate-900 dark:text-slate-100">{stage.pendingCount}</strong>
                   </div>
-                  <div className="text-[10px] text-slate-400 pt-1 border-t border-slate-200/60">
+                  <div className="text-[10px] text-slate-400 dark:text-slate-500 pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
                     Ultima execuție: {stage.lastExecutedAt ? new Date(stage.lastExecutedAt).toLocaleTimeString('ro-RO') : '—'}
                   </div>
                 </div>
@@ -1863,15 +1863,15 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           </div>
 
           {/* Discovered Documents Table */}
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Documente Descoperite și Descărcate ({documents.length})
               </h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-100">
+                <thead className="bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800">
                   <tr>
                     <th className="p-3 font-bold">Document</th>
                     <th className="p-3 font-bold">Retailer</th>
@@ -1881,23 +1881,23 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     <th className="p-3 font-bold">Extrase</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {documents.slice(0, 10).map(doc => (
-                    <tr key={doc.id} className="hover:bg-slate-50/60">
-                      <td className="p-3 font-semibold text-slate-800 truncate max-w-xs">{doc.title}</td>
-                      <td className="p-3 font-bold uppercase text-slate-600">{doc.retailerId}</td>
-                      <td className="p-3 uppercase font-mono text-[10px] text-slate-500">{doc.format}</td>
+                    <tr key={doc.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/50">
+                      <td className="p-3 font-semibold text-slate-800 dark:text-slate-100 truncate max-w-xs">{doc.title}</td>
+                      <td className="p-3 font-bold uppercase text-slate-600 dark:text-slate-300">{doc.retailerId}</td>
+                      <td className="p-3 uppercase font-mono text-[10px] text-slate-500 dark:text-slate-400">{doc.format}</td>
                       <td className="p-3">
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold">
                           {doc.downloadStatus}
                         </span>
                       </td>
                       <td className="p-3">
-                        <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold">
+                        <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] font-bold">
                           {doc.parseStatus}
                         </span>
                       </td>
-                      <td className="p-3 font-extrabold text-slate-900">{doc.rawExtractedCount}</td>
+                      <td className="p-3 font-extrabold text-slate-900 dark:text-slate-100">{doc.rawExtractedCount}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1914,19 +1914,19 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-extrabold text-slate-900">
+              <h2 className="text-lg font-extrabold text-slate-900 dark:text-slate-100">
                 Produse Canonice în Baza de Date PostgreSQL ({productsTotal})
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Produse unificate asociate cu coduri EAN, atribute standard și oferte multi-retailer.
               </p>
             </div>
           </div>
 
           {/* Search & Filters */}
-          <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2 flex-1 min-w-[240px]">
-              <Search className="w-4 h-4 text-slate-400 shrink-0" />
+              <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
               <input
                 type="text"
                 placeholder="Caută după nume produs, brand sau cod de bare (EAN)..."
@@ -1936,7 +1936,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                   setProductsPage(1);
                   setSelectedProductIds(new Set());
                 }}
-                className="w-full bg-transparent outline-none text-slate-800 placeholder:text-slate-400"
+                className="w-full bg-transparent outline-none text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500"
               />
               {productsSearch && (
                 <button
@@ -1944,7 +1944,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     setProductsSearch('');
                     setProductsPage(1);
                   }}
-                  className="text-slate-400 hover:text-slate-600 px-1 font-bold text-xs"
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 px-1 font-bold text-xs"
                 >
                   ✕
                 </button>
@@ -1953,7 +1953,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1.5">
-                <span className="text-slate-400 text-[11px]">Categorie:</span>
+                <span className="text-slate-400 dark:text-slate-500 text-[11px]">Categorie:</span>
                 <select
                   value={productsCategory}
                   onChange={e => {
@@ -1961,7 +1961,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     setProductsPage(1);
                     setSelectedProductIds(new Set());
                   }}
-                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none"
+                  className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 outline-none"
                 >
                   <option value="toate">Toate Categoriile</option>
                   <option value="Fructe și legume">Fructe și legume</option>
@@ -1975,7 +1975,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               </div>
 
               <div className="flex items-center gap-1.5">
-                <span className="text-slate-400 text-[11px]">Retailer:</span>
+                <span className="text-slate-400 dark:text-slate-500 text-[11px]">Retailer:</span>
                 <select
                   value={productsRetailer}
                   onChange={e => {
@@ -1983,7 +1983,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     setProductsPage(1);
                     setSelectedProductIds(new Set());
                   }}
-                  className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none"
+                  className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 outline-none"
                 >
                   <option value="toate">Toți Retailerii</option>
                   {retailersList.map(r => (
@@ -1998,8 +1998,8 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
           {/* Bulk Selection Toolbar */}
           {selectedProductIds.size > 0 && (
-            <div className="flex flex-col gap-3 rounded-2xl border border-rose-200 bg-rose-50/70 p-3 sm:flex-row sm:items-center sm:justify-between shadow-2xs">
-              <p className="text-xs font-semibold text-rose-900" aria-live="polite">
+            <div className="flex flex-col gap-3 rounded-2xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/70 dark:bg-rose-950/35 p-3 sm:flex-row sm:items-center sm:justify-between shadow-2xs">
+              <p className="text-xs font-semibold text-rose-900 dark:text-rose-200" aria-live="polite">
                 <strong>{selectedProductIds.size}</strong> produse selectate pentru delistare
               </p>
               <div className="flex flex-wrap items-center gap-2">
@@ -2016,7 +2016,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                   type="button"
                   onClick={() => setSelectedProductIds(new Set())}
                   disabled={isDeletingProducts}
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+                  className="rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer disabled:opacity-50"
                 >
                   Șterge selecția
                 </button>
@@ -2025,16 +2025,16 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           )}
 
           {/* Products Table */}
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
             {isLoadingProducts ? (
               <div className="py-16 text-center space-y-2">
                 <div className="w-8 h-8 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto" />
-                <p className="text-xs text-slate-500 font-medium">Se interoghează produsele din PostgreSQL Supabase...</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">Se interoghează produsele din PostgreSQL Supabase...</p>
               </div>
             ) : products.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-600 border-b border-slate-100">
+                  <thead className="bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800">
                     <tr>
                       <th className="p-3 w-10">
                         <input
@@ -2064,13 +2064,13 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                       <th className="p-3 font-bold text-center">Acțiuni</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {products.map(p => (
                       <tr
                         key={p.id}
                         onClick={() => setSelectedProductId(p.id)}
-                        className={`hover:bg-slate-50/70 cursor-pointer transition-colors ${
-                          selectedProductIds.has(p.id) ? 'bg-emerald-50/40' : ''
+                        className={`hover:bg-slate-50/70 dark:hover:bg-slate-800/60 cursor-pointer transition-colors ${
+                          selectedProductIds.has(p.id) ? 'bg-emerald-50/40 dark:bg-emerald-950/30' : ''
                         }`}
                       >
                         <td className="p-3 w-10" onClick={e => e.stopPropagation()}>
@@ -2088,22 +2088,22 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                           />
                         </td>
                         <td className="p-3">
-                          <div className="font-extrabold text-slate-900">{p.name}</div>
-                          <div className="text-[11px] text-slate-500">{p.brand}</div>
+                          <div className="font-extrabold text-slate-900 dark:text-slate-100">{p.name}</div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400">{p.brand}</div>
                         </td>
-                        <td className="p-3 text-slate-700">{p.category}</td>
-                        <td className="p-3 text-slate-600">
+                        <td className="p-3 text-slate-700 dark:text-slate-300">{p.category}</td>
+                        <td className="p-3 text-slate-600 dark:text-slate-400">
                           {p.packageWeightOrVolume} {p.packageUnit}
                         </td>
-                        <td className="p-3 font-mono text-[11px] text-slate-500">
+                        <td className="p-3 font-mono text-[11px] text-slate-500 dark:text-slate-400">
                           {p.barcode || '—'}
                         </td>
                         <td className="p-3 text-center">
-                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 font-bold text-[10px]">
+                          <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-bold text-[10px]">
                             {p.offersCount || 0} magazine
                           </span>
                         </td>
-                        <td className="p-3 text-right font-extrabold text-emerald-700">
+                        <td className="p-3 text-right font-extrabold text-emerald-700 dark:text-emerald-400">
                           {p.minPrice
                             ? `${Number(p.minPrice).toFixed(2)} lei`
                             : p.baseReferencePrice
@@ -2114,16 +2114,16 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                           <div className="flex items-center justify-center gap-1.5">
                             <button
                               onClick={() => setSelectedProductId(p.id)}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold text-[11px] cursor-pointer"
+                              className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 font-semibold text-[11px] cursor-pointer"
                             >
                               Detalii
                             </button>
                             <button
                               onClick={() => setProductToDelete({ id: p.id, name: p.name })}
-                              className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/80 font-semibold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                              className="px-2.5 py-1 rounded-lg bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-950/80 text-rose-700 dark:text-rose-300 border border-rose-200/80 dark:border-rose-900/60 font-semibold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
                               title={`Șterge / delistează produsul „${p.name}”`}
                             >
-                              <Trash2 className="w-3 h-3 text-rose-600" />
+                              <Trash2 className="w-3 h-3 text-rose-600 dark:text-rose-400" />
                               <span>Șterge</span>
                             </button>
                           </div>
@@ -2134,13 +2134,13 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 </table>
               </div>
             ) : (
-              <div className="p-12 text-center text-slate-400">
+              <div className="p-12 text-center text-slate-400 dark:text-slate-500">
                 Nu au fost găsite produse care să corespundă căutării.
               </div>
             )}
 
             {/* Pagination */}
-            <div className="p-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
+            <div className="p-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
               <span>
                 Afișare pagină {productsPage} din {Math.max(1, Math.ceil(productsTotal / 15))} (Total: {productsTotal} produse)
               </span>
@@ -2148,14 +2148,14 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 <button
                   disabled={productsPage <= 1}
                   onClick={() => setProductsPage(prev => Math.max(1, prev - 1))}
-                  className="px-3 py-1 rounded-lg border border-slate-200 disabled:opacity-40 cursor-pointer"
+                  className="px-3 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
                 >
                   Anterior
                 </button>
                 <button
                   disabled={productsPage * 15 >= productsTotal}
                   onClick={() => setProductsPage(prev => prev + 1)}
-                  className="px-3 py-1 rounded-lg border border-slate-200 disabled:opacity-40 cursor-pointer"
+                  className="px-3 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
                 >
                   Următor
                 </button>
@@ -2189,14 +2189,14 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                <h2 className="text-lg font-black text-slate-900 dark:text-slate-100 tracking-tight">
                   Staging Queue & Validare Oferte
                 </h2>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/70">
                   {stagingTotal.toLocaleString('ro-RO')} oferte în total
                 </span>
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 Toate ofertele extrase din cataloage sunt izolate aici în PostgreSQL până la validare și confirmarea publicării în catalogul public.
               </p>
             </div>
@@ -2217,7 +2217,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 </span>
               </button>
               {validatedStagingTotal === 0 && (
-                <span className="text-[11px] font-medium text-slate-500">
+                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
                   Nu există oferte validate și aprobate pentru publicare
                 </span>
               )}
@@ -2225,7 +2225,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           </div>
 
           {/* Status Tabs Navigation */}
-          <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-slate-100 rounded-2xl border border-slate-200 text-xs font-bold">
+          <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs font-bold">
             <button
               type="button"
               onClick={() => {
@@ -2234,12 +2234,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               }}
               className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'NEEDS_REVIEW'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-900/50'
               }`}
             >
               <span>În așteptare</span>
-              <span className="px-1.5 py-0.2 rounded-md bg-amber-100 text-amber-900 text-[10px] font-black">
+              <span className="px-1.5 py-0.2 rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-300 text-[10px] font-black">
                 {(stagingStatusCounts.NEEDS_REVIEW ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
@@ -2252,12 +2252,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               }}
               className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'READY_TO_PUBLISH'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-900/50'
               }`}
             >
               <span>Pregătite pt. Publicare</span>
-              <span className="px-1.5 py-0.2 rounded-md bg-teal-100 text-teal-900 text-[10px] font-black">
+              <span className="px-1.5 py-0.2 rounded-md bg-teal-100 dark:bg-teal-950/60 text-teal-900 dark:text-teal-300 text-[10px] font-black">
                 {validatedStagingTotal.toLocaleString('ro-RO')}
               </span>
             </button>
@@ -2270,12 +2270,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               }}
               className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'VALIDATED'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-900/50'
               }`}
             >
               <span>Validate</span>
-              <span className="px-1.5 py-0.2 rounded-md bg-emerald-100 text-emerald-900 text-[10px] font-black">
+              <span className="px-1.5 py-0.2 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-300 text-[10px] font-black">
                 {(stagingStatusCounts.VALIDATED ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
@@ -2288,12 +2288,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               }}
               className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'APPROVED'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-900/50'
               }`}
             >
               <span>Aprobate</span>
-              <span className="px-1.5 py-0.2 rounded-md bg-blue-100 text-blue-900 text-[10px] font-black">
+              <span className="px-1.5 py-0.2 rounded-md bg-blue-100 dark:bg-blue-950/60 text-blue-900 dark:text-blue-300 text-[10px] font-black">
                 {(stagingStatusCounts.APPROVED ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
@@ -2306,12 +2306,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               }}
               className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'PUBLISHED'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-900/50'
               }`}
             >
               <span>Publicate</span>
-              <span className="px-1.5 py-0.2 rounded-md bg-purple-100 text-purple-900 text-[10px] font-black">
+              <span className="px-1.5 py-0.2 rounded-md bg-purple-100 dark:bg-purple-950/60 text-purple-900 dark:text-purple-300 text-[10px] font-black">
                 {(stagingStatusCounts.PUBLISHED ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
@@ -2324,12 +2324,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               }}
               className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'REJECTED'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-900/50'
               }`}
             >
               <span>Respinse</span>
-              <span className="px-1.5 py-0.2 rounded-md bg-rose-100 text-rose-900 text-[10px] font-black">
+              <span className="px-1.5 py-0.2 rounded-md bg-rose-100 dark:bg-rose-950/60 text-rose-900 dark:text-rose-300 text-[10px] font-black">
                 {(stagingStatusCounts.REJECTED ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
@@ -2342,12 +2342,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               }}
               className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
                 stagingFilter === 'toate'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white/50 dark:hover:bg-slate-900/50'
               }`}
             >
               <span>Toate Ofertele</span>
-              <span className="px-1.5 py-0.2 rounded-md bg-slate-200 text-slate-800 text-[10px] font-black">
+              <span className="px-1.5 py-0.2 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-[10px] font-black">
                 {(stagingStatusCounts.ALL ?? 0).toLocaleString('ro-RO')}
               </span>
             </button>
@@ -2355,7 +2355,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
           {/* Quick Filter Pills */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">
+            <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mr-1">
               Filtre rapide:
             </span>
             {[
@@ -2373,10 +2373,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                   setStagingQuickFilter(f.id);
                   setStagingPage(1);
                 }}
-                className={`px-2.5 py-1 rounded-xl font-bold transition-all ${
+                className={`px-2.5 py-1 rounded-xl font-bold transition-all cursor-pointer ${
                   stagingQuickFilter === f.id
-                    ? 'bg-slate-900 text-white shadow-2xs'
-                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                    ? 'bg-slate-900 dark:bg-emerald-600 text-white shadow-2xs'
+                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
                 }`}
               >
                 {f.label}
@@ -2384,14 +2384,14 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             ))}
 
             {stagingDocumentFilter !== 'toate' && (
-              <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 font-bold text-xs">
+              <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-900/60 text-blue-900 dark:text-blue-200 font-bold text-xs">
                 <span>Document: {stagingDocumentFilter}</span>
                 <button
                   onClick={() => {
                     setStagingDocumentFilter('toate');
                     setStagingPage(1);
                   }}
-                  className="hover:text-blue-700 ml-1"
+                  className="hover:text-blue-700 dark:hover:text-blue-300 ml-1"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -2401,9 +2401,9 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
           {/* Bulk Action Sticky Bar */}
           {selectedStagingIds.size > 0 && (
-            <div className="flex flex-col gap-3 rounded-2xl border border-emerald-300 bg-emerald-50 p-3 sm:flex-row sm:items-center sm:justify-between shadow-xs animate-in fade-in">
-              <p className="text-xs font-bold text-emerald-950 flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <div className="flex flex-col gap-3 rounded-2xl border border-emerald-300 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/40 p-3 sm:flex-row sm:items-center sm:justify-between shadow-xs animate-in fade-in">
+              <p className="text-xs font-bold text-emerald-950 dark:text-emerald-200 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 <span>
                   {selectedStagingIds.size} oferte selectate din această pagină
                 </span>
@@ -2441,7 +2441,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                   type="button"
                   onClick={() => setSelectedStagingIds(new Set())}
                   disabled={isBulkReviewing}
-                  className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                  className="rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
                 >
                   Curăță selecția
                 </button>
@@ -2450,9 +2450,9 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           )}
 
           {/* Staging Filters Bar */}
-          <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2 flex-1 min-w-[220px]">
-              <Search className="w-4 h-4 text-slate-400 shrink-0" />
+              <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
               <input
                 type="text"
                 placeholder="Caută după titlu ofertă, brand, cod de bare (EAN) sau SKU..."
@@ -2461,7 +2461,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                   setStagingSearch(e.target.value);
                   setStagingPage(1);
                 }}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 outline-none focus:bg-white focus:border-emerald-500"
+                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:bg-white dark:focus:bg-slate-950 focus:border-emerald-500"
               />
             </div>
 
@@ -2472,7 +2472,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                   setStagingRetailerFilter(e.target.value);
                   setStagingPage(1);
                 }}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 outline-none"
+                className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 dark:text-slate-200 outline-none"
               >
                 <option value="toate">Toți Retailerii</option>
                 {retailersList.map(r => (
@@ -2488,7 +2488,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                   setStagingLimit(Number(e.target.value));
                   setStagingPage(1);
                 }}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-700 outline-none"
+                className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-700 dark:text-slate-200 outline-none"
               >
                 <option value={25}>25 pe pagină</option>
                 <option value={50}>50 pe pagină</option>
@@ -2498,7 +2498,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               <button
                 type="button"
                 onClick={loadStaging}
-                className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl cursor-pointer"
+                className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl cursor-pointer"
                 title="Reîmprospătează datele"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoadingStaging ? 'animate-spin' : ''}`} />
@@ -2507,10 +2507,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
           </div>
 
           {/* Staging Items Table */}
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-700 border-b border-slate-200 font-extrabold uppercase text-[10px] tracking-wider">
+                <thead className="bg-slate-50 dark:bg-slate-800/70 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800 font-extrabold uppercase text-[10px] tracking-wider">
                   <tr>
                     <th className="p-3 w-8">
                       <input
@@ -2540,7 +2540,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     <th className="p-3 text-right">Acțiuni</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {stagingOffers.map(off => {
                     const np = Number(off.normalPrice || 0);
                     const ep = Number(off.effectivePrice || 0);
@@ -2550,7 +2550,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                       <tr
                         key={off.id}
                         onClick={() => setInspectingOffer(off)}
-                        className="hover:bg-slate-50/80 cursor-pointer transition-colors"
+                        className="hover:bg-slate-50/80 dark:hover:bg-slate-800/60 cursor-pointer transition-colors"
                       >
                         <td className="p-3" onClick={e => e.stopPropagation()}>
                           <input
@@ -2566,68 +2566,68 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                           />
                         </td>
                         <td className="p-3">
-                          <div className="font-extrabold text-slate-900">{off.rawTitle}</div>
-                          <div className="text-[10px] text-slate-400 mt-0.5">
+                          <div className="font-extrabold text-slate-900 dark:text-slate-100">{off.rawTitle}</div>
+                          <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
                             {off.rawBrand ? `Brand: ${off.rawBrand}` : 'Marcă Retailer'} • {off.packageQuantity || 1}{' '}
                             {off.packageUnit || 'buc'}
                           </div>
                         </td>
                         <td className="p-3">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-slate-100 text-slate-800">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
                             {off.retailerId}
                           </span>
                         </td>
-                        <td className="p-3 text-slate-500 font-medium">
+                        <td className="p-3 text-slate-500 dark:text-slate-400 font-medium">
                           {np > 0 ? `${np.toFixed(2)} lei` : '—'}
                         </td>
                         <td className="p-3">
-                          <div className="font-black text-emerald-700 text-sm">
+                          <div className="font-black text-emerald-700 dark:text-emerald-400 text-sm">
                             {ep > 0 ? `${ep.toFixed(2)} lei` : '—'}
                           </div>
                           {disc > 0 && (
-                            <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-1.5 py-0.2 rounded">
+                            <span className="text-[10px] font-bold text-rose-600 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/60 px-1.5 py-0.2 rounded">
                               -{disc}%
                             </span>
                           )}
                         </td>
-                        <td className="p-3 font-mono text-[11px] text-slate-600">
+                        <td className="p-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
                           <div>{off.rawBarcode || 'Lipsă EAN'}</div>
                           {off.retailerSku && (
-                            <div className="text-[9px] text-slate-400">SKU: {off.retailerSku}</div>
+                            <div className="text-[9px] text-slate-400 dark:text-slate-500">SKU: {off.retailerSku}</div>
                           )}
                         </td>
                         <td className="p-3">
                           {off.matchedProductName ? (
                             <div>
-                              <span className="font-bold text-slate-800">{off.matchedProductName}</span>
+                              <span className="font-bold text-slate-800 dark:text-slate-100">{off.matchedProductName}</span>
                               {off.matchConfidence !== undefined && (
-                                <span className="block text-[9px] text-emerald-700 font-semibold">
+                                <span className="block text-[9px] text-emerald-700 dark:text-emerald-400 font-semibold">
                                   {Math.round(off.matchConfidence * 100)}% potrivire ({off.matchMethod || 'fuzzy'})
                                 </span>
                               )}
                             </div>
                           ) : (
-                            <span className="text-slate-400 italic text-[11px]">Produs nou (auto-creare)</span>
+                            <span className="text-slate-400 dark:text-slate-500 italic text-[11px]">Produs nou (auto-creare)</span>
                           )}
                         </td>
                         <td className="p-3">
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                               off.stagingStatus === 'VALIDATED'
-                                ? 'bg-emerald-100 text-emerald-800'
+                                ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
                                 : off.stagingStatus === 'APPROVED'
-                                ? 'bg-blue-100 text-blue-800'
+                                ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300'
                                 : off.stagingStatus === 'PUBLISHED'
-                                ? 'bg-purple-100 text-purple-800'
+                                ? 'bg-purple-100 dark:bg-purple-950/60 text-purple-800 dark:text-purple-300'
                                 : off.stagingStatus === 'REJECTED'
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-amber-100 text-amber-900'
+                                ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
+                                : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-300'
                             }`}
                           >
                             {off.stagingStatus}
                           </span>
                           {Array.isArray(off.validationErrors) && off.validationErrors.length > 0 && (
-                            <div className="mt-1 text-[10px] text-rose-700 font-medium max-w-[200px] truncate" title={off.validationErrors.join(' ')}>
+                            <div className="mt-1 text-[10px] text-rose-700 dark:text-rose-400 font-medium max-w-[200px] truncate" title={off.validationErrors.join(' ')}>
                               {off.validationErrors[0]}
                             </div>
                           )}
@@ -2637,7 +2637,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                             <button
                               type="button"
                               onClick={() => setInspectingOffer(off)}
-                              className="rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-200 cursor-pointer"
+                              className="rounded-lg bg-slate-100 dark:bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer"
                             >
                               Inspectează
                             </button>
@@ -2647,7 +2647,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                                   type="button"
                                   onClick={() => handleReviewOffer(off.id, 'approve').catch(() => {})}
                                   disabled={reviewingOfferIds.has(off.id)}
-                                  className="rounded-lg bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
+                                  className="rounded-lg bg-emerald-50 dark:bg-emerald-950/50 px-2 py-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-950/80 disabled:opacity-50 cursor-pointer"
                                 >
                                   {reviewingOfferIds.has(off.id) ? '...' : 'Aprobă & Validează'}
                                 </button>
@@ -2655,7 +2655,7 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                                   type="button"
                                   onClick={() => handleReviewOffer(off.id, 'reject').catch(() => {})}
                                   disabled={reviewingOfferIds.has(off.id)}
-                                  className="rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-50 cursor-pointer"
+                                  className="rounded-lg bg-rose-50 dark:bg-rose-950/50 px-2 py-1 text-[10px] font-bold text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-950/80 disabled:opacity-50 cursor-pointer"
                                 >
                                   Respinge
                                 </button>
@@ -2671,13 +2671,13 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             </div>
 
             {stagingOffers.length === 0 && !isLoadingStaging && (
-              <div className="p-12 text-center text-slate-400 text-xs">
+              <div className="p-12 text-center text-slate-400 dark:text-slate-500 text-xs">
                 Nicio ofertă în staging care să corespundă filtrelor selectate.
               </div>
             )}
 
             {/* Pagination Controls */}
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-bold text-slate-600">
+            <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/70 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-bold text-slate-600 dark:text-slate-400">
               <div>
                 Afișare înregistrări {stagingTotal > 0 ? (stagingPage - 1) * stagingLimit + 1 : 0} -{' '}
                 {Math.min(stagingTotal, stagingPage * stagingLimit)} din {stagingTotal.toLocaleString('ro-RO')}
@@ -2687,18 +2687,18 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 <button
                   onClick={() => setStagingPage(p => Math.max(1, p - 1))}
                   disabled={stagingPage <= 1 || isLoadingStaging}
-                  className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
+                  className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                   <span>Anterior</span>
                 </button>
-                <span className="px-3 py-1.5 bg-white border border-slate-200 rounded-xl">
+                <span className="px-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-700 dark:text-slate-200">
                   Pagina {stagingPage} din {stagingTotalPages}
                 </span>
                 <button
                   onClick={() => setStagingPage(p => Math.min(stagingTotalPages, p + 1))}
                   disabled={stagingPage >= stagingTotalPages || isLoadingStaging}
-                  className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
+                  className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
                 >
                   <span>Următor</span>
                   <ChevronRight className="w-3.5 h-3.5" />
@@ -2717,43 +2717,43 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         <div className="space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-extrabold text-slate-900">
+              <h2 className="text-lg font-extrabold text-slate-900 dark:text-slate-100">
                 Observabilitate & Jurnal Rulări Import ({runs.length} Rulări, {errors.length} Erori)
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Monitorizare în timp real a fiecărui lot procesat, durate, cantități și opțiuni de reîncercare sigură.
               </p>
             </div>
           </div>
 
           {/* Errors List */}
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden space-y-3 p-5">
-            <h3 className="text-xs font-extrabold uppercase tracking-wider text-rose-700 flex items-center gap-1.5">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden space-y-3 p-5">
+            <h3 className="text-xs font-extrabold uppercase tracking-wider text-rose-700 dark:text-rose-400 flex items-center gap-1.5">
               <AlertCircle className="w-4 h-4" />
               <span>Jurnal Erori de Procesare ({errors.length})</span>
             </h3>
 
             {errors.length > 0 ? (
-              <div className="divide-y divide-slate-100 border border-slate-100 rounded-2xl overflow-hidden text-xs">
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden text-xs">
                 {errors.map(err => (
-                  <div key={err.id} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50">
+                  <div key={err.id} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50 dark:hover:bg-slate-800/50">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold uppercase px-2 py-0.5 rounded-md bg-rose-100 text-rose-900 text-[10px]">
+                        <span className="font-bold uppercase px-2 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950/60 text-rose-900 dark:text-rose-300 text-[10px]">
                           {err.retailerId}
                         </span>
-                        <span className="font-semibold text-slate-800">{err.message}</span>
-                        <span className="text-[10px] text-slate-400">Etapa: {err.stage}</span>
+                        <span className="font-semibold text-slate-800 dark:text-slate-100">{err.message}</span>
+                        <span className="text-[10px] text-slate-400 dark:text-slate-500">Etapa: {err.stage}</span>
                       </div>
                       {err.errorDetail && (
-                        <p className="text-[11px] font-mono text-slate-500 mt-1 pl-1 border-l-2 border-slate-200">
+                        <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-1 pl-1 border-l-2 border-slate-200 dark:border-slate-700">
                           {err.errorDetail}
                         </p>
                       )}
                     </div>
                     <button
                       onClick={() => handleRetryError(err)}
-                      className="self-start sm:self-center px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1 cursor-pointer shrink-0"
+                      className="self-start sm:self-center px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1 cursor-pointer shrink-0"
                     >
                       <RefreshCw className="w-3 h-3" />
                       <span>Reîncearcă</span>
@@ -2762,22 +2762,22 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 ))}
               </div>
             ) : (
-              <div className="p-6 text-center text-emerald-700 bg-emerald-50/50 rounded-2xl border border-emerald-100 text-xs font-medium">
+              <div className="p-6 text-center text-emerald-700 dark:text-emerald-300 bg-emerald-50/50 dark:bg-emerald-950/35 rounded-2xl border border-emerald-100 dark:border-emerald-900/60 text-xs font-medium">
                 Zero erori înregistrate în sistem. Toate rulările recente au fost procesate cu succes.
               </div>
             )}
           </div>
 
           {/* Runs Table */}
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
-            <div className="p-4 border-b border-slate-100">
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Istoric Rulări Import Catalog ({runs.length})
               </h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-100">
+                <thead className="bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800">
                   <tr>
                     <th className="p-3 font-bold">ID Rulare</th>
                     <th className="p-3 font-bold">Retailer</th>
@@ -2788,30 +2788,30 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                     <th className="p-3 font-bold">Noi / Actualizate</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {runs.slice(0, 15).map(r => (
-                    <tr key={r.id} className="hover:bg-slate-50/60">
-                      <td className="p-3 font-mono text-[10px] text-slate-500 truncate max-w-[120px]">{r.id}</td>
-                      <td className="p-3 font-bold uppercase text-slate-700">{r.retailerId}</td>
-                      <td className="p-3 text-slate-600">
+                    <tr key={r.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/50">
+                      <td className="p-3 font-mono text-[10px] text-slate-500 dark:text-slate-400 truncate max-w-[120px]">{r.id}</td>
+                      <td className="p-3 font-bold uppercase text-slate-700 dark:text-slate-200">{r.retailerId}</td>
+                      <td className="p-3 text-slate-600 dark:text-slate-300">
                         {r.startedAt ? new Date(r.startedAt).toLocaleString('ro-RO') : '—'}
                       </td>
-                      <td className="p-3 text-slate-500">{r.durationMs ? `${(r.durationMs / 1000).toFixed(1)}s` : '—'}</td>
+                      <td className="p-3 text-slate-500 dark:text-slate-400">{r.durationMs ? `${(r.durationMs / 1000).toFixed(1)}s` : '—'}</td>
                       <td className="p-3">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                             r.status === 'completed'
-                              ? 'bg-emerald-100 text-emerald-800'
+                              ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
                               : r.status === 'running'
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'bg-rose-100 text-rose-800'
+                              ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300'
+                              : 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
                           }`}
                         >
                           {r.status}
                         </span>
                       </td>
-                      <td className="p-3 font-bold text-slate-800">{r.totalRawExtracted}</td>
-                      <td className="p-3 text-slate-600">
+                      <td className="p-3 font-bold text-slate-800 dark:text-slate-100">{r.totalRawExtracted}</td>
+                      <td className="p-3 text-slate-600 dark:text-slate-400">
                         {r.newProductsCount || 0} noi / {r.updatedProductsCount || 0} act.
                       </td>
                     </tr>
@@ -2830,26 +2830,26 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
         <div className="space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-extrabold text-slate-900">
+              <h2 className="text-lg font-extrabold text-slate-900 dark:text-slate-100">
                 Audit Administrativ Imutabil & Securitate Supabase
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 Înregistrare completă a fiecărei acțiuni efectuate pe surse, aprobări, publicări și modificări de sistem.
               </p>
             </div>
           </div>
 
           {/* Audit Logs Table */}
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Jurnal Audit Administrativ ({auditLogs.length} înregistrări)
               </h3>
             </div>
             {auditLogs.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-600 border-b border-slate-100">
+                  <thead className="bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-b border-slate-100 dark:border-slate-800">
                     <tr>
                       <th className="p-3 font-bold">Data & Ora</th>
                       <th className="p-3 font-bold">Utilizator</th>
@@ -2859,30 +2859,30 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                       <th className="p-3 font-bold">IP Adresă</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {auditLogs.map(log => (
-                      <tr key={log.id} className="hover:bg-slate-50/60">
-                        <td className="p-3 font-mono text-[11px] text-slate-500">
+                      <tr key={log.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/50">
+                        <td className="p-3 font-mono text-[11px] text-slate-500 dark:text-slate-400">
                           {new Date(log.createdAt).toLocaleString('ro-RO')}
                         </td>
-                        <td className="p-3 font-bold text-slate-800">{log.userEmail}</td>
+                        <td className="p-3 font-bold text-slate-800 dark:text-slate-100">{log.userEmail}</td>
                         <td className="p-3">
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 font-bold text-[10px] text-slate-700">
+                          <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 font-bold text-[10px] text-slate-700 dark:text-slate-200">
                             {log.action}
                           </span>
                         </td>
-                        <td className="p-3 text-slate-600">{log.targetType}</td>
-                        <td className="p-3 font-mono text-[11px] text-slate-500 truncate max-w-xs">
+                        <td className="p-3 text-slate-600 dark:text-slate-300">{log.targetType}</td>
+                        <td className="p-3 font-mono text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-xs">
                           {JSON.stringify(log.details || {})}
                         </td>
-                        <td className="p-3 text-slate-400">{log.ipAddress || '—'}</td>
+                        <td className="p-3 text-slate-400 dark:text-slate-500">{log.ipAddress || '—'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             ) : (
-              <div className="p-12 text-center text-slate-400 text-xs">
+              <div className="p-12 text-center text-slate-400 dark:text-slate-500 text-xs">
                 Nicio acțiune administrativă înregistrată în audit log până acum.
               </div>
             )}
@@ -2895,30 +2895,30 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       {/* ========================================================================= */}
       {activeTab === 'settings' && (
         <div className="space-y-6">
-          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
-            <h3 className="text-base font-extrabold text-slate-900">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+            <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100">
               Conexiune Bază de Date PostgreSQL Supabase
             </h3>
-            <p className="text-xs text-slate-600">
+            <p className="text-xs text-slate-600 dark:text-slate-400">
               Toate produsele, prețurile, observațiile istorice și profilurile de utilizator sunt sincronizate persistent în schema PostgreSQL Supabase.
             </p>
 
             {/* Single PostgreSQL Check Action (Eliminating duplicate buttons - Req. 10) */}
-            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-3">
-                <Database className="w-5 h-5 text-emerald-700 shrink-0" />
+                <Database className="w-5 h-5 text-emerald-700 dark:text-emerald-400 shrink-0" />
                 <div>
-                  <div className="font-bold text-emerald-900">
+                  <div className="font-bold text-emerald-900 dark:text-emerald-200">
                     Stare Conexiune: {operationalData?.dbStatus?.message || 'Conectat la Supabase (83ms)'}
                   </div>
-                  <div className="text-[11px] text-emerald-700">
+                  <div className="text-[11px] text-emerald-700 dark:text-emerald-400">
                     Mod Persistență: PostgreSQL Multi-User • Supabase Pooler
                   </div>
                 </div>
               </div>
               <button
                 onClick={loadDashboard}
-                className="px-4 py-2 rounded-xl bg-white border border-emerald-300 text-emerald-800 font-bold text-xs hover:bg-emerald-100/50 cursor-pointer flex items-center gap-1.5 shrink-0"
+                className="px-4 py-2 rounded-xl bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 font-bold text-xs hover:bg-emerald-100/50 dark:hover:bg-emerald-950/60 cursor-pointer flex items-center gap-1.5 shrink-0"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>Verifică Conexiunea</span>
@@ -2975,21 +2975,21 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
       {/* 4. Logout Confirmation with Active Import Warning (Requirement 11) */}
       {showLogoutConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4">
-            <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+            <div className="w-10 h-10 rounded-2xl bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 flex items-center justify-center font-bold">
               <AlertTriangle className="w-5 h-5" />
             </div>
-            <h3 className="text-lg font-extrabold text-slate-900">
+            <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-100">
               Avertisment: Import Activ în Desfășurare
             </h3>
-            <p className="text-xs text-slate-600 leading-relaxed">
+            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
               Există un proces activ de importare care rulează în fundal pe server. Deconectarea dumneavoastră nu va opri procesul pe server, dar nu veți mai putea monitoriza rezultatele în timp real.
             </p>
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
               <button
                 onClick={() => setShowLogoutConfirmModal(false)}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold cursor-pointer"
               >
                 Rămâi în panou
               </button>
@@ -3075,25 +3075,25 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
       {/* 7. Modal Confirmare Ștergere Produs Individual */}
       {productToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4">
-            <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+            <div className="w-10 h-10 rounded-2xl bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400 flex items-center justify-center font-bold">
               <Trash2 className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-extrabold text-slate-900">
+              <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-100">
                 Confirmare Delistare & Ștergere Produs
               </h3>
-              <p className="text-xs text-slate-600 leading-relaxed mt-1">
-                Ești sigur că vrei să ștergi și să delistezi produsul <strong className="text-slate-900">„{productToDelete.name}”</strong>? Vor fi eliminate ofertele active asociate din toate supermarketurile și istoricul de preț.
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed mt-1">
+                Ești sigur că vrei să ștergi și să delistezi produsul <strong className="text-slate-900 dark:text-slate-100">„{productToDelete.name}”</strong>? Vor fi eliminate ofertele active asociate din toate supermarketurile și istoricul de preț.
               </p>
             </div>
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => setProductToDelete(null)}
                 disabled={isDeletingProducts}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold cursor-pointer hover:bg-slate-50 disabled:opacity-50"
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
               >
                 Anulează
               </button>
@@ -3113,25 +3113,25 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
       {/* 8. Modal Confirmare Ștergere în Masă Produse */}
       {showBulkDeleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4">
-            <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4">
+            <div className="w-10 h-10 rounded-2xl bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400 flex items-center justify-center font-bold">
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-extrabold text-slate-900">
+              <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-100">
                 Delistare în Masă ({selectedProductIds.size} Produse)
               </h3>
-              <p className="text-xs text-slate-600 leading-relaxed mt-1">
-                Ești pe cale să ștergi definitiv <strong className="text-rose-700">{selectedProductIds.size} produse</strong> selectate din catalogul canonic. Toate ofertele corelate și istoricul acestora vor fi eliminate din baza de date.
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed mt-1">
+                Ești pe cale să ștergi definitiv <strong className="text-rose-700 dark:text-rose-400">{selectedProductIds.size} produse</strong> selectate din catalogul canonic. Toate ofertele corelate și istoricul acestora vor fi eliminate din baza de date.
               </p>
             </div>
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => setShowBulkDeleteConfirm(false)}
                 disabled={isDeletingProducts}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold cursor-pointer hover:bg-slate-50 disabled:opacity-50"
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
               >
                 Anulează
               </button>
@@ -3204,13 +3204,13 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
       {/* 11. Modal Confirmare Revizuire în Masă (Aprobare / Respingere) */}
       {bulkReviewConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4 animate-in zoom-in-95">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4 animate-in zoom-in-95">
             <div
               className={`w-12 h-12 rounded-2xl flex items-center justify-center font-bold ${
                 bulkReviewConfirmModal.action === 'approve'
-                  ? 'bg-emerald-100 text-emerald-700'
-                  : 'bg-rose-100 text-rose-700'
+                  ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400'
+                  : 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400'
               }`}
             >
               {bulkReviewConfirmModal.action === 'approve' ? (
@@ -3220,12 +3220,12 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
               )}
             </div>
             <div>
-              <h3 className="text-lg font-black text-slate-900">
+              <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">
                 {bulkReviewConfirmModal.action === 'approve'
                   ? `Validare & Aprobare în Masă (${bulkReviewConfirmModal.count} Oferte)`
                   : `Respingere în Masă (${bulkReviewConfirmModal.count} Oferte)`}
               </h3>
-              <p className="text-xs text-slate-600 leading-relaxed mt-1">
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed mt-1">
                 {bulkReviewConfirmModal.action === 'approve'
                   ? `Ești pe cale să validezi și să aprobi ${bulkReviewConfirmModal.count} oferte selectate. Acestea vor primi statusul VALIDATED/APPROVED și vor fi pregătite pentru sincronizarea automată în catalog.`
                   : `Ești pe cale să respingi ${bulkReviewConfirmModal.count} oferte selectate. Acestea nu vor fi publicate în catalogul public.`}
@@ -3234,23 +3234,23 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
 
             {bulkReviewConfirmModal.action === 'reject' && (
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Motiv respingere:</label>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Motiv respingere:</label>
                 <input
                   type="text"
                   value={bulkRejectionReason}
                   onChange={e => setBulkRejectionReason(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs outline-none focus:border-rose-500"
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-rose-500"
                   placeholder="Introdu motivul respingerii..."
                 />
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => setBulkReviewConfirmModal(null)}
                 disabled={isBulkReviewing}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer disabled:opacity-50"
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer disabled:opacity-50"
               >
                 Anulează
               </button>

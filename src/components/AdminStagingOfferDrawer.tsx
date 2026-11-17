@@ -134,51 +134,53 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/60 backdrop-blur-xs flex justify-end animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-xs flex justify-end animate-in fade-in duration-200">
       <div
-        className="w-full max-w-2xl bg-white h-full shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-right duration-300"
+        className="w-full max-w-2xl bg-white dark:bg-slate-900 h-full shadow-2xl border-l border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden animate-in slide-in-from-right duration-300"
         onClick={e => e.stopPropagation()}
       >
         {/* Drawer Header */}
-        <div className="p-5 border-b border-slate-200 bg-slate-50 flex items-start justify-between gap-4">
+        <div className="p-5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-              <span className="px-2.5 py-0.5 rounded-lg text-xs font-black uppercase tracking-wider bg-slate-900 text-white">
+              <span className="px-2.5 py-0.5 rounded-lg text-xs font-black uppercase tracking-wider bg-slate-900 dark:bg-slate-700 text-white">
                 {offer.retailerId}
               </span>
               <span
                 className={`px-2.5 py-0.5 rounded-lg text-xs font-bold ${
                   offer.stagingStatus === 'VALIDATED'
-                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                    ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/60'
                     : offer.stagingStatus === 'APPROVED'
-                    ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                    ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-900/60'
                     : offer.stagingStatus === 'PUBLISHED'
-                    ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                    ? 'bg-purple-100 dark:bg-purple-950/60 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-900/60'
                     : offer.stagingStatus === 'REJECTED'
-                    ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                    : 'bg-amber-100 text-amber-900 border border-amber-200'
+                    ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60'
+                    : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-300 border border-amber-200 dark:border-amber-900/60'
                 }`}
               >
                 {offer.stagingStatus}
               </span>
-              <span className="text-[11px] font-mono text-slate-400">ID: {offer.id.slice(0, 14)}...</span>
+              <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500">ID: {offer.id.slice(0, 14)}...</span>
             </div>
-            <h2 className="text-lg font-black text-slate-900 leading-snug">{offer.rawTitle}</h2>
+            <h2 className="text-lg font-black text-slate-900 dark:text-slate-100 leading-snug">{offer.rawTitle}</h2>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
+            className="p-2 rounded-xl text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Drawer Body - Scrollable */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-6 text-xs text-slate-700">
+        <div className="flex-1 overflow-y-auto p-5 space-y-6 text-xs text-slate-700 dark:text-slate-300">
           {message && (
             <div
               className={`p-3 rounded-xl font-bold flex items-center gap-2 ${
-                message.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
+                message.type === 'success'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/60'
+                  : 'bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60'
               }`}
             >
               {message.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
@@ -188,12 +190,12 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
 
           {/* Persisted Server Validation Errors Banner */}
           {Array.isArray(offer.validationErrors) && offer.validationErrors.length > 0 && (
-            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 space-y-1.5">
-              <div className="font-extrabold text-rose-900 flex items-center gap-1.5">
-                <AlertTriangle className="w-4 h-4 text-rose-600" />
+            <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 space-y-1.5">
+              <div className="font-extrabold text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
                 <span>Erori de Validare Blocate în PostgreSQL ({offer.validationErrors.length})</span>
               </div>
-              <ul className="list-disc list-inside space-y-1 text-rose-800 text-[11px] font-medium">
+              <ul className="list-disc list-inside space-y-1 text-rose-800 dark:text-rose-300 text-[11px] font-medium">
                 {offer.validationErrors.map((err, idx) => (
                   <li key={idx}>{err}</li>
                 ))}
@@ -203,12 +205,12 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
 
           {/* Warnings Banner */}
           {warnings.length > 0 && (
-            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 space-y-1.5">
-              <div className="font-extrabold text-amber-900 flex items-center gap-1.5">
-                <AlertTriangle className="w-4 h-4 text-amber-600" />
+            <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 space-y-1.5">
+              <div className="font-extrabold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                 <span>Atenționări de Validare ({warnings.length})</span>
               </div>
-              <ul className="list-disc list-inside space-y-1 text-amber-800 text-[11px] font-medium">
+              <ul className="list-disc list-inside space-y-1 text-amber-800 dark:text-amber-300 text-[11px] font-medium">
                 {warnings.map((w, idx) => (
                   <li key={idx}>{w}</li>
                 ))}
@@ -217,28 +219,28 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
           )}
 
           {/* Pricing Overview Box */}
-          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-            <div className="p-2.5 bg-white rounded-xl border border-slate-200">
-              <div className="text-[10px] font-bold text-slate-400 uppercase">Preț Normal</div>
-              <div className="text-base font-black text-slate-700 mt-1">
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+            <div className="p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+              <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Preț Normal</div>
+              <div className="text-base font-black text-slate-700 dark:text-slate-200 mt-1">
                 {normalPrice > 0 ? `${normalPrice.toFixed(2)} lei` : '—'}
               </div>
             </div>
-            <div className="p-2.5 bg-white rounded-xl border border-slate-200">
-              <div className="text-[10px] font-bold text-slate-400 uppercase">Preț Promo</div>
-              <div className="text-base font-black text-rose-600 mt-1">
+            <div className="p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+              <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Preț Promo</div>
+              <div className="text-base font-black text-rose-600 dark:text-rose-400 mt-1">
                 {promoPrice > 0 ? `${promoPrice.toFixed(2)} lei` : '—'}
               </div>
             </div>
-            <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-200">
-              <div className="text-[10px] font-bold text-emerald-800 uppercase">Preț Efectiv</div>
-              <div className="text-base font-black text-emerald-700 mt-1">
+            <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/50 rounded-xl border border-emerald-200 dark:border-emerald-900/60">
+              <div className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase">Preț Efectiv</div>
+              <div className="text-base font-black text-emerald-700 dark:text-emerald-400 mt-1">
                 {effectivePrice > 0 ? `${effectivePrice.toFixed(2)} lei` : 'NESPECIFICAT'}
               </div>
             </div>
-            <div className="p-2.5 bg-white rounded-xl border border-slate-200">
-              <div className="text-[10px] font-bold text-slate-400 uppercase">Discount</div>
-              <div className="text-base font-black text-slate-900 mt-1">
+            <div className="p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+              <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">Discount</div>
+              <div className="text-base font-black text-slate-900 dark:text-slate-100 mt-1">
                 {discountPercent > 0 ? `-${discountPercent}%` : '0%'}
               </div>
             </div>
@@ -246,36 +248,36 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
 
           {/* 1. Date Brute Extrase */}
           <div className="space-y-3">
-            <h3 className="font-black uppercase tracking-wider text-slate-500 text-[11px] flex items-center gap-1.5">
-              <Tag className="w-3.5 h-3.5 text-slate-600" />
+            <h3 className="font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-[11px] flex items-center gap-1.5">
+              <Tag className="w-3.5 h-3.5 text-slate-600 dark:text-slate-400" />
               <span>1. Date Brute Extrase din Document</span>
             </h3>
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden divide-y divide-slate-100">
+            <div className="bg-white dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
               <div className="p-3 flex justify-between gap-4">
-                <span className="font-semibold text-slate-500">Titlu Catalog:</span>
-                <span className="font-bold text-slate-900 text-right">{offer.rawTitle}</span>
+                <span className="font-semibold text-slate-500 dark:text-slate-400">Titlu Catalog:</span>
+                <span className="font-bold text-slate-900 dark:text-slate-100 text-right">{offer.rawTitle}</span>
               </div>
               <div className="p-3 flex justify-between gap-4">
-                <span className="font-semibold text-slate-500">Brand Extras:</span>
-                <span className="font-bold text-slate-800">{offer.rawBrand || 'Nespecificat (Marcă Retailer)'}</span>
+                <span className="font-semibold text-slate-500 dark:text-slate-400">Brand Extras:</span>
+                <span className="font-bold text-slate-800 dark:text-slate-200">{offer.rawBrand || 'Nespecificat (Marcă Retailer)'}</span>
               </div>
               <div className="p-3 flex justify-between gap-4">
-                <span className="font-semibold text-slate-500">Cod de bare (EAN):</span>
-                <span className="font-mono font-bold text-slate-800">{offer.rawBarcode || 'Lipsă din catalog'}</span>
+                <span className="font-semibold text-slate-500 dark:text-slate-400">Cod de bare (EAN):</span>
+                <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{offer.rawBarcode || 'Lipsă din catalog'}</span>
               </div>
               <div className="p-3 flex justify-between gap-4">
-                <span className="font-semibold text-slate-500">SKU Retailer:</span>
-                <span className="font-mono text-slate-800">{offer.retailerSku || 'Lipsă'}</span>
+                <span className="font-semibold text-slate-500 dark:text-slate-400">SKU Retailer:</span>
+                <span className="font-mono text-slate-800 dark:text-slate-200">{offer.retailerSku || 'Lipsă'}</span>
               </div>
               <div className="p-3 flex justify-between gap-4">
-                <span className="font-semibold text-slate-500">Cantitate / Unitate Extrasă:</span>
-                <span className="font-bold text-slate-800">
+                <span className="font-semibold text-slate-500 dark:text-slate-400">Cantitate / Unitate Extrasă:</span>
+                <span className="font-bold text-slate-800 dark:text-slate-200">
                   {offer.packageQuantity || 1} {offer.packageUnit || 'buc'}
                 </span>
               </div>
               <div className="p-3 flex justify-between gap-4">
-                <span className="font-semibold text-slate-500">Perioadă Valabilitate Promo:</span>
-                <span className="font-semibold text-slate-700">
+                <span className="font-semibold text-slate-500 dark:text-slate-400">Perioadă Valabilitate Promo:</span>
+                <span className="font-semibold text-slate-700 dark:text-slate-300">
                   {offer.validFrom ? new Date(offer.validFrom).toLocaleDateString('ro-RO') : 'Start catalog'} —{' '}
                   {offer.validUntil ? new Date(offer.validUntil).toLocaleDateString('ro-RO') : 'Final catalog'}
                 </span>
@@ -286,44 +288,44 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
           {/* 2. Potrivire Produs Canonic */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="font-black uppercase tracking-wider text-slate-500 text-[11px] flex items-center gap-1.5">
-                <Package className="w-3.5 h-3.5 text-slate-600" />
+              <h3 className="font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-[11px] flex items-center gap-1.5">
+                <Package className="w-3.5 h-3.5 text-slate-600 dark:text-slate-400" />
                 <span>2. Potrivire Produs Canonic (Catalog Central)</span>
               </h3>
               <button
                 type="button"
                 onClick={() => setProductSearchTerm(offer.rawBrand || offer.rawTitle.split(' ')[0])}
-                className="text-[11px] font-bold text-emerald-700 hover:underline flex items-center gap-1"
+                className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 hover:underline flex items-center gap-1"
               >
                 <Edit3 className="w-3 h-3" />
                 <span>Schimbă asocierea</span>
               </button>
             </div>
 
-            <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 space-y-3">
               {offer.matchedProductId ? (
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-extrabold text-slate-900">{offer.matchedProductName}</div>
-                    <div className="text-[11px] text-slate-500 font-mono mt-0.5">ID: {offer.matchedProductId}</div>
+                    <div className="text-sm font-extrabold text-slate-900 dark:text-slate-100">{offer.matchedProductName}</div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono mt-0.5">ID: {offer.matchedProductId}</div>
                     <div className="flex items-center gap-2 mt-2">
-                      <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md text-[10px] font-bold">
+                      <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-md text-[10px] font-bold">
                         Metodă: {offer.matchMethod || 'fuzzy'}
                       </span>
                       {offer.matchConfidence !== undefined && (
-                        <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-md text-[10px] font-bold">
+                        <span className="px-2 py-0.5 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 rounded-md text-[10px] font-bold">
                           Încredere: {Math.round(offer.matchConfidence * 100)}%
                         </span>
                       )}
                     </div>
                   </div>
-                  <span className="p-2 rounded-xl bg-emerald-50 text-emerald-700">
+                  <span className="p-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400">
                     <CheckCircle2 className="w-5 h-5" />
                   </span>
                 </div>
               ) : (
-                <div className="p-3 bg-amber-50 rounded-xl text-amber-900 border border-amber-100 flex items-center gap-2">
-                  <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-xl text-amber-900 dark:text-amber-300 border border-amber-100 dark:border-amber-900/60 flex items-center gap-2">
+                  <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
                   <span>
                     Niciun produs canonic existent identificat. La aprobare, va fi creat automat un produs nou în catalog.
                   </span>
@@ -331,34 +333,34 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
               )}
 
               {/* Manual Linker Search Box */}
-              <div className="pt-3 border-t border-slate-100 space-y-2">
-                <div className="text-[11px] font-bold text-slate-600">Caută alt produs canonic existent:</div>
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300">Caută alt produs canonic existent:</div>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
                     value={productSearchTerm}
                     onChange={e => setProductSearchTerm(e.target.value)}
                     placeholder="Introdu nume sau brand produs..."
-                    className="flex-1 px-3 py-1.5 rounded-xl border border-slate-200 text-xs outline-none focus:border-emerald-500"
+                    className="flex-1 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 text-xs outline-none focus:border-emerald-500"
                     onKeyDown={e => e.key === 'Enter' && handleSearchCanonical()}
                   />
                   <button
                     type="button"
                     onClick={handleSearchCanonical}
                     disabled={isSearchingProduct}
-                    className="px-3 py-1.5 bg-slate-900 text-white rounded-xl font-bold text-xs hover:bg-slate-800 disabled:opacity-50"
+                    className="px-3 py-1.5 bg-slate-900 dark:bg-slate-700 text-white rounded-xl font-bold text-xs hover:bg-slate-800 dark:hover:bg-slate-600 disabled:opacity-50"
                   >
                     {isSearchingProduct ? '...' : 'Caută'}
                   </button>
                 </div>
 
                 {searchResults.length > 0 && (
-                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden mt-2 max-h-48 overflow-y-auto">
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden mt-2 max-h-48 overflow-y-auto bg-white dark:bg-slate-900">
                     {searchResults.map(p => (
-                      <div key={p.id} className="p-2.5 flex items-center justify-between hover:bg-slate-50 gap-2">
+                      <div key={p.id} className="p-2.5 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/60 gap-2">
                         <div>
-                          <div className="font-bold text-slate-800 text-[11px]">{p.name}</div>
-                          <div className="text-[10px] text-slate-400">
+                          <div className="font-bold text-slate-800 dark:text-slate-200 text-[11px]">{p.name}</div>
+                          <div className="text-[10px] text-slate-400 dark:text-slate-500">
                             {p.brand} • {p.category}
                           </div>
                         </div>
@@ -380,25 +382,25 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
 
           {/* 3. Document Sursă & Trasabilitate */}
           <div className="space-y-3">
-            <h3 className="font-black uppercase tracking-wider text-slate-500 text-[11px] flex items-center gap-1.5">
-              <FileText className="w-3.5 h-3.5 text-slate-600" />
+            <h3 className="font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 text-[11px] flex items-center gap-1.5">
+              <FileText className="w-3.5 h-3.5 text-slate-600 dark:text-slate-400" />
               <span>3. Document Sursă & Trasabilitate Pipeline</span>
             </h3>
-            <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2">
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-500">ID Document Sursă:</span>
-                <span className="font-mono text-slate-800 font-bold">{offer.documentId}</span>
+                <span className="font-semibold text-slate-500 dark:text-slate-400">ID Document Sursă:</span>
+                <span className="font-mono text-slate-800 dark:text-slate-200 font-bold">{offer.documentId}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-500">Data Extragerii:</span>
-                <span className="text-slate-800 font-medium">
+                <span className="font-semibold text-slate-500 dark:text-slate-400">Data Extragerii:</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
                   {offer.createdAt ? new Date(offer.createdAt).toLocaleString('ro-RO') : 'Recent'}
                 </span>
               </div>
               {offer.reviewedBy && (
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-500">Validat de:</span>
-                  <span className="text-emerald-700 font-bold">
+                  <span className="font-semibold text-slate-500 dark:text-slate-400">Validat de:</span>
+                  <span className="text-emerald-700 dark:text-emerald-400 font-bold">
                     {offer.reviewedBy} ({offer.reviewedAt ? new Date(offer.reviewedAt).toLocaleString('ro-RO') : ''})
                   </span>
                 </div>
@@ -408,7 +410,7 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
                   <button
                     type="button"
                     onClick={() => onViewDocument(offer.documentId)}
-                    className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                    className="w-full py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
                   >
                     <FileText className="w-3.5 h-3.5" />
                     <span>Vezi Documentul Original Descărcat</span>
@@ -420,11 +422,11 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
         </div>
 
         {/* Drawer Footer Actions */}
-        <div className="p-4 border-t border-slate-200 bg-white flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row items-center justify-between gap-3">
           <button
             type="button"
             onClick={onClose}
-            className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-xs hover:bg-slate-50"
+            className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xs hover:bg-slate-50 dark:hover:bg-slate-800"
           >
             Închide
           </button>
@@ -435,7 +437,7 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
                 type="button"
                 onClick={() => setShowRejectInput(true)}
                 disabled={isProcessing}
-                className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 font-bold text-xs transition-colors disabled:opacity-50"
+                className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900/60 hover:bg-rose-100 dark:hover:bg-rose-950/70 font-bold text-xs transition-colors disabled:opacity-50"
               >
                 Respinge Oferta
               </button>
@@ -446,7 +448,7 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
                   value={rejectionReason}
                   onChange={e => setRejectionReason(e.target.value)}
                   placeholder="Motiv respingere..."
-                  className="px-2.5 py-1.5 rounded-lg border border-rose-300 text-xs outline-none"
+                  className="px-2.5 py-1.5 rounded-lg border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 text-xs outline-none"
                 />
                 <button
                   type="button"
@@ -463,7 +465,7 @@ export const AdminStagingOfferDrawer: React.FC<AdminStagingOfferDrawerProps> = (
                 <button
                   type="button"
                   onClick={() => setShowRejectInput(false)}
-                  className="px-2 py-1.5 text-slate-400 hover:text-slate-600 text-xs"
+                  className="px-2 py-1.5 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 text-xs"
                 >
                   Anulează
                 </button>

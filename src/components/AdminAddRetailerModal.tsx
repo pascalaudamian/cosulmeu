@@ -201,24 +201,24 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-xs">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-retailer-modal-title"
-        className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]"
+        className="bg-white dark:bg-slate-900 rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]"
       >
         {/* Header */}
-        <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3 bg-slate-50/70">
+        <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/70 dark:bg-slate-800/60">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs">
               <StoreIcon className="w-5 h-5" />
             </div>
             <div>
-              <h3 id="add-retailer-modal-title" className="text-base font-extrabold text-slate-900">
+              <h3 id="add-retailer-modal-title" className="text-base font-extrabold text-slate-900 dark:text-slate-100">
                 {retailer ? 'Editează Retailer' : 'Definire Retailer Nou'}
               </h3>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
                 {retailer
                   ? 'Actualizează datele retailerului; ID-ul rămâne neschimbat pentru a păstra ofertele și sursele existente.'
                   : 'Configurează un nou lanț de magazine pentru monitorizare și import de cataloage.'}
@@ -229,7 +229,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Închide fereastra"
-            className="p-1.5 rounded-xl hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors"
+            className="p-1.5 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -238,8 +238,8 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
           {errorMessage && (
-            <div role="alert" className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+            <div role="alert" className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-800 dark:text-rose-300 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
               <div className="flex-1 font-semibold leading-relaxed">{errorMessage}</div>
             </div>
           )}
@@ -247,7 +247,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           {/* Name & ID */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label htmlFor="retailer-name" className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-name" className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Nume Retailer *
               </label>
               <input
@@ -256,21 +256,21 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                 value={name}
                 onChange={e => handleNameChange(e.target.value)}
                 placeholder="Ex: Selgros România"
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
                 required
               />
             </div>
 
             <div>
-              <div className="font-bold text-slate-700 mb-1 flex items-center justify-between gap-2">
+              <div className="font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between gap-2">
                 <label htmlFor="retailer-id">Identificator (Slug) *</label>
                 {retailer ? (
-                  <span className="text-[10px] font-medium text-slate-500">Păstrat pentru legăturile existente</span>
+                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">Păstrat pentru legăturile existente</span>
                 ) : (
                   <button
                     type="button"
                     onClick={() => setIsCustomId(!isCustomId)}
-                    className="text-[10px] text-emerald-600 hover:underline font-semibold"
+                    className="text-[10px] text-emerald-600 dark:text-emerald-400 hover:underline font-semibold"
                   >
                     {isCustomId ? 'Generare auto' : 'Modifică manual'}
                   </button>
@@ -283,7 +283,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                 disabled={!isCustomId || Boolean(retailer)}
                 onChange={e => setId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
                 placeholder="selgros"
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white disabled:bg-slate-50 text-slate-800 font-mono text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 disabled:bg-slate-50 dark:disabled:bg-slate-800/60 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-mono text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
                 required
               />
             </div>
@@ -292,7 +292,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           {/* Chain & Store Type */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label htmlFor="retailer-chain" className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-chain" className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Grup / Denumire Rețea
               </label>
               <input
@@ -301,19 +301,19 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                 value={chain}
                 onChange={e => setChain(e.target.value)}
                 placeholder="Ex: Selgros Cash & Carry"
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
               />
             </div>
 
             <div>
-              <label htmlFor="retailer-store-type" className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-store-type" className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Tip Magazin
               </label>
               <select
                 id="retailer-store-type"
                 value={storeType}
                 onChange={e => setStoreType(e.target.value as any)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
               >
                 <option value="supermarket">Supermarket</option>
                 <option value="hypermarket">Hypermarket</option>
@@ -324,28 +324,28 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           </div>
 
           <div>
-            <label htmlFor="retailer-official-url" className="block font-bold text-slate-700 mb-1">
+            <label htmlFor="retailer-official-url" className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
               Website Oficial / Pagină Fallback Web
             </label>
             <div className="relative">
-              <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+              <Globe className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-3 top-2.5" />
               <input
                 id="retailer-official-url"
                 type="url"
                 value={officialUrl}
                 onChange={e => setOfficialUrl(e.target.value)}
                 placeholder="https://www.retailer.ro/oferte"
-                className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
               />
             </div>
-            <p className="text-[10px] text-slate-400 mt-1">
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
               Utilizat automat pentru importul din pagina web atunci când revista săptămânală sau catalogul PDF nu este disponibil. Sunt permise doar URL-uri publice HTTP/HTTPS.
             </p>
           </div>
 
           <div>
-            <span className="block font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-              <Palette className="w-3.5 h-3.5 text-slate-500" />
+            <span className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+              <Palette className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
               <span>Culoare Identitate Brand</span>
             </span>
             <div className="flex flex-wrap items-center gap-2">
@@ -358,7 +358,7 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                   aria-label={c.label}
                   aria-pressed={color === c.id}
                   className={`w-7 h-7 rounded-xl ${c.bg} transition-all transform cursor-pointer flex items-center justify-center text-white ${
-                    color === c.id ? `ring-2 ring-offset-2 ${c.ring} scale-110 shadow-sm` : 'opacity-80 hover:opacity-100 hover:scale-105'
+                    color === c.id ? `ring-2 ring-offset-2 dark:ring-offset-slate-900 ${c.ring} scale-110 shadow-sm` : 'opacity-80 hover:opacity-100 hover:scale-105'
                   }`}
                 >
                   {color === c.id && <CheckCircle2 className="w-4 h-4" />}
@@ -372,14 +372,14 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           {/* Format & Status */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label htmlFor="retailer-format" className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-format" className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Format Principal Catalog
               </label>
               <select
                 id="retailer-format"
                 value={format}
                 onChange={e => setFormat(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
               >
                 <option value="HTML & PDF">HTML & PDF (Mixt)</option>
                 <option value="HTML Store">HTML Store (Web e-commerce)</option>
@@ -390,14 +390,14 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
             </div>
 
             <div>
-              <label htmlFor="retailer-default-status" className="block font-bold text-slate-700 mb-1">
+              <label htmlFor="retailer-default-status" className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Stare Inițială
               </label>
               <select
                 id="retailer-default-status"
                 value={defaultStatus}
                 onChange={e => setDefaultStatus(e.target.value as any)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
               >
                 <option value="ACTIVE">ACTIV & OPERAȚIONAL</option>
                 <option value="BLOCKED">BLOCKED (Necesită verificare WAF)</option>
@@ -406,24 +406,24 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           </div>
 
           {/* Initial Source Section */}
-          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-3">
             <label htmlFor="retailer-has-initial-source" className="flex items-center gap-2 cursor-pointer">
               <input
                 id="retailer-has-initial-source"
                 type="checkbox"
                 checked={hasInitialSource}
                 onChange={e => setHasInitialSource(e.target.checked)}
-                className="w-4 h-4 text-emerald-600 rounded-md border-slate-300 focus:ring-emerald-500"
+                className="w-4 h-4 text-emerald-600 rounded-md border-slate-300 dark:border-slate-600 dark:bg-slate-900 focus:ring-emerald-500"
               />
-              <span className="font-bold text-slate-800 text-xs">
+              <span className="font-bold text-slate-800 dark:text-slate-200 text-xs">
                 Configurează imediat prima sursă oficială de catalog
               </span>
             </label>
 
             {hasInitialSource && (
-              <div className="space-y-3 pt-2 border-t border-slate-200/60">
+              <div className="space-y-3 pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
                 <div>
-                  <label htmlFor="retailer-source-name" className="block font-semibold text-slate-700 mb-1 text-[11px]">
+                  <label htmlFor="retailer-source-name" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1 text-[11px]">
                     Nume Sursă Catalog
                   </label>
                   <input
@@ -432,40 +432,40 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
                     value={sourceName}
                     onChange={e => setSourceName(e.target.value)}
                     placeholder={name ? `Catalog & Oferte ${name}` : 'Catalog Online'}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                   />
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div className="sm:col-span-2">
-                    <label htmlFor="retailer-catalog-url" className="block font-semibold text-slate-700 mb-1 text-[11px]">
+                    <label htmlFor="retailer-catalog-url" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1 text-[11px]">
                       URL Pagină / Catalog
                     </label>
                     <div className="relative">
-                      <Globe className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                      <Globe className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-3 top-2.5" />
                       <input
                         id="retailer-catalog-url"
                         type="url"
                         value={catalogUrl}
                         onChange={e => setCatalogUrl(e.target.value)}
                         placeholder="https://www.retailer.ro/cataloage"
-                        className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                        className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                       />
                     </div>
-                    <p className="text-[10px] text-slate-500 mt-1">
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
                       Orice domeniu public HTTP/HTTPS este acceptat; adresele locale și private rămân blocate.
                     </p>
                   </div>
 
                   <div>
-                    <label htmlFor="retailer-source-format" className="block font-semibold text-slate-700 mb-1 text-[11px]">
+                    <label htmlFor="retailer-source-format" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1 text-[11px]">
                       Format Sursă
                     </label>
                     <select
                       id="retailer-source-format"
                       value={sourceFormat}
                       onChange={e => setSourceFormat(e.target.value)}
-                      className="w-full px-2.5 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      className="w-full px-2.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-semibold text-xs outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                     >
                       <option value="html">HTML</option>
                       <option value="pdf">PDF</option>
@@ -481,12 +481,12 @@ export const AdminAddRetailerModal: React.FC<AdminAddRetailerModalProps> = ({
           )}
 
           {/* Footer Actions */}
-          <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
               onClick={onClose}
               disabled={isSaving}
-              className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+              className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
             >
               Anulează
             </button>

@@ -276,6 +276,8 @@ export interface MultiStoreOptimization {
   explanation: string;
 }
 
+export type ThemeMode = 'light' | 'dark' | 'system';
+
 export interface UserProfile {
   id?: string;
   name: string;
@@ -290,6 +292,7 @@ export interface UserProfile {
   preferredStores: string[];
   preferredStoreId?: string;
   preferredLanguage?: string;
+  theme?: ThemeMode;
   role?: 'user' | 'admin';
   monthlySavingsGoal: number;
   notificationsEnabled: boolean;

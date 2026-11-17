@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useDashboardData } from './services/useDashboardData.js';
 import {
   countLocalDashboardData,
@@ -57,27 +57,42 @@ const TabContentSkeleton: React.FC = () => (
   <div className="space-y-6 pb-16 animate-pulse" aria-busy="true" aria-label="Se încarcă secțiunea">
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div className="space-y-2.5">
-        <div className="h-3.5 w-44 rounded bg-slate-200/80" />
-        <div className="h-8 w-72 rounded-lg bg-slate-200/90" />
-        <div className="h-4 w-96 max-w-full rounded bg-slate-200/70" />
+        <div className="h-3.5 w-44 rounded bg-slate-200/80 dark:bg-slate-800" />
+        <div className="h-8 w-72 rounded-lg bg-slate-200/90 dark:bg-slate-800" />
+        <div className="h-4 w-96 max-w-full rounded bg-slate-200/70 dark:bg-slate-800/80" />
       </div>
-      <div className="h-10 w-44 rounded-xl bg-slate-200/80" />
+      <div className="h-10 w-44 rounded-xl bg-slate-200/80 dark:bg-slate-800" />
     </div>
-    <div className="h-36 rounded-2xl bg-white border border-slate-200/80 p-6" />
+    <div className="h-36 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-6" />
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <div className="h-52 rounded-2xl bg-white border border-slate-200/80" />
-      <div className="h-52 rounded-2xl bg-white border border-slate-200/80" />
-      <div className="h-52 rounded-2xl bg-white border border-slate-200/80 hidden md:block" />
+      <div className="h-52 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800" />
+      <div className="h-52 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800" />
+      <div className="h-52 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 hidden md:block" />
     </div>
   </div>
 );
 
 import { StorageService } from './services/StorageService.js';
-import { ShoppingList, Receipt, UserProfile, PriceAlert, Product, ProductOffer, Store, UnitType } from './types.js';
-import { PriceComparisonService } from './services/PriceComparisonService.js';
+import {
+  applyThemeToDocument,
+  getStoredThemeMode,
+  getSystemPrefersDark,
+  loadUserThemePreference,
+  normalizeThemeMode,
+  resolveIsDark,
+  saveUserThemePreference
+} from './services/ThemeService.js';
+import { ShoppingList, Receipt, UserProfile, PriceAlert, Product, ProductOffer, Store, ThemeMode } from './types.js';
 import { ShieldCheck } from 'lucide-react';
 import { useAuth } from './auth/AuthProvider.js';
 import { supabase } from './lib/supabase.js';
+import { PRODUCTS } from './data/mockData.js';
+import {
+  buildGuestDemoShoppingList,
+  GUEST_DEMO_LIST_ID,
+  materializeGuestDemoLists,
+  selectDashboardListsForSession
+} from './utils/guestDemoBasket.js';
 
 const normalizeStoreKey = (value: string): string =>
   (value || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
@@ -135,49 +150,25 @@ export default function App() {
   const [catalogProducts, setCatalogProducts] = useState<Product[]>([]);
   const [catalogOffers, setCatalogOffers] = useState<ProductOffer[]>([]);
   const [catalogStores, setCatalogStores] = useState<Store[]>([]);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
+  const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => getSystemPrefersDark());
+  const isDarkMode = resolveIsDark(themeMode, systemPrefersDark);
   const catalogLoadedRef = useRef(false);
-  const guestDemoList = React.useMemo<ShoppingList>(() => {
-    const popularProductTerms = ['lapte', 'banane', 'paine', 'iaurt', 'apa', 'cafea'];
-    const normalizeProductName = (name: string) =>
-      name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    const demoProducts: Product[] = [];
 
-    for (const term of popularProductTerms) {
-      const matchingProducts = catalogProducts
-        .filter(product => new RegExp(`(?:^|[^a-z])${term}(?:$|[^a-z])`).test(normalizeProductName(product.name)))
-        .map(product => ({
-          product,
-          offerCount: catalogOffers.filter(offer =>
-            offer.productId === product.id && PriceComparisonService.isOfferValid(offer)
-          ).length
-        }))
-        .filter(candidate => candidate.offerCount > 0)
-        .sort((a, b) => b.offerCount - a.offerCount);
-      const match = matchingProducts[0]?.product;
-      if (match && !demoProducts.some(product => product.id === match.id)) demoProducts.push(match);
-    }
+  useEffect(() => {
+    applyThemeToDocument(themeMode, systemPrefersDark);
+  }, [themeMode, systemPrefersDark]);
 
-    const now = new Date().toISOString();
-    return {
-      id: 'guest-demo-list',
-      name: 'Coș demonstrativ',
-      items: demoProducts.map(product => ({
-        id: `guest-demo-${product.id}`,
-        productId: product.id,
-        name: product.name,
-        brand: product.brand,
-        category: product.category,
-        quantity: 1,
-        unit: 'buc' as UnitType,
-        checked: false,
-        barcode: product.barcode,
-        referencePrice: product.baseReferencePrice,
-        estimatedPrice: product.baseReferencePrice
-      })),
-      createdAt: now,
-      updatedAt: now
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = (event: MediaQueryListEvent) => {
+      setSystemPrefersDark(event.matches);
     };
-  }, [catalogProducts, catalogOffers]);
+    setSystemPrefersDark(mediaQuery.matches);
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
 
   const loadCatalogDatasets = useCallback(() => {
     if (catalogLoadedRef.current) return;
@@ -193,9 +184,9 @@ export default function App() {
     });
   }, []);
 
-  // Load catalog immediately when needed by catalog/list/compare/stores, otherwise prefetch lazily after first paint
+  // Load catalog immediately when needed by dashboard/catalog/list/compare/stores, otherwise prefetch lazily after first paint
   useEffect(() => {
-    if (['shopping-list', 'compare', 'products', 'stores', 'product-detail'].includes(currentTab)) {
+    if (['dashboard', 'shopping-list', 'compare', 'products', 'stores', 'product-detail'].includes(currentTab)) {
       loadCatalogDatasets();
       return;
     }
@@ -220,7 +211,7 @@ export default function App() {
   }, [loadCatalogDatasets]);
   const localDashboardSnapshot: LocalDashboardSnapshot = {
     receipts,
-    shoppingLists: shoppingLists.filter(list => list.id !== 'guest-demo-list'),
+    shoppingLists,
     priceAlerts,
     trackedProductIds
   };
@@ -234,111 +225,159 @@ export default function App() {
 
   useEffect(() => {
     if (!user) {
-      setUserProfile(StorageService.getUserProfile());
+      setUserProfile({ ...StorageService.getUserProfile(), theme: getStoredThemeMode() });
       return;
     }
+    let cancelled = false;
     const userId = user.id;
     const userEmail = user.email;
 
-    supabase
-      .from('profiles')
-      .select('id, first_name, last_name, display_name, username, avatar_url, phone, phone_number, city, preferred_store_id, preferred_language, role, preferences, created_at')
-      .eq('id', userId)
-      .maybeSingle()
-      .then(async ({ data }) => {
-        if (data) {
-          const preferences = (data.preferences || {}) as Record<string, unknown>;
-          const loadedProfile: UserProfile = {
-            id: data.id,
-            name: data.display_name || [data.first_name, data.last_name].filter(Boolean).join(' ') || user.user_metadata?.display_name || (userEmail ? userEmail.split('@')[0] : 'Utilizator'),
-            email: userEmail || '',
-            username: data.username || user.user_metadata?.username || undefined,
-            avatarUrl: data.avatar_url || undefined,
-            avatar_url: data.avatar_url || undefined,
-            phone: data.phone_number || data.phone || undefined,
-            phoneNumber: data.phone_number || data.phone || undefined,
-            city: data.city || 'București',
-            preferredLanguage: data.preferred_language || 'ro',
-            preferredStoreId: data.preferred_store_id || undefined,
-            role: (data.role as 'user' | 'admin') || (userEmail === 'pascalau.stefan@gmail.com' ? 'admin' : 'user'),
-            monthlySavingsGoal: typeof preferences.monthlySavingsGoal === 'number' ? preferences.monthlySavingsGoal : 350,
-            notificationsEnabled: typeof preferences.notificationsEnabled === 'boolean' ? preferences.notificationsEnabled : true,
-            preferredStores: Array.isArray(preferences.preferredStores) ? preferences.preferredStores : ['lidl', 'kaufland', 'carrefour', 'auchan'],
-            defaultTransportCostEstimate: typeof preferences.defaultTransportCostEstimate === 'number' ? preferences.defaultTransportCostEstimate : 12,
-            useLoyaltyCards: typeof preferences.useLoyaltyCards === 'boolean' ? preferences.useLoyaltyCards : true,
-            createdAt: data.created_at || user.created_at,
-            created_at: data.created_at || user.created_at,
-          };
-          setUserProfile(loadedProfile);
-          StorageService.saveUserProfile(loadedProfile);
-        } else {
-          const defaultName = user.user_metadata?.display_name || (userEmail ? userEmail.split('@')[0] : 'Utilizator');
-          const defaultUsername = user.user_metadata?.username || undefined;
-          const defaultRole: 'user' | 'admin' = (userEmail === 'pascalau.stefan@gmail.com' || user.user_metadata?.is_admin) ? 'admin' : 'user';
+    Promise.all([
+      supabase
+        .from('profiles')
+        .select('id, first_name, last_name, display_name, username, avatar_url, phone, phone_number, city, preferred_store_id, preferred_language, role, preferences, created_at')
+        .eq('id', userId)
+        .maybeSingle(),
+      loadUserThemePreference(userId)
+    ]).then(async ([profileRes, remoteTheme]) => {
+      if (cancelled) return;
+      const data = profileRes.data;
+      const currentTheme = getStoredThemeMode();
+      const resolvedTheme = remoteTheme ?? currentTheme;
 
-          const newProfileRow = {
-            id: userId,
-            display_name: defaultName,
-            username: defaultUsername,
-            city: 'București',
-            role: defaultRole,
-            preferred_language: 'ro',
-            preferences: {
-              monthlySavingsGoal: 350,
-              notificationsEnabled: true,
-              preferredStores: ['lidl', 'kaufland', 'carrefour', 'auchan'],
-              defaultTransportCostEstimate: 12,
-              useLoyaltyCards: true
-            }
-          };
+      if (remoteTheme) {
+        setThemeMode(remoteTheme);
+        applyThemeToDocument(remoteTheme, getSystemPrefersDark());
+      } else {
+        void saveUserThemePreference(userId, currentTheme, {
+          language: data?.preferred_language || 'ro'
+        });
+      }
 
-          const { error: profileCreateError } = await supabase.from('profiles').insert(newProfileRow);
-          if (profileCreateError && profileCreateError.code !== '23505') {
-            setDataWriteError('Profilul nu a putut fi inițializat în Supabase.');
-          }
+      if (data) {
+        const preferences = (data.preferences || {}) as Record<string, unknown>;
+        const loadedProfile: UserProfile = {
+          id: data.id,
+          name: data.display_name || [data.first_name, data.last_name].filter(Boolean).join(' ') || user.user_metadata?.display_name || (userEmail ? userEmail.split('@')[0] : 'Utilizator'),
+          email: userEmail || '',
+          username: data.username || user.user_metadata?.username || undefined,
+          avatarUrl: data.avatar_url || undefined,
+          avatar_url: data.avatar_url || undefined,
+          phone: data.phone_number || data.phone || undefined,
+          phoneNumber: data.phone_number || data.phone || undefined,
+          city: data.city || 'București',
+          preferredLanguage: data.preferred_language || 'ro',
+          theme: resolvedTheme,
+          preferredStoreId: data.preferred_store_id || undefined,
+          role: (data.role as 'user' | 'admin') || (userEmail === 'pascalau.stefan@gmail.com' ? 'admin' : 'user'),
+          monthlySavingsGoal: typeof preferences.monthlySavingsGoal === 'number' ? preferences.monthlySavingsGoal : 350,
+          notificationsEnabled: typeof preferences.notificationsEnabled === 'boolean' ? preferences.notificationsEnabled : true,
+          preferredStores: Array.isArray(preferences.preferredStores) ? preferences.preferredStores : ['lidl', 'kaufland', 'carrefour', 'auchan'],
+          defaultTransportCostEstimate: typeof preferences.defaultTransportCostEstimate === 'number' ? preferences.defaultTransportCostEstimate : 12,
+          useLoyaltyCards: typeof preferences.useLoyaltyCards === 'boolean' ? preferences.useLoyaltyCards : true,
+          createdAt: data.created_at || user.created_at,
+          created_at: data.created_at || user.created_at,
+        };
+        setUserProfile(loadedProfile);
+        StorageService.saveUserProfile(loadedProfile);
+      } else {
+        const defaultName = user.user_metadata?.display_name || (userEmail ? userEmail.split('@')[0] : 'Utilizator');
+        const defaultUsername = user.user_metadata?.username || undefined;
+        const defaultRole: 'user' | 'admin' = (userEmail === 'pascalau.stefan@gmail.com' || user.user_metadata?.is_admin) ? 'admin' : 'user';
 
-          const initialProfile: UserProfile = {
-            id: userId,
-            name: defaultName,
-            email: userEmail || '',
-            username: defaultUsername,
-            city: 'București',
-            role: defaultRole,
-            preferredLanguage: 'ro',
+        const newProfileRow = {
+          id: userId,
+          display_name: defaultName,
+          username: defaultUsername,
+          city: 'București',
+          role: defaultRole,
+          preferred_language: 'ro',
+          preferences: {
             monthlySavingsGoal: 350,
             notificationsEnabled: true,
             preferredStores: ['lidl', 'kaufland', 'carrefour', 'auchan'],
             defaultTransportCostEstimate: 12,
-            useLoyaltyCards: true,
-            createdAt: user.created_at,
-            created_at: user.created_at,
-          };
-          setUserProfile(initialProfile);
-          StorageService.saveUserProfile(initialProfile);
+            useLoyaltyCards: true
+          }
+        };
+
+        const { error: profileCreateError } = await supabase.from('profiles').insert(newProfileRow);
+        if (profileCreateError && profileCreateError.code !== '23505') {
+          setDataWriteError('Profilul nu a putut fi inițializat în Supabase.');
         }
-      });
+
+        const initialProfile: UserProfile = {
+          id: userId,
+          name: defaultName,
+          email: userEmail || '',
+          username: defaultUsername,
+          city: 'București',
+          role: defaultRole,
+          preferredLanguage: 'ro',
+          theme: resolvedTheme,
+          monthlySavingsGoal: 350,
+          notificationsEnabled: true,
+          preferredStores: ['lidl', 'kaufland', 'carrefour', 'auchan'],
+          defaultTransportCostEstimate: 12,
+          useLoyaltyCards: true,
+          createdAt: user.created_at,
+          created_at: user.created_at,
+        };
+        setUserProfile(initialProfile);
+        StorageService.saveUserProfile(initialProfile);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [user]);
 
+  const handleChangeTheme = useCallback(async (nextTheme: ThemeMode) => {
+    const normalized = normalizeThemeMode(nextTheme);
+    setThemeMode(normalized);
+    applyThemeToDocument(normalized, getSystemPrefersDark());
+    setUserProfile(prev => {
+      const updated = { ...prev, theme: normalized };
+      StorageService.saveUserProfile(updated);
+      return updated;
+    });
+    if (user) {
+      await saveUserThemePreference(user.id, normalized, {
+        notificationsEnabled: userProfile.notificationsEnabled,
+        priceAlertsEnabled: userProfile.notificationsEnabled,
+        language: userProfile.preferredLanguage || 'ro'
+      });
+    }
+  }, [user, userProfile.notificationsEnabled, userProfile.preferredLanguage]);
+
   const handleProfileUpdate = (profile: UserProfile) => {
-    setUserProfile(profile);
-    StorageService.saveUserProfile(profile);
+    const effectiveTheme = normalizeThemeMode(profile.theme ?? themeMode, themeMode);
+    const updatedProfile = { ...profile, theme: effectiveTheme };
+    setUserProfile(updatedProfile);
+    StorageService.saveUserProfile(updatedProfile);
+
+    if (profile.theme && profile.theme !== themeMode) {
+      setThemeMode(effectiveTheme);
+      applyThemeToDocument(effectiveTheme, getSystemPrefersDark());
+    }
 
     if (user) {
       void supabase.from('profiles').upsert({
         id: user.id,
-        display_name: profile.name,
-        username: profile.username || null,
-        city: profile.city,
-        phone_number: profile.phoneNumber || profile.phone || null,
-        preferred_language: profile.preferredLanguage || 'ro',
-        preferred_store_id: profile.preferredStoreId || null,
-        avatar_url: profile.avatarUrl || profile.avatar_url || null,
+        display_name: updatedProfile.name,
+        username: updatedProfile.username || null,
+        city: updatedProfile.city,
+        phone_number: updatedProfile.phoneNumber || updatedProfile.phone || null,
+        preferred_language: updatedProfile.preferredLanguage || 'ro',
+        preferred_store_id: updatedProfile.preferredStoreId || null,
+        avatar_url: updatedProfile.avatarUrl || updatedProfile.avatar_url || null,
         preferences: {
-          monthlySavingsGoal: profile.monthlySavingsGoal,
-          notificationsEnabled: profile.notificationsEnabled,
-          preferredStores: profile.preferredStores,
-          defaultTransportCostEstimate: profile.defaultTransportCostEstimate,
-          useLoyaltyCards: profile.useLoyaltyCards,
+          monthlySavingsGoal: updatedProfile.monthlySavingsGoal,
+          notificationsEnabled: updatedProfile.notificationsEnabled,
+          preferredStores: updatedProfile.preferredStores,
+          defaultTransportCostEstimate: updatedProfile.defaultTransportCostEstimate,
+          useLoyaltyCards: updatedProfile.useLoyaltyCards,
           ...(dashboardData ? {
             trackedProductIds: dashboardData.trackedProductIds,
             localHistoryImportedAt: dashboardData.localDataImportedAt
@@ -346,14 +385,30 @@ export default function App() {
         },
         updated_at: new Date().toISOString(),
       });
-      void supabase.from('user_preferences').upsert({
-        user_id: user.id,
-        notifications_enabled: profile.notificationsEnabled,
-        price_alerts_enabled: profile.notificationsEnabled,
-        updated_at: new Date().toISOString(),
+      void saveUserThemePreference(user.id, effectiveTheme, {
+        notificationsEnabled: updatedProfile.notificationsEnabled,
+        priceAlertsEnabled: updatedProfile.notificationsEnabled,
+        language: updatedProfile.preferredLanguage || 'ro'
       });
     }
   };
+
+  const guestDemoList = useMemo(
+    () =>
+      buildGuestDemoShoppingList(
+        catalogProducts.length > 0 ? catalogProducts : PRODUCTS,
+        catalogOffers
+      ),
+    [catalogProducts, catalogOffers]
+  );
+
+  // Reset activeListId if the user logs in while viewing the virtual guest demo basket
+  useEffect(() => {
+    if (user && activeListId === GUEST_DEMO_LIST_ID) {
+      const storedActive = StorageService.getActiveListId();
+      setActiveListId(storedActive && storedActive !== GUEST_DEMO_LIST_ID ? storedActive : '');
+    }
+  }, [user, activeListId]);
 
   // Keep every hook before conditional loading/auth returns.
   useEffect(() => {
@@ -378,20 +433,20 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-slate-900 font-sans">
-        <header className="sticky top-0 z-40 h-16 bg-white/90 backdrop-blur-xl border-b border-slate-200/80">
+      <div className="min-h-screen flex flex-col bg-[#F8FAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans">
+        <header className="sticky top-0 z-40 h-16 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-b border-slate-200/80 dark:border-slate-800">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-full flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-emerald-600/15 animate-pulse" />
-              <div className="h-5 w-28 rounded bg-slate-200 animate-pulse" />
+              <div className="w-9 h-9 rounded-xl bg-emerald-600/15 dark:bg-emerald-500/20 animate-pulse" />
+              <div className="h-5 w-28 rounded bg-slate-200 dark:bg-slate-800 animate-pulse" />
             </div>
             <div className="hidden md:flex items-center gap-6">
-              <div className="h-4 w-16 rounded bg-slate-200/80 animate-pulse" />
-              <div className="h-4 w-16 rounded bg-slate-200/80 animate-pulse" />
-              <div className="h-4 w-20 rounded bg-slate-200/80 animate-pulse" />
-              <div className="h-4 w-24 rounded bg-slate-200/80 animate-pulse" />
+              <div className="h-4 w-16 rounded bg-slate-200/80 dark:bg-slate-800 animate-pulse" />
+              <div className="h-4 w-16 rounded bg-slate-200/80 dark:bg-slate-800 animate-pulse" />
+              <div className="h-4 w-20 rounded bg-slate-200/80 dark:bg-slate-800 animate-pulse" />
+              <div className="h-4 w-24 rounded bg-slate-200/80 dark:bg-slate-800 animate-pulse" />
             </div>
-            <div className="h-9 w-32 rounded-xl bg-emerald-600/20 animate-pulse" />
+            <div className="h-9 w-32 rounded-xl bg-emerald-600/20 dark:bg-emerald-500/20 animate-pulse" />
           </div>
         </header>
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-8">
@@ -408,12 +463,13 @@ export default function App() {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-  const dashboardLists = user
-    ? dashboardData?.shoppingLists || []
-    : shoppingLists.length > 0
-      ? shoppingLists
-      : [guestDemoList];
-  const screenShoppingLists = dashboardLists.length > 0 ? dashboardLists : [emptyList];
+  const { lists: sessionLists, isDemoMode: isGuestDemoMode } = selectDashboardListsForSession({
+    isAuthenticated: Boolean(user),
+    userShoppingLists: dashboardData?.shoppingLists,
+    localShoppingLists: shoppingLists,
+    guestDemoList
+  });
+  const screenShoppingLists = sessionLists.length > 0 ? sessionLists : [emptyList];
   const activeList =
     screenShoppingLists.find(list => list.id === activeListId && !list.isArchived) ||
     screenShoppingLists.find(list => !list.isArchived) ||
@@ -444,11 +500,20 @@ export default function App() {
 
   const handleUpdateShoppingLists = async (nextLists: ShoppingList[]): Promise<boolean> => {
     if (!user) {
-      setShoppingLists(nextLists);
-      StorageService.saveShoppingLists(nextLists.filter(list => list.id !== 'guest-demo-list'));
-      if (nextLists.length > 0 && !nextLists.some(l => l.id === activeListId)) {
-        setActiveListId(nextLists[0].id);
-        StorageService.setActiveListId(nextLists[0].id);
+      const replacementId = crypto.randomUUID();
+      const hasVirtualDemo = nextLists.some(l => l.id === GUEST_DEMO_LIST_ID);
+      const materialized = hasVirtualDemo
+        ? materializeGuestDemoLists(nextLists, replacementId)
+        : nextLists;
+      setShoppingLists(materialized);
+      StorageService.saveShoppingLists(materialized);
+      if (
+        materialized.length > 0 &&
+        (!materialized.some(l => l.id === activeListId) || activeListId === GUEST_DEMO_LIST_ID)
+      ) {
+        const nextActiveId = hasVirtualDemo ? replacementId : materialized[0].id;
+        setActiveListId(nextActiveId);
+        StorageService.setActiveListId(nextActiveId);
       }
       return true;
     }
@@ -628,7 +693,10 @@ export default function App() {
       setCatalogProducts(prev => [resolvedProduct!, ...prev]);
     }
 
-    const targetListId = activeList.id === 'list-fallback' ? crypto.randomUUID() : activeList.id;
+    const targetListId =
+      activeList.id === 'list-fallback' || activeList.id === GUEST_DEMO_LIST_ID
+        ? crypto.randomUUID()
+        : activeList.id;
     const nowIso = new Date().toISOString();
 
     const updated = screenShoppingLists.map(list => {
@@ -667,6 +735,7 @@ export default function App() {
       return {
         ...list,
         id: targetListId,
+        name: list.id === GUEST_DEMO_LIST_ID ? 'Coșul Meu' : list.name,
         items: nextItems,
         updatedAt: nowIso
       };
@@ -681,7 +750,9 @@ export default function App() {
 
   const handleActiveListSelect = (listId: string) => {
     setActiveListId(listId);
-    StorageService.setActiveListId(listId);
+    if (listId !== GUEST_DEMO_LIST_ID) {
+      StorageService.setActiveListId(listId);
+    }
   };
 
   const handleReceiptSaved = async (savedReceipt: Receipt) => {
@@ -727,7 +798,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-slate-900 font-sans selection:bg-emerald-100 selection:text-emerald-950">
+    <div className="min-h-screen flex flex-col bg-[#F8FAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans selection:bg-emerald-100 dark:selection:bg-emerald-900/60 selection:text-emerald-950 dark:selection:text-emerald-100 transition-colors">
       {/* Top Navbar */}
       <Navbar
         currentTab={currentTab}
@@ -740,12 +811,15 @@ export default function App() {
         isAdmin={isAdmin}
         alerts={dashboardAlerts}
         itemsCount={activeList.items.length}
+        themeMode={themeMode}
+        isDarkMode={isDarkMode}
+        onChangeTheme={handleChangeTheme}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8">
         {dataWriteError && (
-          <div role="alert" className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800">
+          <div role="alert" className="mb-5 rounded-xl border border-rose-200 dark:border-rose-800/70 bg-rose-50 dark:bg-rose-950/50 px-4 py-3 text-sm font-medium text-rose-800 dark:text-rose-200">
             {dataWriteError}
           </div>
         )}
@@ -761,15 +835,16 @@ export default function App() {
           {currentTab === 'dashboard' && (
             <DashboardView
               userProfile={userProfile}
-              isAuthenticated={Boolean(user)}
               activeList={activeList}
-              catalogProducts={catalogProducts}
-              catalogOffers={catalogOffers}
-              catalogStores={catalogStores}
               receipts={dashboardReceipts}
               trackedCount={dashboardTrackedProductIds.length}
               activeAlertCount={dashboardAlerts.filter(alert => alert.isActive).length}
               dataSource={user ? 'supabase' : 'local'}
+              isAuthenticated={Boolean(user)}
+              isDemoMode={isGuestDemoMode}
+              catalogProducts={catalogProducts}
+              catalogOffers={catalogOffers}
+              catalogStores={catalogStores}
               dashboardData={dashboardData}
               dashboardLoading={Boolean(user && dashboardLoading)}
               dashboardError={user && dashboardLoadError ? 'Datele Supabase nu au putut fi încărcate.' : null}
@@ -864,27 +939,29 @@ export default function App() {
               onResetAllData={handleResetAllData}
               onSignOut={signOut}
               onNavigateToAuth={() => setCurrentTab('auth')}
+              themeMode={themeMode}
+              onChangeTheme={handleChangeTheme}
             />
           )}
         </Suspense>
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto border-t border-slate-200/80 bg-white py-7 text-xs text-slate-500 no-print pb-20 md:pb-7">
+      <footer className="mt-auto border-t border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 py-7 text-xs text-slate-500 dark:text-slate-400 no-print pb-20 md:pb-7 transition-colors">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <span className="font-display font-bold text-slate-900">
-              Coșul<span className="text-emerald-600">Meu</span>
+            <span className="font-display font-bold text-slate-900 dark:text-slate-100">
+              Coșul<span className="text-emerald-600 dark:text-emerald-400">Meu</span>
             </span>
             <span aria-hidden="true">·</span>
             <span>Comparator independent de prețuri în România</span>
           </div>
-          <div className="flex items-center gap-3 text-slate-500">
+          <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400">
             <span>RON (lei)</span>
             <span aria-hidden="true">·</span>
             <span>Europe/Bucharest</span>
             <span aria-hidden="true">·</span>
-            <span className="flex items-center gap-1.5 text-emerald-700 font-medium">
+            <span className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-medium">
               <ShieldCheck className="w-3.5 h-3.5" /> {user ? 'Date protejate în cont' : 'Date locale pe dispozitiv'}
             </span>
           </div>

@@ -247,30 +247,30 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-slate-50 tracking-tight">
             Scanare Bon Fiscal 🧾
           </h1>
-          <p className="text-slate-600 text-sm mt-0.5">
+          <p className="text-slate-600 dark:text-slate-400 text-sm mt-0.5">
             Încarcă bonul de cumpărături pentru a extrage automat produsele și a îmbunătăți istoricul personal de prețuri.
           </p>
         </div>
         <button
           onClick={onNavigateToHistory}
-          className="self-start sm:self-auto px-4 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-semibold flex items-center gap-1.5"
+          className="self-start sm:self-auto px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 transition-colors"
         >
-          <ReceiptIcon className="w-4 h-4 text-emerald-600" />
+          <ReceiptIcon className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
           Istoric bonuri salvate
         </button>
       </div>
 
       {/* Success Notification */}
       {saveSuccess && (
-        <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-center justify-between gap-3 animate-in fade-in">
+        <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/70 text-emerald-900 dark:text-emerald-100 flex items-center justify-between gap-3 animate-in fade-in">
           <div className="flex items-center gap-2.5">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <div>
               <span className="font-bold text-sm block">Bonul a fost salvat cu succes!</span>
-              <span className="text-xs text-emerald-700">
+              <span className="text-xs text-emerald-700 dark:text-emerald-300">
                 Prețurile au fost adăugate la istoricul tău personal și la statisticile de economii.
               </span>
             </div>
@@ -286,18 +286,18 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
 
       {/* Upload & Capture Card */}
       {!parsedReceipt && (
-        <div className="bg-white rounded-3xl border border-slate-200/90 p-6 sm:p-8 shadow-xs">
+        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-6 sm:p-8 shadow-xs">
           {!imageSrc ? (
             <div className="space-y-6">
               {/* Drop / Capture Zone */}
-              <div className="border-2 border-dashed border-slate-200 hover:border-emerald-500 rounded-3xl p-8 sm:p-12 text-center transition-colors bg-slate-50/50">
-                <div className="w-16 h-16 rounded-3xl bg-emerald-100/80 text-emerald-700 flex items-center justify-center mx-auto mb-4">
+              <div className="border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-3xl p-8 sm:p-12 text-center transition-colors bg-slate-50/50 dark:bg-slate-950/60">
+                <div className="w-16 h-16 rounded-3xl bg-emerald-100/80 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 flex items-center justify-center mx-auto mb-4">
                   <Camera className="w-8 h-8" />
                 </div>
-                <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-50">
                   Fotografiază sau încarcă bonul fiscal
                 </h3>
-                <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-md mx-auto">
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
                   Acceptăm imagini JPG, PNG, WEBP. Asigură-te că magazinul, produsele și totalul sunt vizibile și luminate.
                 </p>
 
@@ -327,7 +327,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                   />
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-sm shadow-xs flex items-center gap-2 transition-all"
+                    className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:border dark:border-slate-700 text-white font-semibold text-sm shadow-xs flex items-center gap-2 transition-all"
                   >
                     <Upload className="w-4 h-4" />
                     <span>Alege fișier din telefon/PC</span>
@@ -340,15 +340,15 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
           ) : (
             /* Image Preview & Scan Action */
             <div className="space-y-6">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold text-slate-900">Previzualizare bon</span>
-                  <span className="text-xs text-slate-500">Verifică orientarea imaginii</span>
+                  <span className="text-sm font-bold text-slate-900 dark:text-slate-50">Previzualizare bon</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">Verifică orientarea imaginii</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleRotate}
-                    className="p-2 rounded-xl text-slate-600 hover:bg-slate-100 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                    className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold flex items-center gap-1.5 transition-colors"
                     title="Rotește imaginea cu 90 de grade"
                   >
                     <RotateCw className="w-4 h-4" />
@@ -356,7 +356,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                   </button>
                   <button
                     onClick={() => setImageSrc(null)}
-                    className="p-2 rounded-xl text-rose-600 hover:bg-rose-50 text-xs font-semibold transition-colors"
+                    className="p-2 rounded-xl text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold transition-colors"
                   >
                     Schimbă imaginea
                   </button>
@@ -364,7 +364,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
               </div>
 
               {/* Image Display */}
-              <div className="relative bg-slate-900 rounded-2xl overflow-hidden flex items-center justify-center min-h-[300px] max-h-[480px]">
+              <div className="relative bg-slate-900 dark:bg-slate-950 dark:border dark:border-slate-800 rounded-2xl overflow-hidden flex items-center justify-center min-h-[300px] max-h-[480px]">
                 <img
                   src={imageSrc}
                   alt="Bon fiscal"
@@ -388,7 +388,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
               </div>
 
               {scanError && (
-                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800/70 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0" />
                   <span>{scanError}</span>
                 </div>
@@ -412,16 +412,16 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
 
       {/* Editable Confirmation Review Screen */}
       {parsedReceipt && (
-        <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-7 shadow-xs space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
+        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-5 sm:p-7 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 gap-3">
             <div>
-              <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider block mb-1">
+              <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider block mb-1">
                 Pasul 2: Verificare & Corectare date
               </span>
-              <h2 className="text-xl font-extrabold text-slate-900">
+              <h2 className="text-xl font-extrabold text-slate-900 dark:text-slate-50">
                 Confirmă produsele extrase
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 Poți modifica denumirea, cantitatea sau prețul fiecărui produs înainte de a salva definitiv bonul.
               </p>
             </div>
@@ -431,16 +431,16 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                 setParsedReceipt(null);
                 setImageSrc(null);
               }}
-              className="self-start sm:self-auto text-xs text-slate-500 hover:text-slate-800 underline font-medium"
+              className="self-start sm:self-auto text-xs text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 underline font-medium"
             >
               Scanează alt bon
             </button>
           </div>
 
           {/* Store & Date Header Inputs */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 rounded-2xl bg-slate-50/80 border border-slate-200/80 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 rounded-2xl bg-slate-50/80 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 text-sm">
             <div>
-              <label className="text-xs font-bold text-slate-600 block mb-1">Magazin</label>
+              <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">Magazin</label>
               <select
                 value={parsedReceipt.storeId}
                 onChange={e => {
@@ -451,7 +451,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                     storeName: s ? s.name : parsedReceipt.storeName
                   });
                 }}
-                className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 font-semibold text-slate-900"
+                className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
               >
                 {STORES.map(s => (
                   <option key={s.id} value={s.id}>
@@ -462,33 +462,33 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-600 block mb-1">Data emiterii</label>
+              <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">Data emiterii</label>
               <input
                 type="date"
                 value={parsedReceipt.date}
                 onChange={e => setParsedReceipt({ ...parsedReceipt, date: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 font-semibold text-slate-900"
+                className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
               />
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-600 block mb-1">Nr. Bon / CIF</label>
+              <label className="text-xs font-bold text-slate-600 dark:text-slate-300 block mb-1">Nr. Bon / CIF</label>
               <input
                 type="text"
                 value={parsedReceipt.fiscalNumber || ''}
                 onChange={e => setParsedReceipt({ ...parsedReceipt, fiscalNumber: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 font-semibold text-slate-900"
+                className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 font-semibold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
               />
             </div>
           </div>
 
           {/* Discrepancy Warning if Items Sum != Receipt Total */}
           {hasDiscrepancy && (
-            <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200/80 text-amber-900 text-xs flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-800/70 text-amber-900 dark:text-amber-100 text-xs flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
               <div>
                 <span className="font-bold">Atenție: verifică totalul bonului!</span>
-                <p className="mt-0.5 text-amber-800">
+                <p className="mt-0.5 text-amber-800 dark:text-amber-200">
                   Suma liniilor din tabel este de <span className="font-bold">{PriceComparisonService.formatRon(itemsSum)}</span>, în timp ce totalul declarat pe bon este de <span className="font-bold">{PriceComparisonService.formatRon(parsedReceipt.total)}</span> (diferență: {PriceComparisonService.formatRon(discrepancy)}). Verifică dacă există reduceri globale sau produse lipsă.
                 </p>
               </div>
@@ -496,10 +496,10 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
           )}
 
           {/* Editable Items Table */}
-          <div className="border border-slate-200 rounded-2xl overflow-x-auto shadow-2xs">
+          <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-x-auto shadow-2xs">
             <table className="w-full text-left text-sm border-collapse min-w-[650px]">
               <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                   <th className="p-3 pl-4">Denumire produs de pe bon</th>
                   <th className="p-3 text-center w-24">Cantitate</th>
                   <th className="p-3 text-right w-28">Preț unitar</th>
@@ -508,15 +508,15 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                   <th className="p-3 text-center w-12"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {parsedReceipt.items.map((item, idx) => (
-                  <tr key={item.id} className="hover:bg-slate-50/50">
+                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
                     <td className="p-2.5 pl-4">
                       <input
                         type="text"
                         value={item.rawName}
                         onChange={e => handleUpdateItem(idx, 'rawName', e.target.value)}
-                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 focus:border-emerald-500 text-sm font-semibold text-slate-800"
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 focus:border-emerald-500 focus:outline-none text-sm font-semibold text-slate-800 dark:text-slate-100"
                       />
                     </td>
                     <td className="p-2.5">
@@ -526,7 +526,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                         min="0.01"
                         value={item.quantity}
                         onChange={e => handleUpdateItem(idx, 'quantity', parseFloat(e.target.value) || 1)}
-                        className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-center text-sm font-semibold"
+                        className="w-full px-2 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-center text-sm font-semibold text-slate-900 dark:text-slate-100 focus:border-emerald-500 focus:outline-none"
                       />
                     </td>
                     <td className="p-2.5">
@@ -536,10 +536,10 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                         min="0"
                         value={item.unitPrice}
                         onChange={e => handleUpdateItem(idx, 'unitPrice', parseFloat(e.target.value) || 0)}
-                        className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-right text-sm font-semibold"
+                        className="w-full px-2 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-right text-sm font-semibold text-slate-900 dark:text-slate-100 focus:border-emerald-500 focus:outline-none"
                       />
                     </td>
-                    <td className="p-2.5 text-right font-bold text-slate-900">
+                    <td className="p-2.5 text-right font-bold text-slate-900 dark:text-slate-100">
                       {PriceComparisonService.formatRon(item.totalPrice)}
                     </td>
                     <td className="p-2.5">
@@ -549,13 +549,13 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                         min="0"
                         value={item.discount}
                         onChange={e => handleUpdateItem(idx, 'discount', parseFloat(e.target.value) || 0)}
-                        className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-right text-xs font-semibold text-emerald-700"
+                        className="w-full px-2 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-right text-xs font-semibold text-emerald-700 dark:text-emerald-400 focus:border-emerald-500 focus:outline-none"
                       />
                     </td>
                     <td className="p-2.5 text-center">
                       <button
                         onClick={() => handleDeleteItem(idx)}
-                        className="p-1 text-slate-400 hover:text-rose-600 rounded-md"
+                        className="p-1 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-md"
                         title="Șterge linia"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -567,32 +567,32 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
             </table>
           </div>
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <button
               onClick={handleAddLineItem}
-              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/70 px-3 py-1.5 rounded-xl transition-colors"
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:text-emerald-800 dark:hover:text-emerald-200 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200/70 dark:border-emerald-800/70 px-3 py-1.5 rounded-xl transition-colors"
             >
               <Plus className="w-3.5 h-3.5" /> Adaugă o linie suplimentară
             </button>
 
             {/* Receipt Summary Calculation Box */}
             <div className="text-right space-y-1">
-              <div className="text-xs text-slate-500">
-                Subtotal produse: <span className="font-semibold text-slate-800">{PriceComparisonService.formatRon(parsedReceipt.subtotal)}</span>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                Subtotal produse: <span className="font-semibold text-slate-800 dark:text-slate-200">{PriceComparisonService.formatRon(parsedReceipt.subtotal)}</span>
               </div>
               {parsedReceipt.discountTotal > 0 && (
-                <div className="text-xs text-emerald-600 font-semibold">
+                <div className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
                   Total reduceri: -{PriceComparisonService.formatRon(parsedReceipt.discountTotal)}
                 </div>
               )}
-              <div className="text-base sm:text-lg font-black text-slate-900 pt-1 border-t border-slate-200">
+              <div className="text-base sm:text-lg font-black text-slate-900 dark:text-slate-50 pt-1 border-t border-slate-200 dark:border-slate-700">
                 Total bon:{' '}
                 <input
                   type="number"
                   step="0.01"
                   value={parsedReceipt.total}
                   onChange={e => setParsedReceipt({ ...parsedReceipt, total: parseFloat(e.target.value) || 0 })}
-                  className="w-28 text-right font-black text-slate-900 px-2 py-0.5 rounded-lg border border-slate-300 ml-1"
+                  className="w-28 text-right font-black bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 px-2 py-0.5 rounded-lg border border-slate-300 dark:border-slate-700 ml-1 focus:border-emerald-500 focus:outline-none"
                 />{' '}
                 lei
               </div>
@@ -600,11 +600,11 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
           </div>
 
           {/* Action Buttons */}
-          <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-3">
             <button
               onClick={() => setParsedReceipt(null)}
               disabled={isSaving}
-              className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-semibold transition-colors disabled:opacity-50"
+              className="px-5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-semibold transition-colors disabled:opacity-50"
             >
               Anulează
             </button>

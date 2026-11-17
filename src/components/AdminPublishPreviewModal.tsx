@@ -103,24 +103,24 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
   const existingOffersDisplay = preview.existingOffersCount ?? preview.updatedOffersCount ?? 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 dark:bg-slate-950/80 backdrop-blur-xs">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="publish-preview-title"
-        className="bg-white rounded-3xl max-w-5xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+        className="bg-white dark:bg-slate-900 rounded-3xl max-w-5xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in fade-in zoom-in-95 duration-150"
       >
         {/* Header */}
-        <div className="flex items-start justify-between border-b border-slate-100 p-5 sm:p-6 shrink-0 bg-white">
+        <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 p-5 sm:p-6 shrink-0 bg-white dark:bg-slate-900">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shrink-0">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 flex items-center justify-center font-bold shrink-0">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h3 id="publish-preview-title" className="text-lg font-extrabold text-slate-900 tracking-tight">
+              <h3 id="publish-preview-title" className="text-lg font-extrabold text-slate-900 dark:text-slate-50 tracking-tight">
                 Rezumat Înainte de Publicare în Catalogul Public
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 Verificați produsele și ofertele aprobate care vor fi persistate în PostgreSQL Supabase.
               </p>
             </div>
@@ -132,7 +132,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                 onClick={onRefreshPreview}
                 disabled={isPublishing || isCleaning || isRefreshingPreview}
                 title="Reîncarcă previzualizarea din PostgreSQL"
-                className="px-2.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingPreview ? 'animate-spin' : ''}`} />
                 <span className="hidden sm:inline">Reîncarcă</span>
@@ -143,7 +143,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
               onClick={onClose}
               disabled={isPublishing || isCleaning}
               aria-label="Închide previzualizarea"
-              className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+              className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -154,55 +154,55 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
         <div className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
           {/* Indicators Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5 text-xs">
-            <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200/70">
-              <div className="text-[11px] font-semibold text-emerald-800">Produse Noi</div>
-              <div className="text-xl font-extrabold text-emerald-700 mt-0.5">
+            <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/70 dark:border-emerald-800/60">
+              <div className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">Produse Noi</div>
+              <div className="text-xl font-extrabold text-emerald-700 dark:text-emerald-400 mt-0.5">
                 {preview.newProductsCount.toLocaleString('ro-RO')}
               </div>
-              <div className="text-[10px] text-emerald-600">create în catalog</div>
+              <div className="text-[10px] text-emerald-600 dark:text-emerald-400/80">create în catalog</div>
             </div>
 
-            <div className="p-3 rounded-2xl bg-sky-50 border border-sky-200/70">
-              <div className="text-[11px] font-semibold text-sky-800">Produse Actualizate</div>
-              <div className="text-xl font-extrabold text-sky-700 mt-0.5">
+            <div className="p-3 rounded-2xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200/70 dark:border-sky-800/60">
+              <div className="text-[11px] font-semibold text-sky-800 dark:text-sky-300">Produse Actualizate</div>
+              <div className="text-xl font-extrabold text-sky-700 dark:text-sky-400 mt-0.5">
                 {preview.existingUpdatedCount.toLocaleString('ro-RO')}
               </div>
-              <div className="text-[10px] text-sky-600">asociate canonic</div>
+              <div className="text-[10px] text-sky-600 dark:text-sky-400/80">asociate canonic</div>
             </div>
 
-            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-              <div className="text-[11px] font-semibold text-slate-700">Prețuri Modificate</div>
-              <div className="text-xl font-extrabold text-slate-900 mt-0.5">
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+              <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">Prețuri Modificate</div>
+              <div className="text-xl font-extrabold text-slate-900 dark:text-slate-50 mt-0.5">
                 {preview.priceChangesCount.toLocaleString('ro-RO')}
               </div>
-              <div className="text-[10px] text-slate-500">istoric append-only</div>
+              <div className="text-[10px] text-slate-500 dark:text-slate-400">istoric append-only</div>
             </div>
 
-            <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200/70">
-              <div className="text-[11px] font-semibold text-amber-800">Fără Preț (Izolate)</div>
-              <div className="text-xl font-extrabold text-amber-700 mt-0.5">
+            <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800/60">
+              <div className="text-[11px] font-semibold text-amber-800 dark:text-amber-300">Fără Preț (Izolate)</div>
+              <div className="text-xl font-extrabold text-amber-700 dark:text-amber-400 mt-0.5">
                 {preview.itemsWithoutPriceCount.toLocaleString('ro-RO')}
               </div>
-              <div className="text-[10px] text-amber-600">protejate de publicare</div>
+              <div className="text-[10px] text-amber-600 dark:text-amber-400/80">protejate de publicare</div>
             </div>
 
-            <div className="p-3 rounded-2xl bg-teal-50 border border-teal-200/70">
-              <div className="text-[11px] font-semibold text-teal-800">Oferte Noi</div>
-              <div className="text-xl font-extrabold text-teal-700 mt-0.5">
+            <div className="p-3 rounded-2xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200/70 dark:border-teal-800/60">
+              <div className="text-[11px] font-semibold text-teal-800 dark:text-teal-300">Oferte Noi</div>
+              <div className="text-xl font-extrabold text-teal-700 dark:text-teal-400 mt-0.5">
                 {preview.newOffersCount.toLocaleString('ro-RO')}
               </div>
-              <div className="text-[10px] text-teal-600">inserate în catalog</div>
+              <div className="text-[10px] text-teal-600 dark:text-teal-400/80">inserate în catalog</div>
             </div>
 
-            <div className="p-3 rounded-2xl bg-indigo-50 border border-indigo-200/70">
-              <div className="text-[11px] font-semibold text-indigo-800">Oferte Existente</div>
-              <div className="text-xl font-extrabold text-indigo-700 mt-0.5">
+            <div className="p-3 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-800/60">
+              <div className="text-[11px] font-semibold text-indigo-800 dark:text-indigo-300">Oferte Existente</div>
+              <div className="text-xl font-extrabold text-indigo-700 dark:text-indigo-400 mt-0.5">
                 {existingOffersDisplay.toLocaleString('ro-RO')}
               </div>
-              <div className="text-[10px] text-indigo-600">actualizate incremental</div>
+              <div className="text-[10px] text-indigo-600 dark:text-indigo-400/80">actualizate incremental</div>
             </div>
 
-            <div className="p-3 rounded-2xl bg-slate-900 text-white border border-slate-800 col-span-2 sm:col-span-2 lg:col-span-1">
+            <div className="p-3 rounded-2xl bg-slate-900 dark:bg-slate-950 text-white border border-slate-800 dark:border-slate-700 col-span-2 sm:col-span-2 lg:col-span-1">
               <div className="text-[11px] font-semibold text-slate-300">Total Pregătite</div>
               <div className="text-xl font-extrabold text-emerald-400 mt-0.5">
                 {preview.toPublishCount.toLocaleString('ro-RO')}
@@ -212,9 +212,9 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
           </div>
 
           {/* Retailers Involved */}
-          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-2 text-slate-600 font-medium">
-              <Store className="w-4 h-4 text-emerald-600" />
+          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300 font-medium">
+              <Store className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <span>Retaileri implicați ({preview.retailersInvolved.length}):</span>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
@@ -222,25 +222,25 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                 preview.retailersInvolved.map(r => (
                   <span
                     key={r}
-                    className="px-2 py-0.5 rounded-lg bg-white border border-slate-200 font-bold uppercase text-[10px] text-slate-700"
+                    className="px-2 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-bold uppercase text-[10px] text-slate-700 dark:text-slate-200"
                   >
                     {r}
                   </span>
                 ))
               ) : (
-                <span className="text-slate-400 italic">Niciun retailer implicat</span>
+                <span className="text-slate-400 dark:text-slate-500 italic">Niciun retailer implicat</span>
               )}
             </div>
           </div>
 
           {/* Warnings & Errors */}
           {preview.errors.length > 0 && (
-            <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs space-y-1">
-              <div className="flex items-center gap-1.5 font-bold text-rose-700">
+            <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800/70 text-rose-900 dark:text-rose-100 text-xs space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-rose-700 dark:text-rose-300">
                 <AlertCircle className="w-4 h-4" />
                 <span>Avertizări identificate la validare ({preview.errors.length}):</span>
               </div>
-              <ul className="list-disc list-inside text-[11px] text-rose-800 space-y-0.5 pl-1">
+              <ul className="list-disc list-inside text-[11px] text-rose-800 dark:text-rose-200 space-y-0.5 pl-1">
                 {preview.errors.map((err, i) => (
                   <li key={i}>{err}</li>
                 ))}
@@ -249,9 +249,9 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
           )}
 
           {publishErrorMessage && (
-            <div role="alert" className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs space-y-2">
+            <div role="alert" className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800/70 text-rose-900 dark:text-rose-100 text-xs space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="font-bold text-rose-800">
+                <div className="font-bold text-rose-800 dark:text-rose-200">
                   {hasConflict
                     ? 'Conflict de sincronizare: lista ofertelor aprobate s-a modificat.'
                     : 'Publicarea nu a fost confirmată în baza de date.'}
@@ -269,13 +269,13 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                 )}
               </div>
               <p className="break-words">{publishErrorMessage}</p>
-              <p className="text-rose-700">Ofertele aprobate rămân intacte în staging și pot fi publicate după actualizarea previzualizării.</p>
+              <p className="text-rose-700 dark:text-rose-300">Ofertele aprobate rămân intacte în staging și pot fi publicate după actualizarea previzualizării.</p>
             </div>
           )}
 
           {cleanupErrorMessage && (
-            <div role="alert" className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs">
-              <div className="font-bold text-rose-800">Curățarea nu a reușit.</div>
+            <div role="alert" className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800/70 text-rose-900 dark:text-rose-100 text-xs">
+              <div className="font-bold text-rose-800 dark:text-rose-200">Curățarea nu a reușit.</div>
               <p className="mt-1 break-words">{cleanupErrorMessage}</p>
             </div>
           )}
@@ -283,13 +283,13 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
           {/* Full List of Eligible Offers */}
           <div className="space-y-2.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="text-xs font-bold text-slate-800">
+              <div className="text-xs font-bold text-slate-800 dark:text-slate-100">
                 Toate ofertele aprobate și validate pentru publicare ({filteredItems.length} din {preview.toPublishCount}):
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <Search className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={searchTerm}
@@ -298,7 +298,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                       setCurrentPage(1);
                     }}
                     placeholder="Caută produs, EAN, SKU..."
-                    className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs text-slate-800 outline-none focus:border-emerald-500 w-52"
+                    className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 focus:bg-white dark:focus:bg-slate-900 text-xs text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-emerald-500 w-52"
                   />
                 </div>
 
@@ -309,7 +309,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                       setRetailerFilter(e.target.value);
                       setCurrentPage(1);
                     }}
-                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 outline-none"
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-semibold text-slate-700 dark:text-slate-200 outline-none"
                   >
                     <option value="toate">Toți retailerii</option>
                     {preview.retailersInvolved.map(r => (
@@ -324,7 +324,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                   <button
                     type="button"
                     onClick={() => setShowAllItems(prev => !prev)}
-                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer"
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
                   >
                     {showAllItems ? `Paginare (${ITEMS_PER_PAGE})` : `Arată toate (${filteredItems.length})`}
                   </button>
@@ -333,7 +333,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
             </div>
 
             {displayedItems.length > 0 ? (
-              <div className="border border-slate-200 rounded-2xl overflow-hidden divide-y divide-slate-100 max-h-[38vh] overflow-y-auto text-xs bg-white">
+              <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 max-h-[38vh] overflow-y-auto text-xs bg-white dark:bg-slate-950/60">
                 {displayedItems.map(item => {
                   const safeImageSrc = getSafeProductImageSrc(item.imageUrl);
                   const hasValidImage = Boolean(safeImageSrc) && !brokenImages.has(item.id);
@@ -349,7 +349,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                   return (
                     <div
                       key={item.id}
-                      className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/80 transition-colors"
+                      className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
                     >
                       <div className="flex items-start gap-3 min-w-0 flex-1">
                         {hasValidImage && safeImageSrc ? (
@@ -357,52 +357,52 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                             src={safeImageSrc}
                             alt={item.title}
                             onError={() => setBrokenImages(prev => new Set(prev).add(item.id))}
-                            className="w-11 h-11 rounded-xl object-cover border border-slate-200 shrink-0 bg-slate-50"
+                            className="w-11 h-11 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-50 dark:bg-slate-800"
                           />
                         ) : (
-                          <div className="w-11 h-11 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 shrink-0">
+                          <div className="w-11 h-11 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-400 dark:text-slate-500 shrink-0">
                             <Package className="w-5 h-5" />
                           </div>
                         )}
 
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="px-1.5 py-0.5 rounded-md bg-slate-100 text-[10px] font-bold uppercase text-slate-700">
+                            <span className="px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-bold uppercase text-slate-700 dark:text-slate-300">
                               {item.retailerName || item.retailerId}
                             </span>
-                            <span className="font-bold text-slate-900 break-words">{item.title}</span>
+                            <span className="font-bold text-slate-900 dark:text-slate-100 break-words">{item.title}</span>
                           </div>
 
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500 dark:text-slate-400">
                             <span>
-                              Cantitate: <strong className="text-slate-700">{item.packageQuantity || 1} {item.packageUnit || 'buc'}</strong>
+                              Cantitate: <strong className="text-slate-700 dark:text-slate-200">{item.packageQuantity || 1} {item.packageUnit || 'buc'}</strong>
                             </span>
                             {item.ean && (
                               <span className="font-mono">
-                                EAN: <strong className="text-slate-700">{item.ean}</strong>
+                                EAN: <strong className="text-slate-700 dark:text-slate-200">{item.ean}</strong>
                               </span>
                             )}
                             {item.retailerSku && (
                               <span className="font-mono">
-                                SKU: <strong className="text-slate-700">{item.retailerSku}</strong>
+                                SKU: <strong className="text-slate-700 dark:text-slate-200">{item.retailerSku}</strong>
                               </span>
                             )}
                             {item.matchedProductName && (
-                              <span className="text-sky-700 font-medium truncate max-w-xs">
+                              <span className="text-sky-700 dark:text-sky-400 font-medium truncate max-w-xs">
                                 Canonic: {item.matchedProductName}
                               </span>
                             )}
                           </div>
 
                           {(item.documentTitle || item.documentUrl) && (
-                            <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
-                              <FileText className="w-3 h-3 text-slate-400 shrink-0" />
+                            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
+                              <FileText className="w-3 h-3 text-slate-400 dark:text-slate-500 shrink-0" />
                               {item.documentUrl ? (
                                 <a
                                   href={item.documentUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="text-emerald-700 hover:underline flex items-center gap-1 truncate max-w-md"
+                                  className="text-emerald-700 dark:text-emerald-400 hover:underline flex items-center gap-1 truncate max-w-md"
                                 >
                                   <span>{item.documentTitle || item.documentUrl}</span>
                                   <ExternalLink className="w-2.5 h-2.5 shrink-0" />
@@ -420,8 +420,8 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                           <span
                             className={`px-1.5 py-0.5 rounded-md text-[9px] font-extrabold ${
                               item.isNewProduct
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-sky-100 text-sky-800'
+                                ? 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300'
+                                : 'bg-sky-100 dark:bg-sky-950/70 text-sky-800 dark:text-sky-300'
                             }`}
                           >
                             {item.canonicalStatus || (item.isNewProduct ? 'PRODUS NOU' : 'PRODUS EXISTENT')}
@@ -429,12 +429,12 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                           <span
                             className={`px-1.5 py-0.5 rounded-md text-[9px] font-extrabold ${
                               item.offerAction === 'PREȚ MODIFICAT'
-                                ? 'bg-amber-100 text-amber-800'
+                                ? 'bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300'
                                 : item.offerAction === 'OFERTĂ ACTUALIZATĂ'
-                                ? 'bg-indigo-100 text-indigo-800'
+                                ? 'bg-indigo-100 dark:bg-indigo-950/70 text-indigo-800 dark:text-indigo-300'
                                 : item.offerAction === 'FĂRĂ SCHIMBĂRI'
-                                ? 'bg-slate-100 text-slate-600'
-                                : 'bg-teal-100 text-teal-800'
+                                ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                                : 'bg-teal-100 dark:bg-teal-950/70 text-teal-800 dark:text-teal-300'
                             }`}
                           >
                             {item.offerAction || 'OFERTĂ NOUĂ'}
@@ -443,15 +443,15 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
 
                         <div className="flex items-baseline gap-2">
                           {np > ep && ep > 0 && (
-                            <span className="text-[11px] text-slate-400 line-through">
+                            <span className="text-[11px] text-slate-400 dark:text-slate-500 line-through">
                               {np.toFixed(2)} lei
                             </span>
                           )}
-                          <span className={`text-sm font-extrabold ${ep > 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                          <span className={`text-sm font-extrabold ${ep > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'}`}>
                             {ep > 0 ? `${ep.toFixed(2)} lei` : 'Preț lipsă'}
                           </span>
                           {disc > 0 && ep > 0 && (
-                            <span className="px-1.5 py-0.2 rounded bg-rose-100 text-rose-700 text-[10px] font-bold">
+                            <span className="px-1.5 py-0.2 rounded bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 text-[10px] font-bold">
                               -{disc}%
                             </span>
                           )}
@@ -462,7 +462,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                 })}
               </div>
             ) : (
-              <div className="p-8 text-center border border-slate-200 rounded-2xl text-slate-400 text-xs">
+              <div className="p-8 text-center border border-slate-200 dark:border-slate-800 rounded-2xl text-slate-400 dark:text-slate-500 text-xs">
                 {allItems.length === 0
                   ? 'Nu există oferte validate și aprobate pentru publicare.'
                   : 'Nicio ofertă nu corespunde filtrului curent.'}
@@ -470,7 +470,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
             )}
 
             {!showAllItems && totalPages > 1 && (
-              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600 pt-1">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600 dark:text-slate-300 pt-1">
                 <span>
                   Pagina {safePage} din {totalPages} ({filteredItems.length} oferte)
                 </span>
@@ -479,7 +479,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                     type="button"
                     onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                     disabled={safePage <= 1}
-                    className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
+                    className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
                   >
                     <ChevronLeft className="w-3.5 h-3.5" />
                     <span>Anterior</span>
@@ -488,7 +488,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                     type="button"
                     onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                     disabled={safePage >= totalPages}
-                    className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
+                    className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-40 flex items-center gap-1 cursor-pointer"
                   >
                     <span>Următor</span>
                     <ChevronRight className="w-3.5 h-3.5" />
@@ -500,11 +500,11 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
         </div>
 
         {/* Footer */}
-        <div className="p-4 sm:p-6 border-t border-slate-100 bg-slate-50/70 shrink-0">
+        <div className="p-4 sm:p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/95 shrink-0">
           {confirmingCleanup ? (
-            <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 space-y-2" role="alertdialog" aria-label="Confirmare ștergere din staging">
-              <p className="text-xs font-bold text-amber-900">Elimini {preview.cleanupOfferIds.length} oferte nepublicate din staging?</p>
-              <p className="text-[11px] text-amber-800">
+            <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/70 space-y-2" role="alertdialog" aria-label="Confirmare ștergere din staging">
+              <p className="text-xs font-bold text-amber-900 dark:text-amber-100">Elimini {preview.cleanupOfferIds.length} oferte nepublicate din staging?</p>
+              <p className="text-[11px] text-amber-800 dark:text-amber-200">
                 Această acțiune șterge doar înregistrările din staging. Produsele, ofertele publice și istoricul prețurilor nu sunt modificate. Înregistrările deja publicate sunt protejate.
               </p>
               <div className="flex justify-end gap-2">
@@ -512,7 +512,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                   type="button"
                   onClick={() => setConfirmingCleanup(false)}
                   disabled={isCleaning}
-                  className="px-3 py-2 rounded-xl border border-amber-300 text-amber-900 text-xs font-semibold disabled:opacity-50 cursor-pointer"
+                  className="px-3 py-2 rounded-xl border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 text-xs font-semibold disabled:opacity-50 cursor-pointer"
                 >
                   Păstrează
                 </button>
@@ -532,7 +532,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
             </div>
           ) : (
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <p className="text-[11px] text-slate-500">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 Publicarea actualizează catalogul live. Anularea nu modifică baza de date.
               </p>
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -540,7 +540,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                   type="button"
                   onClick={() => setConfirmingCleanup(true)}
                   disabled={isPublishing || isCleaning || preview.cleanupOfferIds.length === 0}
-                  className="px-3 py-2.5 rounded-xl border border-rose-200 text-rose-700 hover:bg-rose-50 font-semibold text-xs disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                  className="px-3 py-2.5 rounded-xl border border-rose-200 dark:border-rose-800/70 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/50 font-semibold text-xs disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Curăță staging ({preview.cleanupOfferIds.length})
@@ -549,7 +549,7 @@ export const AdminPublishPreviewModal: React.FC<AdminPublishPreviewModalProps> =
                   type="button"
                   onClick={onClose}
                   disabled={isPublishing || isCleaning}
-                  className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-semibold text-xs cursor-pointer transition-colors"
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 font-semibold text-xs cursor-pointer transition-colors"
                 >
                   Anulează
                 </button>

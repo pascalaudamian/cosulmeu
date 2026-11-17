@@ -151,26 +151,26 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-      <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-xs">
+      <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-xl w-full shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
-        <div className="p-5 border-b border-slate-100 flex items-center justify-between gap-3 bg-slate-50/70">
+        <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/70 dark:bg-slate-800/60">
           <div>
             <div className="flex items-center gap-2">
-              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold uppercase tracking-wider">
+              <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold uppercase tracking-wider">
                 {retailerName} ({retailerId})
               </span>
-              <span className="text-xs text-slate-400 font-mono">
+              <span className="text-xs text-slate-400 dark:text-slate-500 font-mono">
                 {isEditing ? source?.id : 'Sursă nouă'}
               </span>
             </div>
-            <h3 className="text-base font-extrabold text-slate-900 mt-1">
+            <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100 mt-1">
               {isEditing ? 'Editează Parametrii Sursei' : 'Adaugă Sursă Nouă de Catalog'}
             </h3>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-xl hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors"
+            className="p-1.5 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -179,15 +179,15 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
           {errorMessage && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-800 dark:text-rose-300 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
               <div className="flex-1 font-semibold leading-relaxed">{errorMessage}</div>
             </div>
           )}
 
           {/* Source Name */}
           <div>
-            <label className="block font-bold text-slate-700 mb-1">
+            <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
               Nume Sursă Catalog *
             </label>
             <input
@@ -195,7 +195,7 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="Ex: Cataloage & Reviste Online Lidl"
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
               required
             />
           </div>
@@ -203,7 +203,7 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
           {/* Catalog URL */}
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="block font-bold text-slate-700">
+              <label className="block font-bold text-slate-700 dark:text-slate-300">
                 URL Catalog / Pagină Sursă *
               </label>
               {catalogUrl && (
@@ -211,7 +211,7 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
                   href={catalogUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-[11px] text-emerald-600 hover:underline flex items-center gap-1 font-semibold"
+                  className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 font-semibold"
                 >
                   <span>Testează link</span>
                   <ExternalLink className="w-3 h-3" />
@@ -219,17 +219,17 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
               )}
             </div>
             <div className="relative">
-              <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              <Globe className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-2.5" />
               <input
                 type="url"
                 value={catalogUrl}
                 onChange={e => setCatalogUrl(e.target.value)}
                 placeholder="https://www.retailer.ro/cataloage-online"
-                className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
                 required
               />
             </div>
-            <p className="text-[11px] text-slate-500 mt-1">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
               Este acceptat orice domeniu public HTTP/HTTPS; localhost și adresele private sunt blocate pentru protecția serverului.
             </p>
           </div>
@@ -237,13 +237,13 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
           {/* Format & Status Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
+              <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Format Document
               </label>
               <select
                 value={format}
                 onChange={e => setFormat(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
               >
                 <option value="html">HTML (Pagină web magazin)</option>
                 <option value="pdf">PDF (Catalog broșură digitală)</option>
@@ -254,13 +254,13 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
+              <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Stare Operațională
               </label>
               <select
                 value={status}
                 onChange={e => setStatus(e.target.value as CatalogSourceStatus)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-semibold text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
               >
                 <option value="active">Activ (Operațional în sincronizări)</option>
                 <option value="disabled">Dezactivat (Omis de la rulare)</option>
@@ -273,31 +273,31 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
           {/* Frequency & Auth */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">
+              <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                 Frecvență Actualizare (zile)
               </label>
               <div className="relative">
-                <Clock className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <Clock className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-2.5" />
                 <input
                   type="number"
                   min="1"
                   max="90"
                   value={updateFrequencyDays}
                   onChange={e => setUpdateFrequencyDays(parseInt(e.target.value, 10) || 7)}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
                 />
               </div>
             </div>
 
             <div className="flex flex-col justify-end">
-              <label className="flex items-center gap-2 p-2 rounded-xl border border-slate-200 bg-slate-50/50 cursor-pointer hover:bg-slate-50 transition-colors">
+              <label className="flex items-center gap-2 p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/60 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
                 <input
                   type="checkbox"
                   checked={authRequired}
                   onChange={e => setAuthRequired(e.target.checked)}
-                  className="w-4 h-4 text-emerald-600 rounded-md border-slate-300 focus:ring-emerald-500"
+                  className="w-4 h-4 text-emerald-600 rounded-md border-slate-300 dark:border-slate-600 dark:bg-slate-900 focus:ring-emerald-500"
                 />
-                <span className="font-semibold text-slate-700 text-xs">
+                <span className="font-semibold text-slate-700 dark:text-slate-300 text-xs">
                   Necesită cheie API / token autorizat
                 </span>
               </label>
@@ -306,7 +306,7 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
 
           {/* Legal Notice */}
           <div>
-            <label className="block font-bold text-slate-700 mb-1">
+            <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
               Notă Legalitate & Transparență
             </label>
             <textarea
@@ -314,18 +314,18 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
               value={legalStatusNotice}
               onChange={e => setLegalStatusNotice(e.target.value)}
               placeholder="Ex: Catalog online oficial săptămânal și campanii tematice; extragere publică transparentă."
-              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none leading-relaxed"
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-medium text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none leading-relaxed"
             />
           </div>
 
           {/* Footer Actions */}
-          <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
             {isEditing ? (
               <button
                 type="button"
                 onClick={handleDelete}
                 disabled={isDeleting || isSaving}
-                className="px-3 py-2 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>{isDeleting ? 'Se șterge…' : 'Șterge sursa'}</span>
@@ -337,7 +337,7 @@ export const AdminEditSourceModal: React.FC<AdminEditSourceModalProps> = ({
                 type="button"
                 onClick={onClose}
                 disabled={isSaving}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
               >
                 Anulează
               </button>

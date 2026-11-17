@@ -359,20 +359,20 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
       {/* Hero Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
-          <p className="text-xs font-medium text-slate-500 mb-1.5 tabular-nums">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 tabular-nums">
             Catalog național · {productsData.totalCount} produse indexate · Prețuri verificate
           </p>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-950 tracking-tight">
+          <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-950 dark:text-slate-100 tracking-tight">
             Produse & Prețuri Supermarket
           </h1>
-          <p className="text-slate-600 text-sm mt-1 max-w-2xl">
+          <p className="text-slate-600 dark:text-slate-400 text-sm mt-1 max-w-2xl">
             Compară prețurile actualizate din Lidl, Kaufland, Carrefour, Penny, Auchan, Profi, Mega Image și Metro.
           </p>
         </div>
 
         {/* Căutare rapidă */}
         <div className="w-full md:w-80 relative shrink-0">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             aria-label="Caută produse după nume, brand sau EAN"
@@ -382,7 +382,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
               setSearchQuery(e.target.value);
               setCurrentPage(1);
             }}
-            className="w-full bg-white border border-slate-200 pl-10 pr-9 py-2.5 rounded-xl text-sm text-slate-800 placeholder-slate-400 font-medium focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-hidden"
+            className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 pl-10 pr-9 py-2.5 rounded-xl text-sm text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 font-medium focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-hidden"
           />
           {searchQuery && (
             <button
@@ -392,7 +392,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 setDebouncedSearchQuery('');
               }}
               aria-label="Șterge căutarea"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-0.5 cursor-pointer"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -412,13 +412,13 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
             }}
             className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
               selectedCategory === 'toate'
-                ? 'bg-slate-900 text-white'
-                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+                ? 'bg-slate-900 dark:bg-emerald-600 text-white'
+                : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
             }`}
           >
             <span>Toate produsele</span>
             <span className={`text-xs tabular-nums ${
-              selectedCategory === 'toate' ? 'text-slate-300' : 'text-slate-400'
+              selectedCategory === 'toate' ? 'text-slate-300 dark:text-emerald-100' : 'text-slate-400 dark:text-slate-500'
             }`}>
               {productsData.totalCount}
             </span>
@@ -438,16 +438,16 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer ${
                   isSelected
                     ? 'bg-emerald-600 text-white'
-                    : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+                    : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
                 }`}
               >
-                <span className={isSelected ? 'text-white' : 'text-emerald-700'}>
+                <span className={isSelected ? 'text-white' : 'text-emerald-700 dark:text-emerald-400'}>
                   {renderCategoryIcon(cat.iconName)}
                 </span>
                 <span>{cat.name}</span>
                 {cat.availableWithOffersCount !== undefined && (
                   <span className={`text-xs tabular-nums ${
-                    isSelected ? 'text-emerald-100' : 'text-slate-400'
+                    isSelected ? 'text-emerald-100' : 'text-slate-400 dark:text-slate-500'
                   }`}>
                     {cat.availableWithOffersCount}
                   </span>
@@ -460,17 +460,17 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
 
       {/* Subcategorii (dacă o categorie este selectată și are subcategorii) */}
       {activeCategoryObj && activeCategoryObj.subcategories?.length > 0 && (
-        <div className="mb-5 bg-slate-50 p-2.5 rounded-2xl border border-slate-200 flex flex-wrap items-center gap-2 animate-in fade-in">
-          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-2">Subcategorii:</span>
+        <div className="mb-5 bg-slate-50 dark:bg-slate-900/90 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-wrap items-center gap-2 animate-in fade-in">
+          <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-2">Subcategorii:</span>
           <button
             onClick={() => {
               setSelectedSubcategory('');
               setCurrentPage(1);
             }}
-            className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-colors ${
+            className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
               !selectedSubcategory
                 ? 'bg-emerald-700 text-white font-bold'
-                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
             }`}
           >
             Toate din {activeCategoryObj.name}
@@ -482,10 +482,10 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 setSelectedSubcategory(sub.name);
                 setCurrentPage(1);
               }}
-              className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-colors ${
+              className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
                 selectedSubcategory === sub.name
                   ? 'bg-emerald-700 text-white font-bold'
-                  : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                  : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
               }`}
             >
               {sub.name}
@@ -495,7 +495,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
       )}
 
       {/* Bară de Filtre & Sortare */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 mb-6 shadow-2xs">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-4 mb-6 shadow-2xs">
         <div className="flex flex-wrap items-center justify-between gap-4">
           {/* Toggles rapide de filtrare */}
           <div className="flex flex-wrap items-center gap-2">
@@ -504,10 +504,10 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 setOnlyPromo(!onlyPromo);
                 setCurrentPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
                 onlyPromo
                   ? 'bg-rose-600 text-white shadow-2xs'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                  : 'bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
               }`}
             >
               <Tag className="w-3.5 h-3.5" />
@@ -519,10 +519,10 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 setOnlyAvailable(!onlyAvailable);
                 setCurrentPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
                 onlyAvailable
                   ? 'bg-emerald-600 text-white shadow-2xs'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                  : 'bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
               }`}
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
@@ -534,10 +534,10 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 setOnlyRomanian(!onlyRomanian);
                 setCurrentPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
                 onlyRomanian
                   ? 'bg-amber-600 text-white shadow-2xs'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                  : 'bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
               }`}
             >
               <span>🇷🇴</span>
@@ -549,10 +549,10 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 setOnlyBio(!onlyBio);
                 setCurrentPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
                 onlyBio
                   ? 'bg-teal-700 text-white shadow-2xs'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
+                  : 'bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
               }`}
             >
               <span>BIO</span>
@@ -561,7 +561,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
             {(onlyPromo || onlyAvailable || onlyRomanian || onlyBio || selectedCategory !== 'toate' || searchQuery || selectedBrand !== 'toate' || selectedRetailer !== 'toate') && (
               <button
                 onClick={handleResetFilters}
-                className="px-2.5 py-1.5 text-xs text-rose-600 hover:text-rose-800 font-semibold flex items-center gap-1"
+                className="px-2.5 py-1.5 text-xs text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 font-semibold flex items-center gap-1 cursor-pointer"
                 title="Resetează toate filtrele"
               >
                 <RotateCcw className="w-3 h-3" /> Resetează filtre
@@ -570,7 +570,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            <label htmlFor="retailer-filter" className="text-xs font-semibold text-slate-500 whitespace-nowrap">
+            <label htmlFor="retailer-filter" className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
               Retailer:
             </label>
             <select
@@ -580,7 +580,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 setSelectedRetailer(e.target.value);
                 setCurrentPage(1);
               }}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+              className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
             >
               <option value="toate">Toți retailerii</option>
               {STORES.map(store => (
@@ -591,8 +591,8 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
 
           {/* Sortare */}
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500 flex items-center gap-1">
-              <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" /> Sortează:
+            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1">
+              <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" /> Sortează:
             </span>
             <select
               value={sortBy}
@@ -600,7 +600,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 setSortBy(e.target.value);
                 setCurrentPage(1);
               }}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+              className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
             >
               <option value="relevance">Cele mai populare</option>
               <option value="price_asc">Cel mai mic preț</option>
@@ -616,27 +616,27 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="animate-pulse bg-white p-4 rounded-2xl border border-slate-200/90 h-[340px] flex flex-col justify-between">
-              <div className="h-36 bg-slate-100 rounded-xl mb-3"></div>
+            <div key={i} className="animate-pulse bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 h-[340px] flex flex-col justify-between">
+              <div className="h-36 bg-slate-100 dark:bg-slate-800 rounded-xl mb-3"></div>
               <div className="space-y-2">
-                <div className="h-3 bg-slate-100 rounded w-1/3"></div>
-                <div className="h-4 bg-slate-100 rounded w-4/5"></div>
+                <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/3"></div>
+                <div className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-4/5"></div>
               </div>
-              <div className="h-10 bg-slate-100 rounded-xl mt-4"></div>
+              <div className="h-10 bg-slate-100 dark:bg-slate-800 rounded-xl mt-4"></div>
             </div>
           ))}
         </div>
       ) : productsData.products.length === 0 ? (
-        <div className="py-16 text-center bg-white rounded-2xl border border-slate-200 p-8">
-          <ShoppingBag className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-          <h3 className="text-base font-bold text-slate-800">Nu am găsit niciun produs conform filtrelor</h3>
-          <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-4">
+        <div className="py-16 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-8">
+          <ShoppingBag className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
+          <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Nu am găsit niciun produs conform filtrelor</h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 mb-4">
             Încearcă să resetezi filtrele sau să cauți alt termen pentru a descoperi catalogul disponibil.
           </p>
           <button
             type="button"
             onClick={handleResetFilters}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 dark:bg-emerald-600 text-white text-xs font-bold hover:bg-slate-800 dark:hover:bg-emerald-500 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" /> Resetează toate filtrele
           </button>
@@ -656,7 +656,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
               >
                 <div>
                   {/* Imagine Produs (lead with clean neutral image stage) */}
-                  <div className="h-36 w-full bg-slate-50/90 rounded-xl flex items-center justify-center p-3 mb-3.5 overflow-hidden">
+                  <div className="h-36 w-full bg-slate-50/90 dark:bg-slate-800/70 rounded-xl flex items-center justify-center p-3 mb-3.5 overflow-hidden">
                     {safeImageSrc && !failedImageIds.has(product.id) ? (
                       <img
                         src={safeImageSrc}
@@ -675,48 +675,48 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                         }}
                       />
                     ) : (
-                      <div className="w-14 h-14 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-700 font-display font-bold text-xl">
+                      <div className="w-14 h-14 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800/70 flex items-center justify-center text-emerald-700 dark:text-emerald-300 font-display font-bold text-xl">
                         {product.name.charAt(0)}
                       </div>
                     )}
                   </div>
 
                   {/* Clean unboxed metadata kicker */}
-                  <div className="flex items-center justify-between gap-2 text-xs text-slate-500 mb-1">
+                  <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 mb-1">
                     <span className="font-medium truncate">
                       {[product.brand, `${product.packageWeightOrVolume} ${product.packageUnit}`].filter(Boolean).join(' · ')}
                     </span>
                     {(product.isRomanianProduct || product.isBio) && (
-                      <span className="shrink-0 font-semibold text-emerald-700">
+                      <span className="shrink-0 font-semibold text-emerald-700 dark:text-emerald-400">
                         {[product.isRomanianProduct ? 'RO' : null, product.isBio ? 'BIO' : null].filter(Boolean).join(' · ')}
                       </span>
                     )}
                   </div>
 
                   {/* Titlu */}
-                  <h3 className="font-semibold text-[15px] text-slate-900 group-hover:text-emerald-700 line-clamp-2 leading-snug transition-colors">
+                  <h3 className="font-semibold text-[15px] text-slate-900 dark:text-slate-100 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 line-clamp-2 leading-snug transition-colors">
                     {product.name}
                   </h3>
                 </div>
 
                 {/* Preț & Retaileri */}
-                <div className="mt-4 pt-3 border-t border-slate-100">
+                <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
                   {hasOffers ? (
                     <div>
                       <div className="flex items-baseline justify-between gap-2">
                         <div>
-                          <span className="text-[11px] text-slate-400 font-medium block">
+                          <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium block">
                             Cel mai mic preț
                           </span>
-                          <span className="font-display text-xl font-bold text-emerald-700 tabular-nums">
+                          <span className="font-display text-xl font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
                             {PriceComparisonService.formatRon(product.minPrice)}
                           </span>
                         </div>
 
                         {lowestStore && (
                           <div className="text-right min-w-0">
-                            <span className="text-[11px] text-slate-400 block">Magazin</span>
-                            <span className="text-xs font-semibold text-slate-800 truncate block">
+                            <span className="text-[11px] text-slate-400 dark:text-slate-500 block">Magazin</span>
+                            <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate block">
                               {lowestStore.name}
                             </span>
                           </div>
@@ -724,30 +724,30 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                       </div>
 
                       {/* Clean unboxed metadata */}
-                      <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-slate-500 tabular-nums">
-                        <span className="font-medium text-slate-600">
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                        <span className="font-medium text-slate-600 dark:text-slate-300">
                           {product.offersCount} {product.offersCount === 1 ? 'magazin' : 'magazine'}
                         </span>
                         {product.isPromo && (
                           <>
                             <span aria-hidden="true">·</span>
-                            <span className="text-rose-700 font-semibold">Promo</span>
+                            <span className="text-rose-700 dark:text-rose-400 font-semibold">Promo</span>
                           </>
                         )}
                         {product.loyaltyCardRequired && (
                           <>
                             <span aria-hidden="true">·</span>
-                            <span className="text-amber-700 font-medium">Card</span>
+                            <span className="text-amber-700 dark:text-amber-400 font-medium">Card</span>
                           </>
                         )}
                       </div>
                     </div>
                   ) : (
                     <div className="py-2">
-                      <span className="text-xs text-slate-500 font-medium block">
+                      <span className="text-xs text-slate-500 dark:text-slate-400 font-medium block">
                         Nicio ofertă activă verificată
                       </span>
-                      <span className="text-[11px] text-slate-400 block mt-0.5">
+                      <span className="text-[11px] text-slate-400 dark:text-slate-500 block mt-0.5">
                         În curs de indexare
                       </span>
                     </div>
@@ -761,7 +761,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                         e.stopPropagation();
                         onSelectProduct(product.id);
                       }}
-                      className="flex-1 py-2 px-3 rounded-xl bg-slate-900 group-hover:bg-emerald-600 text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap"
+                      className="flex-1 py-2 px-3 rounded-xl bg-slate-900 dark:bg-slate-800 group-hover:bg-emerald-600 dark:group-hover:bg-emerald-600 text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap"
                     >
                       <span>Compară prețuri</span>
                       <ChevronRight className="w-3.5 h-3.5" />
@@ -775,8 +775,8 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                           aria-label={`Adaugă ${product.name} în lista mea`}
                           className={`p-2 rounded-xl border transition-colors cursor-pointer ${
                             inList
-                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                              : 'border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'
+                              ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60'
+                              : 'border-slate-200 dark:border-slate-700 hover:border-emerald-300 dark:hover:border-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-slate-700 dark:text-slate-200'
                           }`}
                           title={inList ? 'Produs în listă (click pentru +1)' : 'Adaugă în lista mea'}
                         >
@@ -798,7 +798,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           <button
             onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
             disabled={currentPage === 1}
-            className="p-2 rounded-xl border border-slate-200 bg-white text-slate-700 disabled:opacity-30 hover:bg-slate-50 transition-colors"
+            className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 disabled:opacity-30 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
@@ -815,10 +815,10 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                 <button
                   key={pageNumber}
                   onClick={() => setCurrentPage(pageNumber)}
-                  className={`w-9 h-9 rounded-xl text-xs font-bold transition-all ${
+                  className={`w-9 h-9 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                     currentPage === pageNumber
                       ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+                      : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
                   }`}
                 >
                   {pageNumber}
@@ -828,7 +828,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
               pageNumber === currentPage - 2 ||
               pageNumber === currentPage + 2
             ) {
-              return <span key={pageNumber} className="text-slate-400 text-xs">...</span>;
+              return <span key={pageNumber} className="text-slate-400 dark:text-slate-500 text-xs">...</span>;
             }
             return null;
           })}
@@ -836,7 +836,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           <button
             onClick={() => setCurrentPage(p => Math.min(productsData.totalPages, p + 1))}
             disabled={currentPage === productsData.totalPages}
-            className="p-2 rounded-xl border border-slate-200 bg-white text-slate-700 disabled:opacity-30 hover:bg-slate-50 transition-colors"
+            className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 disabled:opacity-30 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <ChevronRight className="w-4 h-4" />
           </button>

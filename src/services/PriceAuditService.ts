@@ -329,7 +329,7 @@ export class PriceAuditService {
       PriceExtractor.isValidSmallCommercialPrice(productName, currentPrice) &&
       validation.status !== 'INVALID';
 
-    let auditCategory: Exclude<PriceAuditCategory, 'all'> = 'valid_verified';
+    let auditCategory: Exclude<PriceAuditCategory, 'all' | 'anomalies'> = 'valid_verified';
     let auditReason = 'Ofertă verificată și conformă cu regulile preț/ambalaj.';
 
     const stagingDiffersSignificantly =
@@ -502,7 +502,11 @@ export class PriceAuditService {
     }
 
     const filtered = allClassified.filter(item => {
-      if (category !== 'all' && item.auditCategory !== category) return false;
+      if (category === 'anomalies') {
+        if (item.auditCategory === 'valid_verified') return false;
+      } else if (category !== 'all' && item.auditCategory !== category) {
+        return false;
+      }
       if (retailerFilter && retailerFilter !== 'toate' && retailerFilter !== 'all' && item.storeId !== retailerFilter) {
         return false;
       }
@@ -513,7 +517,7 @@ export class PriceAuditService {
       return true;
     });
 
-    const severityRank: Record<Exclude<PriceAuditCategory, 'all'>, number> = {
+    const severityRank: Record<Exclude<PriceAuditCategory, 'all' | 'anomalies'>, number> = {
       confirmed_wrong: 0,
       suspect_unverified: 1,
       isolated: 2,

@@ -134,11 +134,11 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
   if (activeList.items.length === 0) {
     return (
       <div className="surface-card p-12 text-center max-w-lg mx-auto my-8">
-        <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-4">
+        <div className="w-14 h-14 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-4">
           <Sparkles className="w-7 h-7" />
         </div>
-        <h2 className="font-display text-xl font-bold text-slate-900">Lista ta este goală</h2>
-        <p className="text-sm text-slate-500 mt-1.5 max-w-xs mx-auto leading-relaxed">
+        <h2 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">Lista ta este goală</h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1.5 max-w-xs mx-auto leading-relaxed">
           Adaugă câteva produse în lista „{activeList.name}” pentru a compara instant prețurile la supermarketuri.
         </p>
         <button
@@ -203,19 +203,23 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
       {/* Switch between: Store Ranking View & Product Matrix View + Loyalty Toggle */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <div className="flex items-center bg-slate-200/70 p-1 rounded-xl">
+          <div className="flex items-center bg-slate-200/70 dark:bg-slate-800 p-1 rounded-xl">
             <button
               onClick={() => setViewMode('stores')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                viewMode === 'stores' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                viewMode === 'stores'
+                  ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
               Clasament Magazine
             </button>
             <button
               onClick={() => setViewMode('matrix')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                viewMode === 'matrix' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                viewMode === 'matrix'
+                  ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
               Tabel Comparativ pe Produse
@@ -229,23 +233,23 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
               setUseLoyaltyCards(updated);
               StorageService.saveUserProfile({ ...StorageService.getUserProfile(), useLoyaltyCards: updated });
             }}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors flex items-center gap-1.5 cursor-pointer ${
               useLoyaltyCards
-                ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                : 'bg-slate-100 border-slate-200 text-slate-600 hover:bg-slate-200'
+                ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-300'
+                : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
             }`}
             title="Activează/Dezactivează prețurile speciale cu carduri de fidelitate (Lidl Plus, Kaufland Card etc.)"
           >
-            <Tag className="w-3.5 h-3.5 text-emerald-600" />
+            <Tag className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             <span>Carduri fidelitate: {useLoyaltyCards ? 'Incluse' : 'Excluse'}</span>
           </button>
         </div>
 
         <button
           onClick={() => setShowOptimizationModal(true)}
-          className="inline-flex items-center gap-2 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/70 px-3.5 py-1.5 rounded-xl transition-colors"
+          className="inline-flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200/70 dark:border-emerald-800/70 px-3.5 py-1.5 rounded-xl transition-colors cursor-pointer"
         >
-          <Split className="w-4 h-4 text-emerald-600" />
+          <Split className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
           <span>Cum împart lista între 2 magazine?</span>
         </button>
       </div>
@@ -263,7 +267,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                 className={`surface-card transition-colors overflow-hidden ${
                   comp.isWinner
                     ? 'border-emerald-500 ring-1 ring-emerald-500/20'
-                    : 'hover:border-slate-300'
+                    : 'hover:border-slate-300 dark:hover:border-slate-700'
                 }`}
               >
                 {/* Store Main Bar */}
@@ -277,22 +281,22 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                     </div>
                     <div>
                       <div className="flex items-center gap-2.5">
-                        <span className="font-display font-bold text-lg text-slate-900">
+                        <span className="font-display font-bold text-lg text-slate-900 dark:text-slate-100">
                           {comp.store.name}
                         </span>
                         {comp.isWinner && (
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
                             · Cel mai avantajos
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5 tabular-nums">
-                        <span className="flex items-center gap-1 font-medium text-slate-700">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                        <span className="flex items-center gap-1 font-medium text-slate-700 dark:text-slate-300">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                           {comp.availableItems.length}/{activeList.items.length} găsite ({comp.completenessPercentage}%)
                         </span>
                         {comp.missingItems.length > 0 && (
-                          <span className="text-amber-700 flex items-center gap-1 font-medium">
+                          <span className="text-amber-700 dark:text-amber-400 flex items-center gap-1 font-medium">
                             <AlertTriangle className="w-3.5 h-3.5" />
                             {comp.missingItems.length} estimate
                           </span>
@@ -304,16 +308,16 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                   {/* Right: Cost & Expand button */}
                   <div className="flex items-center justify-between sm:justify-end gap-5">
                     <div className="text-right tabular-nums">
-                      <div className="text-[11px] font-medium text-slate-500">Cost estimat coș</div>
-                      <div className="font-display text-xl sm:text-2xl font-bold text-slate-900">
+                      <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Cost estimat coș</div>
+                      <div className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
                         {PriceComparisonService.formatRon(comp.grandTotal)}
                       </div>
                       {comp.isWinner ? (
-                        <span className="text-xs font-semibold text-emerald-600 block">
+                        <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 block">
                           Cel mai mic preț total
                         </span>
                       ) : (
-                        <span className="text-xs font-medium text-rose-600 block">
+                        <span className="text-xs font-medium text-rose-600 dark:text-rose-400 block">
                           +{PriceComparisonService.formatRon(diffFromWinner)} față de lider
                         </span>
                       )}
@@ -321,7 +325,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
 
                     <button
                       onClick={() => setExpandedStoreId(isExpanded ? null : comp.store.id)}
-                      className="p-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+                      className="p-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                       title={isExpanded ? 'Ascunde produsele' : 'Vezi detalii produse'}
                     >
                       {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
@@ -331,8 +335,8 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
 
                 {/* Expanded Item Breakdown */}
                 {isExpanded && (
-                  <div className="bg-slate-50/70 border-t border-slate-100 p-4 sm:p-5">
-                    <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-3">
+                  <div className="bg-slate-50/70 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 p-4 sm:p-5">
+                    <h4 className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">
                       Detaliu produse în {comp.store.name}
                     </h4>
 
@@ -341,35 +345,35 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                       {comp.availableItems.map(({ item, calculatedPrice, unitPriceString, isLowest }) => (
                         <div
                           key={item.id}
-                          className="p-3 rounded-xl bg-white border border-slate-200/80 flex items-center justify-between text-sm gap-3"
+                          className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between text-sm gap-3"
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             {item.productId && onViewProductDetail ? (
                               <button
                                 type="button"
                                 onClick={() => onViewProductDetail(item.productId!)}
-                                className="font-semibold text-slate-800 hover:text-emerald-700 hover:underline truncate text-left cursor-pointer"
+                                className="font-semibold text-slate-800 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline truncate text-left cursor-pointer"
                               >
                                 {item.name}
                               </button>
                             ) : (
-                              <span className="font-semibold text-slate-800 truncate">{item.name}</span>
+                              <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">{item.name}</span>
                             )}
-                            <span className="text-xs text-slate-500 shrink-0 tabular-nums">
+                            <span className="text-xs text-slate-500 dark:text-slate-400 shrink-0 tabular-nums">
                               · {PriceComparisonService.formatQuantity(item.quantity, item.unit)}
                             </span>
                             {isLowest && (
-                              <span className="text-[11px] font-semibold text-emerald-700 shrink-0">
+                              <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 shrink-0">
                                 · Minim
                               </span>
                             )}
                           </div>
 
                           <div className="text-right shrink-0 tabular-nums">
-                            <span className="font-bold text-slate-900">
+                            <span className="font-bold text-slate-900 dark:text-slate-100">
                               {PriceComparisonService.formatRon(calculatedPrice)}
                             </span>
-                            <span className="text-[11px] text-slate-400 block">{unitPriceString}</span>
+                            <span className="text-[11px] text-slate-400 dark:text-slate-500 block">{unitPriceString}</span>
                           </div>
                         </div>
                       ))}
@@ -377,11 +381,11 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
 
                     {/* Missing items clearly stated */}
                     {comp.missingItems.length > 0 && (
-                      <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/60 text-xs text-amber-900">
+                      <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-200">
                         <span className="font-bold block mb-1.5">
                           Produse fără ofertă specifică în {comp.store.name} ({comp.missingItems.length}):
                         </span>
-                        <div className="space-y-1 text-amber-800 tabular-nums">
+                        <div className="space-y-1 text-amber-800 dark:text-amber-300 tabular-nums">
                           {comp.missingItems.map(item => (
                             <div key={item.id} className="flex items-center justify-between gap-2">
                               <span>{item.name} ({item.quantity} {item.unit})</span>
@@ -389,7 +393,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                             </div>
                           ))}
                         </div>
-                        <p className="mt-2 text-[11px] text-amber-700">
+                        <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
                           Estimate la prețul de referință pentru o comparație corectă între magazine.
                         </p>
                       </div>
@@ -407,34 +411,34 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
         <div className="surface-card overflow-x-auto">
           <table className="w-full text-left text-sm border-collapse min-w-[700px]">
             <thead>
-              <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
+              <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                 <th className="p-3.5 pl-4">Produs căutat</th>
                 <th className="p-3.5 text-center">Cantitate</th>
                 {matrixStores.map(st => (
-                  <th key={st.id} className="p-3.5 text-right font-bold text-slate-800">
+                  <th key={st.id} className="p-3.5 text-right font-bold text-slate-800 dark:text-slate-100">
                     {st.name}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {activeList.items.map(item => (
-                <tr key={item.id} className="hover:bg-slate-50/50">
-                  <td className="p-3.5 pl-4 font-semibold text-slate-800">
+                <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                  <td className="p-3.5 pl-4 font-semibold text-slate-800 dark:text-slate-100">
                     {item.productId && onViewProductDetail ? (
                       <button
                         type="button"
                         onClick={() => onViewProductDetail(item.productId!)}
-                        className="text-left hover:text-emerald-700 hover:underline transition-colors cursor-pointer"
+                        className="text-left hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline transition-colors cursor-pointer"
                       >
                         {item.name}
                       </button>
                     ) : (
                       <div>{item.name}</div>
                     )}
-                    {item.brand && <span className="block text-[11px] text-slate-400 font-normal">{item.brand}</span>}
+                    {item.brand && <span className="block text-[11px] text-slate-400 dark:text-slate-500 font-normal">{item.brand}</span>}
                   </td>
-                  <td className="p-3.5 text-center text-xs text-slate-500 tabular-nums">
+                  <td className="p-3.5 text-center text-xs text-slate-500 dark:text-slate-400 tabular-nums">
                     {PriceComparisonService.formatQuantity(item.quantity, item.unit)}
                   </td>
                   {matrixStores.map(store => {
@@ -443,7 +447,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
 
                     if (!itemDetail) {
                       return (
-                        <td key={store.id} className="p-3.5 text-right text-xs text-slate-400">
+                        <td key={store.id} className="p-3.5 text-right text-xs text-slate-400 dark:text-slate-500">
                           —
                         </td>
                       );
@@ -453,12 +457,12 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                       <td
                         key={store.id}
                         className={`p-3.5 text-right tabular-nums ${
-                          itemDetail.isLowest ? 'bg-emerald-50/60 font-bold text-emerald-700' : 'text-slate-800 font-medium'
+                          itemDetail.isLowest ? 'bg-emerald-50/60 dark:bg-emerald-950/40 font-bold text-emerald-700 dark:text-emerald-400' : 'text-slate-800 dark:text-slate-200 font-medium'
                         }`}
                       >
                         {PriceComparisonService.formatRon(itemDetail.calculatedPrice)}
                         {itemDetail.isLowest && (
-                          <span className="block text-[10px] text-emerald-600 font-semibold uppercase tracking-wider">
+                          <span className="block text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold uppercase tracking-wider">
                             Minim
                           </span>
                         )}

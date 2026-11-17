@@ -632,7 +632,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       {/* 1. TOP HEADER & PERSISTENT DATABASE STATUS */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg text-white">
+      <div className="bg-slate-900 dark:bg-slate-900/95 border border-slate-800 rounded-2xl p-5 shadow-lg text-white">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -695,12 +695,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
         )}
 
   {operationProgress && (
-  <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3.5 text-xs text-blue-900" role="status" aria-live="polite">
+  <div className="mt-4 rounded-xl border border-blue-200 dark:border-blue-500/40 bg-blue-50 dark:bg-blue-950/50 p-3.5 text-xs text-blue-900 dark:text-blue-200" role="status" aria-live="polite">
     <div className="flex items-center gap-2 font-semibold">
-      <RefreshCw className="h-4 w-4 animate-spin text-blue-600" />
+      <RefreshCw className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-400" />
       <span>{operationProgress.label}</span>
     </div>
-    {operationProgress.detail && <p className="mt-1 pl-6 text-blue-700">{operationProgress.detail}</p>}
+    {operationProgress.detail && <p className="mt-1 pl-6 text-blue-700 dark:text-blue-300">{operationProgress.detail}</p>}
   </div>
   )}
 
@@ -733,14 +733,14 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       {/* 2. OPERATIONAL STATUS */}
       <div className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs ${
         importErrors.length > 0 || (stats?.stagedPendingReview || 0) > 0
-          ? 'border-amber-200 bg-amber-50 text-amber-900'
-          : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+          ? 'border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300'
+          : 'border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-300'
       }`}>
         <div className="flex items-center gap-2">
           {importErrors.length > 0 || (stats?.stagedPendingReview || 0) > 0 ? (
-            <AlertCircle className="h-4 w-4 text-amber-600" />
+            <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
           ) : (
-            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
           )}
           <span className="font-semibold">
             {importErrors.length > 0
@@ -750,7 +750,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                 : 'Sistem operațional — toate fluxurile sunt disponibile'}
           </span>
         </div>
-        <span className="text-slate-600">
+        <span className="text-slate-600 dark:text-slate-300">
           Ultima actualizare: {formatTimeAgo(stats?.lastRunAt)}
         </span>
       </div>
@@ -762,16 +762,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           onClick={() => {
             setSubTab('retailers');
           }}
-          className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer group"
+          className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-emerald-500 dark:hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer group"
         >
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 group-hover:text-emerald-600">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
             <span>Retaileri Activi</span>
-            <Server className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-500" />
+            <Server className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 group-hover:text-emerald-500" />
           </div>
-          <div className="text-xl font-bold text-slate-900 mt-1">
-            {stats?.activeSources ?? sources.filter(source => source.status === 'active').length} <span className="text-xs text-slate-400 font-normal">active</span>
+          <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-1">
+            {stats?.activeSources ?? sources.filter(source => source.status === 'active').length} <span className="text-xs text-slate-400 dark:text-slate-500 font-normal">active</span>
           </div>
-          <div className="text-[10px] text-emerald-600 font-medium mt-0.5">Vezi lista retailerilor →</div>
+          <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">Vezi lista retailerilor →</div>
         </div>
 
         {/* KPI 2: Last Sync */}
@@ -779,16 +779,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           onClick={() => {
             setSubTab('logs');
           }}
-          className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
+          className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-blue-500 dark:hover:border-blue-500 hover:shadow-md transition-all cursor-pointer group"
         >
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 group-hover:text-blue-600">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 group-hover:text-blue-600 dark:group-hover:text-blue-400">
             <span>Ultima Sincronizare</span>
-            <Clock className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-500" />
+            <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 group-hover:text-blue-500" />
           </div>
-          <div className="text-sm font-bold text-slate-900 mt-1.5 truncate">
+          <div className="text-sm font-bold text-slate-900 dark:text-slate-100 mt-1.5 truncate">
             {formatTimeAgo(stats?.lastRunAt)}
           </div>
-          <div className="text-[10px] text-blue-600 font-medium mt-0.5">Vezi jurnalul rulărilor →</div>
+          <div className="text-[10px] text-blue-600 dark:text-blue-400 font-medium mt-0.5">Vezi jurnalul rulărilor →</div>
         </div>
 
         {/* KPI 3: Extracted Offers */}
@@ -797,16 +797,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             setSubTab('staging');
             setStagingFilter('toate');
           }}
-          className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer group"
+          className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-emerald-500 dark:hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer group"
         >
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 group-hover:text-emerald-600">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
             <span>Oferte Extrase</span>
-            <Layers className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-500" />
+            <Layers className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 group-hover:text-emerald-500" />
           </div>
-          <div className="text-xl font-bold text-slate-900 mt-1">
+          <div className="text-xl font-bold text-slate-900 dark:text-slate-100 mt-1">
             {stats?.totalExtractedOffers || 0}
           </div>
-          <div className="text-[10px] text-emerald-600 font-medium mt-0.5">Vezi toate ofertele →</div>
+          <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">Vezi toate ofertele →</div>
         </div>
 
         {/* KPI 4: In Staging (Needs Review) */}
@@ -815,16 +815,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             setSubTab('staging');
             setStagingFilter('NEEDS_REVIEW');
           }}
-          className="bg-white p-3.5 rounded-xl border border-amber-200 bg-amber-50/20 shadow-sm hover:border-amber-500 hover:shadow-md transition-all cursor-pointer group"
+          className="p-3.5 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/20 dark:bg-amber-950/30 shadow-sm hover:border-amber-500 hover:shadow-md transition-all cursor-pointer group"
         >
-          <div className="flex items-center justify-between text-xs font-semibold text-amber-700 group-hover:text-amber-800">
+          <div className="flex items-center justify-between text-xs font-semibold text-amber-700 dark:text-amber-400 group-hover:text-amber-800 dark:group-hover:text-amber-300">
             <span>În Staging</span>
-            <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+            <AlertCircle className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />
           </div>
-          <div className="text-xl font-bold text-amber-700 mt-1">
+          <div className="text-xl font-bold text-amber-700 dark:text-amber-300 mt-1">
             {stats?.stagedPendingReview || 0}
           </div>
-          <div className="text-[10px] text-amber-700 font-medium mt-0.5">Aprobă sau asociază →</div>
+          <div className="text-[10px] text-amber-700 dark:text-amber-400 font-medium mt-0.5">Aprobă sau asociază →</div>
         </div>
 
         {/* KPI 5: Published in Catalog */}
@@ -833,16 +833,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             setSubTab('staging');
             setStagingFilter('PUBLISHED');
           }}
-          className="bg-white p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/20 shadow-sm hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer group"
+          className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/20 dark:bg-emerald-950/30 shadow-sm hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer group"
         >
-          <div className="flex items-center justify-between text-xs font-semibold text-emerald-700 group-hover:text-emerald-800">
+          <div className="flex items-center justify-between text-xs font-semibold text-emerald-700 dark:text-emerald-400 group-hover:text-emerald-800 dark:group-hover:text-emerald-300">
             <span>Oferte Publicate</span>
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />
           </div>
-          <div className="text-xl font-bold text-emerald-700 mt-1">
+          <div className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-1">
             {stats?.totalPublished || 0}
           </div>
-          <div className="text-[10px] text-emerald-700 font-medium mt-0.5">Vezi indexate public →</div>
+          <div className="text-[10px] text-emerald-700 dark:text-emerald-400 font-medium mt-0.5">Vezi indexate public →</div>
         </div>
 
         {/* KPI 6: Errors at Last Run */}
@@ -851,16 +851,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             setSubTab('logs');
             setLogFilterStatus('failed');
           }}
-          className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm hover:border-rose-500 hover:shadow-md transition-all cursor-pointer group"
+          className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-rose-500 hover:shadow-md transition-all cursor-pointer group"
         >
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 group-hover:text-rose-600">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 group-hover:text-rose-600 dark:group-hover:text-rose-400">
             <span>Erori Ultima Rulare</span>
-            <AlertTriangle className="w-3.5 h-3.5 text-slate-400 group-hover:text-rose-500" />
+            <AlertTriangle className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 group-hover:text-rose-500" />
           </div>
-          <div className="text-xl font-bold text-rose-600 mt-1">
+          <div className="text-xl font-bold text-rose-600 dark:text-rose-400 mt-1">
             {importErrors.length > 0 ? importErrors.length : 0}
           </div>
-          <div className="text-[10px] text-rose-600 font-medium mt-0.5">Vezi erorile înregistrate →</div>
+          <div className="text-[10px] text-rose-600 dark:text-rose-400 font-medium mt-0.5">Vezi erorile înregistrate →</div>
         </div>
 
         {/* KPI 7: Average Freshness Score */}
@@ -868,25 +868,25 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           onClick={() => {
             setSubTab('retailers');
           }}
-          className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer group"
+          className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm hover:border-emerald-500 hover:shadow-md transition-all cursor-pointer group"
         >
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 group-hover:text-emerald-600">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
             <span>Scor Freshness</span>
-            <Percent className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-500" />
+            <Percent className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 group-hover:text-emerald-500" />
           </div>
-          <div className="text-xl font-bold text-emerald-600 mt-1">
+          <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
             {stats?.totalPublished && stats.totalPublished > 0 ? '95%' : '—'}
           </div>
-          <div className="text-[10px] text-slate-400 font-medium mt-0.5">
+          <div className="text-[10px] text-slate-400 dark:text-slate-500 font-medium mt-0.5">
             {stats?.totalPublished && stats.totalPublished > 0 ? 'Fresh (<24h)' : 'Nedisponibil'}
           </div>
         </div>
       </div>
 
       {/* 3. MAIN ACTION TOOLBAR & SUB-NAVIGATION TABS */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
         {/* Main Action Buttons */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
           <div className="flex flex-wrap items-center gap-2">
             {/* Primary Action 1: Run Active Imports */}
             <button
@@ -899,14 +899,14 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             </button>
 
             {/* Primary Action 2: Run Test for Specific Retailer */}
-            <div className="inline-flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200">
+            <div className="inline-flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
               <select
                 value={selectedRetailerToRun}
                 onChange={e => setSelectedRetailerToRun(e.target.value)}
-                className="bg-transparent text-slate-800 text-xs font-semibold px-2 py-1 outline-none cursor-pointer"
+                className="bg-transparent text-slate-800 dark:text-slate-100 text-xs font-semibold px-2 py-1 outline-none cursor-pointer"
               >
                 {ALL_8_RETAILERS.map(r => (
-                  <option key={r.id} value={r.id}>
+                  <option key={r.id} value={r.id} className="dark:bg-slate-900">
                     {r.name} ({r.format})
                   </option>
                 ))}
@@ -914,7 +914,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               <button
                 onClick={() => handleRunSingleRetailer(selectedRetailerToRun)}
                 disabled={isRunningSingle || isRunningActive}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-medium text-xs transition-all cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white font-medium text-xs transition-all cursor-pointer disabled:opacity-50"
               >
                 {isRunningSingle ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3 text-amber-400" />}
                 <span>Rulează Test</span>
@@ -927,7 +927,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             <button
               onClick={handleDiscover}
               disabled={isDiscovering}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs border border-slate-200 transition-all cursor-pointer disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold text-xs border border-slate-200 dark:border-slate-700 transition-all cursor-pointer disabled:opacity-50"
             >
               {isDiscovering ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
               <span>Descoperă Documente</span>
@@ -936,9 +936,9 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             {/* Action 4: Add Source */}
             <button
               onClick={() => setShowAddSourceModal(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold text-xs border border-emerald-200 transition-all cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 font-semibold text-xs border border-emerald-200 dark:border-emerald-900/60 transition-all cursor-pointer"
             >
-              <Plus className="w-3.5 h-3.5 text-emerald-700" />
+              <Plus className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
               <span>Adaugă Sursă URL</span>
             </button>
           </div>
@@ -952,7 +952,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 subTab === 'overview'
                   ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                  : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
               <Activity className="w-3.5 h-3.5" />
@@ -964,7 +964,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 subTab === 'retailers'
                   ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                  : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
               <Server className="w-3.5 h-3.5" />
@@ -976,12 +976,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 subTab === 'documents'
                   ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                  : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
               <Download className="w-3.5 h-3.5" />
               <span>Documente</span>
-              <span className="px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-700 text-[10px]">
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${subTab === 'documents' ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'}`}>
                 {documents.length}
               </span>
             </button>
@@ -991,7 +991,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 subTab === 'staging'
                   ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                  : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
               <Layers className="w-3.5 h-3.5" />
@@ -1008,7 +1008,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 subTab === 'logs'
                   ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                  : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
               <Clock className="w-3.5 h-3.5" />
@@ -1025,7 +1025,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 subTab === 'settings'
                   ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                  : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
               }`}
             >
               <Settings2 className="w-3.5 h-3.5" />
@@ -1053,24 +1053,24 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       {subTab === 'overview' && (
         <div className="space-y-6">
           {/* Main Retailer Health Table */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Activity className="w-4 h-4 text-emerald-600" />
+                <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   Sănătatea Retailerilor (Toți cei 8)
                 </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                   Monitorizare în timp real a stării tehnice, surselor configurate și performanței de indexare.
                 </p>
               </div>
-              <span className="text-xs text-slate-400 font-medium">Actualizat la minut</span>
+              <span className="text-xs text-slate-400 dark:text-slate-500 font-medium">Actualizat la minut</span>
             </div>
 
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider text-[10px]">
+                  <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold uppercase tracking-wider text-[10px]">
                     <th className="p-3.5">Retailer</th>
                     <th className="p-3.5">Status Operațional</th>
                     <th className="p-3.5">Ultima Rulare</th>
@@ -1082,18 +1082,18 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                     <th className="p-3.5 text-right">Acțiune</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 font-medium">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
                   {retailerHealthRows.map(row => (
-                    <tr key={row.retailerId} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={row.retailerId} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                       {/* Name & Format */}
                       <td className="p-3.5">
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900 text-sm">{row.name}</span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                          <span className="font-bold text-slate-900 dark:text-slate-100 text-sm">{row.name}</span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                             {row.format}
                           </span>
                         </div>
-                        <div className="text-[11px] text-slate-400 truncate max-w-xs">{row.catalogUrl}</div>
+                        <div className="text-[11px] text-slate-400 dark:text-slate-500 truncate max-w-xs">{row.catalogUrl}</div>
                       </td>
 
                       {/* Status */}
@@ -1102,16 +1102,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                           <span
                             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border cursor-help ${
                               row.status === 'ACTIVE'
-                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-900/60'
                                 : row.status === 'RUNNING'
-                                ? 'bg-blue-100 text-blue-800 border-blue-300 animate-pulse'
+                                ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 border-blue-300 dark:border-blue-900/60 animate-pulse'
                                 : row.status === 'DEGRADED'
-                                ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-900/60'
                                 : row.status === 'WAITING_FOR_AUTHORIZATION'
-                                ? 'bg-sky-100 text-sky-800 border-sky-300'
+                                ? 'bg-sky-100 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-900/60'
                                 : row.status === 'BLOCKED'
-                                ? 'bg-rose-100 text-rose-800 border-rose-300'
-                                : 'bg-slate-100 text-slate-600 border-slate-300'
+                                ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border-rose-300 dark:border-rose-900/60'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'
                             }`}
                           >
                             <span className="w-1.5 h-1.5 rounded-full bg-current" />
@@ -1126,24 +1126,24 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                       </td>
 
                       {/* Last Run */}
-                      <td className="p-3.5 text-slate-600">
+                      <td className="p-3.5 text-slate-600 dark:text-slate-300">
                         <span>{row.lastRun}</span>
                       </td>
 
                       {/* Documents */}
-                      <td className="p-3.5 text-center font-bold text-slate-700">
+                      <td className="p-3.5 text-center font-bold text-slate-700 dark:text-slate-200">
                         {row.documentsCount}
                       </td>
 
                       {/* Extracted */}
-                      <td className="p-3.5 text-center font-bold text-slate-900">
+                      <td className="p-3.5 text-center font-bold text-slate-900 dark:text-slate-100">
                         {row.extractedCount}
                       </td>
 
                       {/* In Staging */}
                       <td className="p-3.5 text-center">
                         <span className={`px-2 py-0.5 rounded-full font-bold ${
-                          row.stagingCount > 0 ? 'bg-amber-100 text-amber-800' : 'text-slate-400'
+                          row.stagingCount > 0 ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300' : 'text-slate-400 dark:text-slate-500'
                         }`}>
                           {row.stagingCount}
                         </span>
@@ -1152,14 +1152,14 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                       {/* Published */}
                       <td className="p-3.5 text-center">
                         <span className={`px-2 py-0.5 rounded-full font-bold ${
-                          row.publishedCount > 0 ? 'bg-emerald-100 text-emerald-800' : 'text-slate-400'
+                          row.publishedCount > 0 ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300' : 'text-slate-400 dark:text-slate-500'
                         }`}>
                           {row.publishedCount}
                         </span>
                       </td>
 
                       {/* Last Error / Reason */}
-                      <td className="p-3.5 text-slate-500 max-w-xs">
+                      <td className="p-3.5 text-slate-500 dark:text-slate-400 max-w-xs">
                         <span className="truncate block" title={row.lastError}>
                           {row.lastError}
                         </span>
@@ -1170,7 +1170,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                         <button
                           onClick={() => handleRunSingleRetailer(row.retailerId)}
                           disabled={isRunningSingle}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-emerald-600 hover:text-white text-slate-700 font-semibold text-xs transition-all cursor-pointer flex items-center gap-1 ml-auto disabled:opacity-50"
+                          className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-emerald-600 dark:hover:bg-emerald-600 hover:text-white text-slate-700 dark:text-slate-200 font-semibold text-xs transition-all cursor-pointer flex items-center gap-1 ml-auto disabled:opacity-50"
                         >
                           <Play className="w-3 h-3" />
                           <span>Test</span>
@@ -1187,12 +1187,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           {stagingOffers.filter(o => o.stagingStatus === 'NEEDS_REVIEW').length > 0 && (
             <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
                 <div>
-                  <h3 className="text-sm font-bold text-amber-900">
+                  <h3 className="text-sm font-bold text-amber-900 dark:text-amber-200">
                     {stagingOffers.filter(o => o.stagingStatus === 'NEEDS_REVIEW').length} oferte în așteptare în Coada de Staging
                   </h3>
-                  <p className="text-xs text-amber-800">
+                  <p className="text-xs text-amber-800 dark:text-amber-300">
                     Pentru siguranța catalogului, ofertele fără potrivire de 100% necesită aprobare manuală sau asociere înainte de publicare.
                   </p>
                 </div>
@@ -1217,27 +1217,27 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       {subTab === 'retailers' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {retailerHealthRows.map(ret => (
-            <div key={ret.retailerId} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3.5">
+            <div key={ret.retailerId} className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 shadow-sm space-y-3.5">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="font-bold text-slate-900 text-base">{ret.name}</h3>
-                    <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-bold uppercase">
+                    <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">{ret.name}</h3>
+                    <span className="text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold uppercase">
                       {ret.format}
                     </span>
                   </div>
-                  <div className="text-xs text-slate-500 mt-0.5">ID: {ret.retailerId}</div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">ID: {ret.retailerId}</div>
                 </div>
 
                 <span
                   className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${
                     ret.status === 'ACTIVE'
-                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                      ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-900/60'
                       : ret.status === 'WAITING_FOR_AUTHORIZATION'
-                      ? 'bg-sky-100 text-sky-800 border-sky-300'
+                      ? 'bg-sky-100 dark:bg-sky-950/60 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-900/60'
                       : ret.status === 'BLOCKED'
-                      ? 'bg-rose-100 text-rose-800 border-rose-300'
-                      : 'bg-slate-100 text-slate-600 border-slate-300'
+                      ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border-rose-300 dark:border-rose-900/60'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'
                   }`}
                 >
                   {ret.status}
@@ -1245,21 +1245,21 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               </div>
 
               {/* URL with Copy */}
-              <div className="bg-slate-50 rounded-xl p-2.5 text-xs text-slate-600 font-mono break-all flex items-center justify-between border border-slate-200/60">
+              <div className="bg-slate-50 dark:bg-slate-950/60 rounded-xl p-2.5 text-xs text-slate-600 dark:text-slate-300 font-mono break-all flex items-center justify-between border border-slate-200/60 dark:border-slate-800">
                 <span className="truncate pr-2">{ret.catalogUrl}</span>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     onClick={() => copyToClipboard(ret.catalogUrl, `url-${ret.retailerId}`)}
-                    className="p-1 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                    className="p-1 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
                     title="Copiază URL"
                   >
-                    {copiedKey === `url-${ret.retailerId}` ? <CheckCheck className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedKey === `url-${ret.retailerId}` ? <CheckCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   </button>
                   <a
                     href={ret.catalogUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="p-1 text-slate-400 hover:text-emerald-600 transition-colors"
+                    className="p-1 text-slate-400 dark:text-slate-500 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors"
                     title="Deschide în tab nou"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
@@ -1268,15 +1268,15 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               </div>
 
               {/* Legal Notice */}
-              <div className="text-xs text-slate-600 bg-slate-50/80 rounded-xl p-3 border border-slate-200/60 flex items-start gap-2">
-                <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+              <div className="text-xs text-slate-600 dark:text-slate-300 bg-slate-50/80 dark:bg-slate-800/50 rounded-xl p-3 border border-slate-200/60 dark:border-slate-700/60 flex items-start gap-2">
+                <Info className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0 mt-0.5" />
                 <span className="leading-relaxed">{ret.legalNotice}</span>
               </div>
 
               {/* Stats Footer */}
-              <div className="pt-2 flex items-center justify-between border-t border-slate-100 text-xs">
-                <span className="text-slate-500">
-                  Extrase: <strong>{ret.extractedCount}</strong> | Publicate: <strong>{ret.publishedCount}</strong>
+              <div className="pt-2 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 text-xs">
+                <span className="text-slate-500 dark:text-slate-400">
+                  Extrase: <strong className="text-slate-800 dark:text-slate-200">{ret.extractedCount}</strong> | Publicate: <strong className="text-slate-800 dark:text-slate-200">{ret.publishedCount}</strong>
                 </span>
                 <button
                   onClick={() => handleRunSingleRetailer(ret.retailerId)}
@@ -1296,73 +1296,73 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           TAB 3: DOCUMENTE (Cataloage descărcate și stocate)
          ========================================================================= */}
       {subTab === 'documents' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Download className="w-4 h-4 text-emerald-600" />
+              <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Download className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 Documente Cataloage Înregistrate
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 Fișiere HTML și PDF descărcate cu validare SHA-256 și protecție anti-SSRF.
               </p>
             </div>
-            <span className="text-xs text-slate-500 font-semibold">{documents.length} documente</span>
+            <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold">{documents.length} documente</span>
           </div>
 
-          <div className="divide-y divide-slate-100">
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
             {documents.length === 0 ? (
-              <div className="p-12 text-center text-slate-500 text-xs">
+              <div className="p-12 text-center text-slate-500 dark:text-slate-400 text-xs">
                 Niciun document descoperit. Apasă pe „Descoperă Documente” sau rulează importul pilot pentru Lidl/Kaufland.
               </div>
             ) : (
               documents.map(doc => (
-                <div key={doc.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-slate-50 transition-colors">
+                <div key={doc.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                   <div className="space-y-1.5 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-700 border border-slate-200">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                         {doc.format}
                       </span>
-                      <h4 className="font-semibold text-slate-900 text-sm">{doc.title}</h4>
-                      <span className="text-xs text-slate-500 font-medium capitalize">({doc.retailerId})</span>
+                      <h4 className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{doc.title}</h4>
+                      <span className="text-xs text-slate-500 dark:text-slate-400 font-medium capitalize">({doc.retailerId})</span>
                     </div>
 
-                    <div className="text-xs text-slate-500 flex flex-wrap items-center gap-4">
+                    <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-4">
                       <span className="flex items-center gap-1 font-mono text-[11px]">
                         URL:
                         <a
                           href={doc.documentUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-emerald-600 hover:underline inline-flex items-center gap-0.5"
+                          className="text-emerald-600 dark:text-emerald-400 hover:underline inline-flex items-center gap-0.5"
                         >
                           {doc.documentUrl.slice(0, 45)}... <ExternalLink className="w-3 h-3" />
                         </a>
                       </span>
                       {doc.fileSizeBytes && (
-                        <span>Dimensiune: <strong>{Math.round(doc.fileSizeBytes / 1024)} KB</strong></span>
+                        <span>Dimensiune: <strong className="text-slate-700 dark:text-slate-200">{Math.round(doc.fileSizeBytes / 1024)} KB</strong></span>
                       )}
                       {doc.sha256Checksum && (
                         <span className="font-mono text-[11px] flex items-center gap-1">
                           SHA-256: {doc.sha256Checksum.slice(0, 10)}...
                           <button
                             onClick={() => copyToClipboard(doc.sha256Checksum || '', `sha-${doc.id}`)}
-                            className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                            className="text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 cursor-pointer"
                             title="Copiază Hash complet"
                           >
-                            {copiedKey === `sha-${doc.id}` ? <CheckCheck className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                            {copiedKey === `sha-${doc.id}` ? <CheckCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400" /> : <Copy className="w-3 h-3" />}
                           </button>
                         </span>
                       )}
-                      {doc.ocrConfidence && <span>Încredere Text/OCR: <strong>{doc.ocrConfidence}%</strong></span>}
+                      {doc.ocrConfidence && <span>Încredere Text/OCR: <strong className="text-slate-700 dark:text-slate-200">{doc.ocrConfidence}%</strong></span>}
                     </div>
 
                     <div className="flex items-center gap-2 pt-1 text-[11px]">
                       <span
                         className={`px-2 py-0.5 rounded font-bold ${
                           doc.downloadStatus === 'downloaded'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-slate-100 text-slate-600'
+                            ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                         }`}
                       >
                         Descărcare: {doc.downloadStatus}
@@ -1370,13 +1370,13 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                       <span
                         className={`px-2 py-0.5 rounded font-bold ${
                           doc.parseStatus === 'parsed'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-slate-100 text-slate-600'
+                            ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
                         }`}
                       >
                         Parsare: {doc.parseStatus}
                       </span>
-                      <span className="text-slate-600 font-medium">
+                      <span className="text-slate-600 dark:text-slate-300 font-medium">
                         Extrase: <strong>{doc.rawExtractedCount}</strong> | Validate: <strong>{doc.validatedCount}</strong> | Publicate: <strong>{doc.publishedCount}</strong>
                       </span>
                     </div>
@@ -1405,9 +1405,9 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       {subTab === 'staging' && (
         <div className="space-y-4">
           {/* Filter & Bulk Action Toolbar */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-3 items-center justify-between">
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row gap-3 items-center justify-between">
             <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1">
                 <Filter className="w-3.5 h-3.5" /> Stare:
               </span>
               {(['toate', 'NEEDS_REVIEW', 'VALIDATED', 'PUBLISHED', 'REJECTED'] as const).map(st => (
@@ -1416,8 +1416,8 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                   onClick={() => setStagingFilter(st)}
                   className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                     stagingFilter === st
-                      ? 'bg-slate-800 text-white shadow-sm'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      ? 'bg-slate-800 dark:bg-emerald-600 text-white shadow-sm'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                   }`}
                 >
                   {st === 'toate' ? 'Toate' : st}
@@ -1427,7 +1427,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               <select
                 value={retailerFilter}
                 onChange={e => setRetailerFilter(e.target.value)}
-                className="bg-slate-100 text-slate-700 text-xs font-semibold px-2.5 py-1 rounded-lg outline-none border border-slate-200 cursor-pointer ml-1"
+                className="bg-slate-100 dark:bg-slate-950 text-slate-700 dark:text-slate-200 text-xs font-semibold px-2.5 py-1 rounded-lg outline-none border border-slate-200 dark:border-slate-700 cursor-pointer ml-1"
               >
                 <option value="toate">Toți Retailerii</option>
                 {ALL_8_RETAILERS.map(r => (
@@ -1441,13 +1441,13 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
             {/* Search Input & Bulk Actions */}
             <div className="flex items-center gap-2 w-full md:w-auto">
               <div className="relative flex-1 md:w-60">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                <Search className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 absolute left-2.5 top-2.5" />
                 <input
                   type="text"
                   placeholder="Caută în oferte extrase..."
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 outline-none focus:border-emerald-500"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 outline-none focus:border-emerald-500"
                 />
               </div>
 
@@ -1487,16 +1487,16 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           </div>
 
           {/* Staging Table */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
             {stagingOffers.length === 0 ? (
-              <div className="p-12 text-center text-slate-500 text-xs">
+              <div className="p-12 text-center text-slate-500 dark:text-slate-400 text-xs">
                 Nicio ofertă găsită pentru filtrul curent ({stagingFilter}). Rulează un import sau schimbă filtrele de mai sus.
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider text-[10px]">
+                    <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold uppercase tracking-wider text-[10px]">
                       <th className="p-3 w-8">
                         <input
                           type="checkbox"
@@ -1508,7 +1508,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                               setSelectedOfferIds(new Set());
                             }
                           }}
-                          className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                          className="rounded border-slate-300 dark:border-slate-600 dark:bg-slate-900 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                         />
                       </th>
                       <th className="p-3">Produs Extras</th>
@@ -1520,11 +1520,11 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                       <th className="p-3 text-right">Acțiuni Validare</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 font-medium">
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
                     {stagingOffers.map(item => {
                       const isSelected = selectedOfferIds.has(item.id);
                       return (
-                        <tr key={item.id} className={`hover:bg-slate-50/80 transition-colors ${isSelected ? 'bg-emerald-50/30' : ''}`}>
+                        <tr key={item.id} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isSelected ? 'bg-emerald-50/30 dark:bg-emerald-950/30' : ''}`}>
                           <td className="p-3">
                             <input
                               type="checkbox"
@@ -1535,25 +1535,25 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                                 else next.delete(item.id);
                                 setSelectedOfferIds(next);
                               }}
-                              className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                              className="rounded border-slate-300 dark:border-slate-600 dark:bg-slate-900 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                             />
                           </td>
 
                           {/* Raw Title & Brand */}
                           <td className="p-3">
-                            <div className="font-bold text-slate-900 text-sm">{item.rawTitle}</div>
-                            <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
-                              {item.rawBrand && <span>Marcă: <strong>{item.rawBrand}</strong></span>}
+                            <div className="font-bold text-slate-900 dark:text-slate-100 text-sm">{item.rawTitle}</div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-0.5">
+                              {item.rawBrand && <span>Marcă: <strong className="text-slate-700 dark:text-slate-200">{item.rawBrand}</strong></span>}
                               {item.packageQuantity && (
                                 <span>Gramaj: {item.packageQuantity} {item.packageUnit}</span>
                               )}
                               {item.rawBarcode && (
-                                <span className="font-mono text-[10px] bg-slate-100 px-1 rounded">EAN: {item.rawBarcode}</span>
+                                <span className="font-mono text-[10px] bg-slate-100 dark:bg-slate-800 px-1 rounded">EAN: {item.rawBarcode}</span>
                               )}
                             </div>
                             {item.validationErrors && item.validationErrors.length > 0 && (
-                              <div className="text-[10px] text-amber-700 mt-0.5 flex items-center gap-1 font-normal">
-                                <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />
+                              <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 flex items-center gap-1 font-normal">
+                                <AlertCircle className="w-3 h-3 text-amber-500 dark:text-amber-400 shrink-0" />
                                 <span>{item.validationErrors[0]}</span>
                               </div>
                             )}
@@ -1561,23 +1561,23 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
 
                           {/* Retailer */}
                           <td className="p-3">
-                            <span className="px-2 py-0.5 rounded-full font-bold text-[11px] uppercase bg-slate-100 text-slate-700 border border-slate-200">
+                            <span className="px-2 py-0.5 rounded-full font-bold text-[11px] uppercase bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                               {item.retailerId}
                             </span>
                           </td>
 
                           {/* Prices */}
                           <td className="p-3">
-                            <div className="font-bold text-slate-900">
+                            <div className="font-bold text-slate-900 dark:text-slate-100">
                               {item.effectivePrice} {item.currency}
                               {item.normalPrice !== item.effectivePrice && (
-                                <span className="text-[11px] text-slate-400 line-through ml-1.5 font-normal">
+                                <span className="text-[11px] text-slate-400 dark:text-slate-500 line-through ml-1.5 font-normal">
                                   {item.normalPrice} {item.currency}
                                 </span>
                               )}
                             </div>
                             {item.unitPrice && (
-                              <div className="text-[10px] text-slate-500">
+                              <div className="text-[10px] text-slate-500 dark:text-slate-400">
                                 {item.unitPrice} {item.unitPriceMeasure}
                               </div>
                             )}
@@ -1586,12 +1586,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                           {/* Loyalty Card */}
                           <td className="p-3">
                             {item.loyaltyCardRequired || item.loyaltyPrice ? (
-                              <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 font-bold text-[10px] border border-blue-200 inline-flex items-center gap-1">
-                                <Tag className="w-3 h-3 text-blue-600" />
+                              <span className="px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 font-bold text-[10px] border border-blue-200 dark:border-blue-900/60 inline-flex items-center gap-1">
+                                <Tag className="w-3 h-3 text-blue-600 dark:text-blue-400" />
                                 {item.loyaltyCardName || 'Card Fidelitate'} ({item.loyaltyPrice || item.effectivePrice} lei)
                               </span>
                             ) : (
-                              <span className="text-slate-400 text-[11px]">—</span>
+                              <span className="text-slate-400 dark:text-slate-500 text-[11px]">—</span>
                             )}
                           </td>
 
@@ -1599,14 +1599,14 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                           <td className="p-3">
                             {item.matchedProductName ? (
                               <div>
-                                <span className="font-semibold text-slate-800 text-xs">{item.matchedProductName}</span>
-                                <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold">
+                                <span className="font-semibold text-slate-800 dark:text-slate-200 text-xs">{item.matchedProductName}</span>
+                                <div className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
                                   <span>{Math.round(item.matchConfidence * 100)}%</span>
-                                  <span className="font-normal text-slate-400">({item.matchMethod})</span>
+                                  <span className="font-normal text-slate-400 dark:text-slate-500">({item.matchMethod})</span>
                                 </div>
                               </div>
                             ) : (
-                              <span className="text-slate-400 text-xs italic">Fără asociere prealabilă</span>
+                              <span className="text-slate-400 dark:text-slate-500 text-xs italic">Fără asociere prealabilă</span>
                             )}
                           </td>
 
@@ -1615,12 +1615,12 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                             <span
                               className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                                 item.stagingStatus === 'PUBLISHED'
-                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-900/60'
                                   : item.stagingStatus === 'VALIDATED'
-                                  ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                  ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 border border-blue-300 dark:border-blue-900/60'
                                   : item.stagingStatus === 'REJECTED'
-                                  ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                                  : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                  ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-900/60'
+                                  : 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-900/60'
                               }`}
                             >
                               {item.stagingStatus}
@@ -1635,7 +1635,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                                   <button
                                     onClick={() => handleReviewOffer(item.id, 'approve')}
                                     title="Aprobă și creează ca produs în catalog"
-                                    className="p-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 transition-colors cursor-pointer flex items-center gap-1 text-xs font-semibold"
+                                    className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 transition-colors cursor-pointer flex items-center gap-1 text-xs font-semibold"
                                   >
                                     <Check className="w-3.5 h-3.5" />
                                     <span>Aprobă</span>
@@ -1647,7 +1647,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                                       setManualMatchSearch(item.rawTitle);
                                     }}
                                     title="Asociază manual cu un produs existent"
-                                    className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 transition-colors cursor-pointer"
+                                    className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-950/80 text-blue-700 dark:text-blue-300 transition-colors cursor-pointer"
                                   >
                                     <LinkIcon className="w-3.5 h-3.5" />
                                   </button>
@@ -1658,7 +1658,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                                 <button
                                   onClick={() => handleReviewOffer(item.id, 'reject')}
                                   title="Respinge ofertă"
-                                  className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors cursor-pointer"
+                                  className="p-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-950/80 text-rose-700 dark:text-rose-300 transition-colors cursor-pointer"
                                 >
                                   <X className="w-3.5 h-3.5" />
                                 </button>
@@ -1682,15 +1682,15 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
       {subTab === 'logs' && (
         <div className="space-y-6">
           {/* Filter Bar */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-3">
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1">
                 <Filter className="w-3.5 h-3.5" /> Filtrare Rulări:
               </span>
               <select
                 value={logFilterRetailer}
                 onChange={e => setLogFilterRetailer(e.target.value)}
-                className="bg-slate-100 text-slate-700 text-xs font-semibold px-2.5 py-1 rounded-lg outline-none border border-slate-200 cursor-pointer"
+                className="bg-slate-100 dark:bg-slate-950 text-slate-700 dark:text-slate-200 text-xs font-semibold px-2.5 py-1 rounded-lg outline-none border border-slate-200 dark:border-slate-700 cursor-pointer"
               >
                 <option value="toate">Toți Retailerii</option>
                 {ALL_8_RETAILERS.map(r => (
@@ -1703,7 +1703,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               <select
                 value={logFilterStatus}
                 onChange={e => setLogFilterStatus(e.target.value)}
-                className="bg-slate-100 text-slate-700 text-xs font-semibold px-2.5 py-1 rounded-lg outline-none border border-slate-200 cursor-pointer"
+                className="bg-slate-100 dark:bg-slate-950 text-slate-700 dark:text-slate-200 text-xs font-semibold px-2.5 py-1 rounded-lg outline-none border border-slate-200 dark:border-slate-700 cursor-pointer"
               >
                 <option value="toate">Toate Stările</option>
                 <option value="completed">Completed (Succes)</option>
@@ -1711,19 +1711,19 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                 <option value="running">Running</option>
               </select>
             </div>
-            <span className="text-xs text-slate-500 font-semibold">{importRuns.length} rulări totale</span>
+            <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold">{importRuns.length} rulări totale</span>
           </div>
 
           {/* Runs Table */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-200 font-bold text-sm text-slate-900 flex items-center gap-2">
-              <Clock className="w-4 h-4 text-emerald-600" />
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Clock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               Istoric Rulări de Import
             </div>
 
-            <div className="divide-y divide-slate-100">
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
               {importRuns.length === 0 ? (
-                <div className="p-12 text-center text-slate-500 text-xs">
+                <div className="p-12 text-center text-slate-500 dark:text-slate-400 text-xs">
                   Nicio rulare înregistrată. Apasă pe „Rulează Importurile Active” pentru a porni o primă execuție.
                 </div>
               ) : (
@@ -1733,48 +1733,48 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                   .map(run => (
                     <div
                       key={run.id}
-                      className="p-4 hover:bg-slate-50/80 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-3"
+                      className="p-4 hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-3"
                     >
                       <div className="space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                               run.status === 'completed'
-                                ? 'bg-emerald-100 text-emerald-800'
+                                ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
                                 : run.status === 'failed'
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-blue-100 text-blue-800 animate-pulse'
+                                ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
+                                : 'bg-blue-100 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 animate-pulse'
                             }`}
                           >
                             {run.status}
                           </span>
-                          <span className="font-bold text-slate-900 text-sm uppercase">{run.retailerId}</span>
-                          <span className="text-xs text-slate-400 font-mono">
+                          <span className="font-bold text-slate-900 dark:text-slate-100 text-sm uppercase">{run.retailerId}</span>
+                          <span className="text-xs text-slate-400 dark:text-slate-500 font-mono">
                             {run.id}
                             <button
                               onClick={() => copyToClipboard(run.id, `run-${run.id}`)}
-                              className="ml-1 text-slate-400 hover:text-slate-600 cursor-pointer inline-block"
+                              className="ml-1 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 cursor-pointer inline-block"
                               title="Copiază Run ID"
                             >
-                              {copiedKey === `run-${run.id}` ? <CheckCheck className="w-3 h-3 text-emerald-600 inline" /> : <Copy className="w-3 h-3 inline" />}
+                              {copiedKey === `run-${run.id}` ? <CheckCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400 inline" /> : <Copy className="w-3 h-3 inline" />}
                             </button>
                           </span>
                         </div>
 
-                        <div className="text-xs text-slate-500 flex flex-wrap items-center gap-3">
+                        <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-3">
                           <span>Data: {new Date(run.startedAt).toLocaleString('ro-RO')}</span>
-                          {run.durationMs && <span>Durată: <strong>{run.durationMs} ms</strong></span>}
-                          <span>Extrase: <strong>{run.totalRawExtracted}</strong></span>
-                          <span>Auto-match: <strong>{run.autoMatchedCount}</strong></span>
-                          <span>Publicate: <strong>{run.publishedCount}</strong></span>
+                          {run.durationMs && <span>Durată: <strong className="text-slate-700 dark:text-slate-200">{run.durationMs} ms</strong></span>}
+                          <span>Extrase: <strong className="text-slate-700 dark:text-slate-200">{run.totalRawExtracted}</strong></span>
+                          <span>Auto-match: <strong className="text-slate-700 dark:text-slate-200">{run.autoMatchedCount}</strong></span>
+                          <span>Publicate: <strong className="text-slate-700 dark:text-slate-200">{run.publishedCount}</strong></span>
                         </div>
 
                         {run.errors && run.errors.length > 0 && (
-                          <div className="text-xs text-rose-600 font-mono bg-rose-50 p-2 rounded-lg mt-1 flex items-center justify-between">
+                          <div className="text-xs text-rose-600 dark:text-rose-300 font-mono bg-rose-50 dark:bg-rose-950/40 border border-rose-200/60 dark:border-rose-900/60 p-2 rounded-lg mt-1 flex items-center justify-between">
                             <span className="truncate pr-2">{run.errors[0]}</span>
                             <button
                               onClick={() => copyToClipboard(run.errors.join('\n'), `err-${run.id}`)}
-                              className="text-rose-500 hover:text-rose-800 text-[10px] font-bold cursor-pointer shrink-0"
+                              className="text-rose-500 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-200 text-[10px] font-bold cursor-pointer shrink-0"
                             >
                               {copiedKey === `err-${run.id}` ? 'Copiat!' : 'Copiază eroare'}
                             </button>
@@ -1785,7 +1785,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                       {/* Open 8-step Timeline Modal */}
                       <button
                         onClick={() => setSelectedRunForTimeline(run)}
-                        className="px-3.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer self-start md:self-center shrink-0"
+                        className="px-3.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer self-start md:self-center shrink-0"
                       >
                         <Eye className="w-3.5 h-3.5" />
                         <span>Timeline (8 Etape)</span>
@@ -1797,35 +1797,35 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           </div>
 
           {/* Errors Log Section */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-200 font-bold text-sm text-slate-900 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-600" />
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-800 font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400" />
               Jurnal Diagnostic Erori ({importErrors.length})
             </div>
 
-            <div className="divide-y divide-slate-100">
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
               {importErrors.length === 0 ? (
-                <div className="p-8 text-center text-slate-500 text-xs">
+                <div className="p-8 text-center text-slate-500 dark:text-slate-400 text-xs">
                   Nu există erori active înregistrate în sistem.
                 </div>
               ) : (
                 importErrors.map(err => (
-                  <div key={err.id} className="p-4 hover:bg-slate-50 flex items-start justify-between gap-3">
+                  <div key={err.id} className="p-4 hover:bg-slate-50 dark:hover:bg-slate-800/40 flex items-start justify-between gap-3">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-rose-100 text-rose-800">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300">
                           {err.stage}
                         </span>
-                        <span className="font-bold text-slate-800 text-xs capitalize">{err.retailerId}</span>
-                        <span className="text-[11px] text-slate-400">{new Date(err.createdAt).toLocaleString('ro-RO')}</span>
+                        <span className="font-bold text-slate-800 dark:text-slate-200 text-xs capitalize">{err.retailerId}</span>
+                        <span className="text-[11px] text-slate-400 dark:text-slate-500">{new Date(err.createdAt).toLocaleString('ro-RO')}</span>
                       </div>
-                      <div className="text-xs text-rose-700 font-mono bg-rose-50/60 p-2 rounded-lg border border-rose-200/40">
+                      <div className="text-xs text-rose-700 dark:text-rose-300 font-mono bg-rose-50/60 dark:bg-rose-950/40 p-2 rounded-lg border border-rose-200/40 dark:border-rose-900/60">
                         {err.message}
                       </div>
                     </div>
                     <button
                       onClick={() => copyToClipboard(err.message, `log-err-${err.id}`)}
-                      className="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer shrink-0"
+                      className="px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer shrink-0"
                     >
                       {copiedKey === `log-err-${err.id}` ? 'Copiat!' : 'Copiază'}
                     </button>
@@ -1841,55 +1841,55 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           TAB 6: SETĂRI (Configurări, Reguli SSRF, Note Legale)
          ========================================================================= */}
       {subTab === 'settings' && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-6">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm space-y-6">
           <div>
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Settings2 className="w-5 h-5 text-emerald-600" />
+            <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Settings2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               Configurare Motor Catalog Importer
             </h2>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               Parametri de protecție la descărcare, reguli etice de scraping și conformitate administrativă.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-              <div className="font-bold text-slate-900 flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-2">
+              <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 Protecție SSRF & URL-uri Publice
               </div>
-              <p className="text-slate-600 leading-relaxed">
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
                 Sunt acceptate URL-uri HTTP/HTTPS de pe orice domeniu public. Localhost, adresele private și rețelele interne sunt respinse automat pentru protecția serverului.
               </p>
             </div>
 
-            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-              <div className="font-bold text-slate-900 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-blue-600" />
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-2">
+              <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                 Gărzi de Variantă & Gramaj
               </div>
-              <p className="text-slate-600 leading-relaxed">
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
                 Produsele cu diferențe de greutate/volum &gt; 25% sau cu concentrații diferite de grăsime (ex: 1.5% vs 3.5%) nu sunt fuzionate automat, fiind redirecționate în coada de Staging pentru validare.
               </p>
             </div>
 
-            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-              <div className="font-bold text-slate-900 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-amber-600" />
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-2">
+              <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                 Frecvență & Rate Limiting
               </div>
-              <p className="text-slate-600 leading-relaxed">
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
                 Sincronizarea cataloagelor rulează la fiecare 7 zile pentru hipermarketuri și la 14 zile pentru cataloagele de volum. Rate limit este setat prudent la 15-20 cereri/minut cu backoff exponențial.
               </p>
             </div>
 
-            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-              <div className="font-bold text-slate-900 flex items-center gap-2">
-                <Database className="w-4 h-4 text-purple-600" />
+            <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-2">
+              <div className="font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Database className="w-4 h-4 text-purple-600 dark:text-purple-400" />
                 Persistență Duală
               </div>
-              <p className="text-slate-600 leading-relaxed">
-                Dacă variabila <code>DATABASE_URL</code> este prezentă, toate operațiunile scriu tranzacțional în PostgreSQL. În caz contrar, se folosește stocarea locală de rezervă (StorageService).
+              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+                Dacă variabila <code className="px-1 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200">DATABASE_URL</code> este prezentă, toate operațiunile scriu tranzacțional în PostgreSQL. În caz contrar, se folosește stocarea locală de rezervă (StorageService).
               </p>
             </div>
           </div>
@@ -1900,24 +1900,24 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           MODAL: TIMELINE 8 ETAPE PENTRU RULARE
          ========================================================================= */}
       {selectedRunForTimeline && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded">
                   Timeline Execuție Import
                 </span>
-                <h3 className="text-base font-bold text-slate-900 mt-1">
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">
                   Rulare {selectedRunForTimeline.retailerId.toUpperCase()} ({selectedRunForTimeline.id})
                 </h3>
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-slate-500 dark:text-slate-400">
                   Pornit: {new Date(selectedRunForTimeline.startedAt).toLocaleString('ro-RO')} | Durată:{' '}
                   {selectedRunForTimeline.durationMs || 0} ms
                 </div>
               </div>
               <button
                 onClick={() => setSelectedRunForTimeline(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                className="p-1 rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1925,14 +1925,14 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
 
             <div className="space-y-3">
               {getTimelineSteps(selectedRunForTimeline).map(step => (
-                <div key={step.stepNumber} className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 bg-slate-50/60">
+                <div key={step.stepNumber} className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/50">
                   <div
                     className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${
                       step.status === 'PASS'
-                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-900/60'
                         : step.status === 'FAIL'
-                        ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                        : 'bg-amber-100 text-amber-800 border border-amber-300'
+                        ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-900/60'
+                        : 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-900/60'
                     }`}
                   >
                     {step.stepNumber}
@@ -1940,22 +1940,22 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
 
                   <div className="flex-1 space-y-0.5">
                     <div className="flex items-center justify-between">
-                      <div className="font-bold text-slate-900 text-xs">{step.name}</div>
+                      <div className="font-bold text-slate-900 dark:text-slate-100 text-xs">{step.name}</div>
                       <span
                         className={`px-2 py-0.2 rounded text-[10px] font-bold uppercase tracking-wider ${
                           step.status === 'PASS'
-                            ? 'bg-emerald-100 text-emerald-800'
+                            ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
                             : step.status === 'FAIL'
-                            ? 'bg-rose-100 text-rose-800'
-                            : 'bg-amber-100 text-amber-800'
+                            ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
+                            : 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
                         }`}
                       >
                         {step.status}
                       </span>
                     </div>
-                    <div className="text-[11px] text-slate-500">{step.description}</div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">{step.description}</div>
                     {step.details && (
-                      <div className="text-xs text-slate-700 bg-white p-2 rounded-lg border border-slate-200/60 font-mono mt-1">
+                      <div className="text-xs text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 p-2 rounded-lg border border-slate-200/60 dark:border-slate-700 font-mono mt-1">
                         {step.details}
                       </div>
                     )}
@@ -1964,10 +1964,10 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               ))}
             </div>
 
-            <div className="pt-2 border-t border-slate-100 flex justify-end">
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-end">
               <button
                 onClick={() => setSelectedRunForTimeline(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white text-xs font-bold cursor-pointer"
               >
                 Închide
               </button>
@@ -1980,20 +1980,20 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           MODAL: MANUAL MATCHING CU UN PRODUS EXISTENT
          ========================================================================= */}
       {manualMatchModalOffer && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded">
                   Asociere Manuală Produs
                 </span>
-                <h3 className="text-sm font-bold text-slate-900 mt-1">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 mt-1">
                   Alege produsul din catalog pentru: &quot;{manualMatchModalOffer.rawTitle}&quot;
                 </h3>
               </div>
               <button
                 onClick={() => setManualMatchModalOffer(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                className="p-1 rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -2005,10 +2005,10 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                 placeholder="Filtrează produse existente..."
                 value={manualMatchSearch}
                 onChange={e => setManualMatchSearch(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-blue-500"
+                className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-blue-500"
               />
 
-              <div className="max-h-60 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl">
+              <div className="max-h-60 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl">
                 {allCatalogProducts
                   .filter(p => !manualMatchSearch || p.name.toLowerCase().includes(manualMatchSearch.toLowerCase()))
                   .slice(0, 15)
@@ -2019,11 +2019,11 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                         handleReviewOffer(manualMatchModalOffer.id, 'approve', prod.id);
                         setManualMatchModalOffer(null);
                       }}
-                      className="p-2.5 hover:bg-blue-50/70 transition-colors cursor-pointer flex items-center justify-between text-xs"
+                      className="p-2.5 hover:bg-blue-50/70 dark:hover:bg-blue-950/40 transition-colors cursor-pointer flex items-center justify-between text-xs"
                     >
                       <div>
-                        <div className="font-bold text-slate-900">{prod.name}</div>
-                        <div className="text-[10px] text-slate-500">
+                        <div className="font-bold text-slate-900 dark:text-slate-100">{prod.name}</div>
+                        <div className="text-[10px] text-slate-500 dark:text-slate-400">
                           {prod.brand} • {prod.category} • {prod.packageWeightOrVolume} {prod.packageUnit}
                         </div>
                       </div>
@@ -2035,8 +2035,8 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               </div>
 
               {/* Or Create New Product */}
-              <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                <span className="text-xs text-slate-500">Nu găsești produsul în listă?</span>
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <span className="text-xs text-slate-500 dark:text-slate-400">Nu găsești produsul în listă?</span>
                 <button
                   onClick={() => {
                     handleReviewOffer(manualMatchModalOffer.id, 'approve');
@@ -2056,34 +2056,34 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           MODAL: CONFIRMARE RULARE RETAILER RESTRICTIIONAT / BLOCAT
          ========================================================================= */}
       {showConfirmRunModal?.open && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-            <div className="flex items-center gap-3 text-amber-600">
-              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-5 h-5 text-amber-600" />
+        <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
+            <div className="flex items-center gap-3 text-amber-600 dark:text-amber-400">
+              <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-950/60 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-slate-900">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
                   Confirmare Test: {showConfirmRunModal.retailerName}
                 </h3>
-                <span className="text-[11px] font-bold text-amber-700 uppercase">
+                <span className="text-[11px] font-bold text-amber-700 dark:text-amber-400 uppercase">
                   Status: {showConfirmRunModal.status}
                 </span>
               </div>
             </div>
 
-            <p className="text-xs text-slate-600 leading-relaxed bg-amber-50/60 p-3 rounded-xl border border-amber-200/60">
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed bg-amber-50/60 dark:bg-amber-950/40 p-3 rounded-xl border border-amber-200/60 dark:border-amber-900/60">
               {showConfirmRunModal.notice}
             </p>
 
-            <div className="text-xs text-slate-500">
+            <div className="text-xs text-slate-500 dark:text-slate-400">
               Ești sigur că dorești să transmiți o cerere de test către această sursă? Dacă sursa este protejată prin WAF (ex: Cloudflare / Akamai), cererea poate returna HTTP 403 Forbidden.
             </div>
 
             <div className="pt-2 flex items-center justify-end gap-2">
               <button
                 onClick={() => setShowConfirmRunModal(null)}
-                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+                className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer"
               >
                 Anulează
               </button>
@@ -2093,7 +2093,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                   setShowConfirmRunModal(null);
                   handleRunSingleRetailer(rId, true);
                 }}
-                className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-black text-white text-xs font-bold cursor-pointer"
+                className="px-3.5 py-2 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:bg-black dark:hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer"
               >
                 Confirmă și Testează Conexiunea
               </button>
@@ -2106,53 +2106,53 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           MODAL: DIAGNOSTIC BAZA DE DATE POSTGRESQL
          ========================================================================= */}
       {showDbModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                <Database className={`w-5 h-5 ${dbStatus?.connected ? 'text-emerald-600' : 'text-amber-600'}`} />
-                <h3 className="text-base font-bold text-slate-900">Diagnosticare Bază de Date</h3>
+                <Database className={`w-5 h-5 ${dbStatus?.connected ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`} />
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">Diagnosticare Bază de Date</h3>
               </div>
-              <button onClick={() => setShowDbModal(false)} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+              <button onClick={() => setShowDbModal(false)} className="text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="space-y-3 text-xs">
-              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
-                <span className="text-slate-600">Stare Conexiune:</span>
-                <span className={`font-bold uppercase ${dbStatus?.connected ? 'text-emerald-700' : 'text-amber-700'}`}>
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                <span className="text-slate-600 dark:text-slate-300">Stare Conexiune:</span>
+                <span className={`font-bold uppercase ${dbStatus?.connected ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}`}>
                   {dbStatus?.statusLabel}
                 </span>
               </div>
 
-              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
-                <span className="text-slate-600">Mod de Operare:</span>
-                <span className="font-mono text-slate-800">{dbStatus?.mode}</span>
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                <span className="text-slate-600 dark:text-slate-300">Mod de Operare:</span>
+                <span className="font-mono text-slate-800 dark:text-slate-200">{dbStatus?.mode}</span>
               </div>
 
               {dbStatus?.latencyMs !== undefined && dbStatus.latencyMs > 0 && (
-                <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
-                  <span className="text-slate-600">Latență Ping:</span>
-                  <span className="font-mono text-emerald-700">{dbStatus.latencyMs} ms</span>
+                <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <span className="text-slate-600 dark:text-slate-300">Latență Ping:</span>
+                  <span className="font-mono text-emerald-700 dark:text-emerald-400">{dbStatus.latencyMs} ms</span>
                 </div>
               )}
 
               {dbStatus?.warning && (
-                <div className="p-3 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 text-[11px] leading-relaxed">
+                <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-300 border border-amber-200 dark:border-amber-900/60 text-[11px] leading-relaxed">
                   <strong>Notificare persistență: </strong>
                   {dbStatus.warning}
                 </div>
               )}
             </div>
 
-            <div className="pt-2 flex justify-between items-center border-t border-slate-100">
+            <div className="pt-2 flex justify-between items-center border-t border-slate-100 dark:border-slate-800">
               <button
                 onClick={() => {
                   checkDatabaseConnection();
                 }}
                 disabled={isCheckingDb}
-                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isCheckingDb ? 'animate-spin' : ''}`} />
                 <span>Re-verifică acum</span>
@@ -2160,7 +2160,7 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
 
               <button
                 onClick={() => setShowDbModal(false)}
-                className="px-4 py-1.5 rounded-xl bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                className="px-4 py-1.5 rounded-xl bg-slate-800 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-slate-600 text-white text-xs font-bold cursor-pointer"
               >
                 Închide
               </button>
@@ -2173,28 +2173,28 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
           MODAL: ADAUGARE SURSA URL CU VALIDARE SSRF
          ========================================================================= */}
       {showAddSourceModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
           <form
             onSubmit={handleSubmitSource}
-            className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4"
+            className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4"
           >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Plus className="w-5 h-5 text-emerald-600" />
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Plus className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                 Adăugare Sursă Nouă de Catalog
               </h3>
-              <button onClick={() => setShowAddSourceModal(false)} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+              <button onClick={() => setShowAddSourceModal(false)} className="text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Retailer Asociat</label>
+                <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">Retailer Asociat</label>
                 <select
                   value={newSourceRetailer}
                   onChange={e => setNewSourceRetailer(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold outline-none focus:border-emerald-500 cursor-pointer"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-slate-100 font-semibold outline-none focus:border-emerald-500 cursor-pointer"
                 >
                   {ALL_8_RETAILERS.map(r => (
                     <option key={r.id} value={r.id}>
@@ -2205,19 +2205,19 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Denumire Document / Catalog</label>
+                <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">Denumire Document / Catalog</label>
                 <input
                   type="text"
                   placeholder="Ex: Catalog Săptămânal Oferte..."
                   value={newSourceName}
                   onChange={e => setNewSourceName(e.target.value)}
                   required
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:border-emerald-500"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-emerald-500"
                 />
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">
+                <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
                   Adresă URL Sursă (HTTP / HTTPS)
                 </label>
                 <input
@@ -2226,19 +2226,19 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
                   value={newSourceUrl}
                   onChange={e => setNewSourceUrl(e.target.value)}
                   required
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono outline-none focus:border-emerald-500"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 font-mono outline-none focus:border-emerald-500"
                 />
-                <span className="text-[11px] text-slate-400 mt-1 block">
+                <span className="text-[11px] text-slate-400 dark:text-slate-500 mt-1 block">
                   Poți folosi orice domeniu public; localhost și adresele private sunt blocate pentru protecția serverului.
                 </span>
               </div>
 
               <div>
-                <label className="font-semibold text-slate-700 block mb-1">Format Conținut</label>
+                <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">Format Conținut</label>
                 <select
                   value={newSourceFormat}
                   onChange={e => setNewSourceFormat(e.target.value as any)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold outline-none focus:border-emerald-500 cursor-pointer"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-slate-100 font-semibold outline-none focus:border-emerald-500 cursor-pointer"
                 >
                   <option value="html">HTML (Carduri web sau pagină promoțională)</option>
                   <option value="pdf">PDF (Revistă scanată sau digitală)</option>
@@ -2248,11 +2248,11 @@ export const AdminCatalogImporterTab: React.FC<AdminCatalogImporterTabProps> = (
               </div>
             </div>
 
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setShowAddSourceModal(false)}
-                className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+                className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer"
               >
                 Anulează
               </button>

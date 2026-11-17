@@ -137,10 +137,10 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-slate-50 tracking-tight">
             Istoricul & Evoluția Prețurilor 📈
           </h1>
-          <p className="text-slate-600 text-sm mt-0.5">
+          <p className="text-slate-600 dark:text-slate-400 text-sm mt-0.5">
             Monitorizează fluctuațiile de preț în supermarketuri și setează alerte automate la reduceri.
           </p>
         </div>
@@ -159,22 +159,22 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Product Selector List (4 cols) */}
-        <div className="lg:col-span-4 bg-white rounded-3xl border border-slate-200/90 p-4 sm:p-5 shadow-xs flex flex-col h-[600px]">
+        <div className="lg:col-span-4 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-4 sm:p-5 shadow-xs flex flex-col h-[600px]">
           <div className="mb-3">
-            <h3 className="font-bold text-sm text-slate-900 mb-2">Alege un produs</h3>
+            <h3 className="font-bold text-sm text-slate-900 dark:text-slate-50 mb-2">Alege un produs</h3>
             <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+              <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-3 pointer-events-none" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Caută în catalog..."
-                className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs focus:border-emerald-500"
+                className="w-full pl-9 pr-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
               />
             </div>
           </div>
 
-          <div className="divide-y divide-slate-100 overflow-y-auto flex-1 pr-1">
+          <div className="divide-y divide-slate-100 dark:divide-slate-800 overflow-y-auto flex-1 pr-1">
             {filteredProducts.map(p => {
               const isSelected = p.id === selectedProduct.id;
               const isTracked = trackedList.includes(p.id);
@@ -185,13 +185,13 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                   onClick={() => setSelectedProductId(p.id)}
                   className={`p-3 rounded-xl cursor-pointer transition-all flex items-center justify-between ${
                     isSelected
-                      ? 'bg-emerald-50 text-emerald-950 font-semibold'
-                      : 'hover:bg-slate-50 text-slate-700'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-950 dark:text-emerald-200 font-semibold'
+                      : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
                   }`}
                 >
                   <div className="min-w-0 pr-2">
                     <span className="text-xs sm:text-sm block truncate">{p.name}</span>
-                    <span className="text-[11px] text-slate-400 block truncate">
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500 block truncate">
                       {p.brand} • {p.category}
                     </span>
                   </div>
@@ -203,7 +203,9 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                         handleToggleTracked(p.id);
                       }}
                       className={`p-1.5 rounded-lg text-xs ${
-                        isTracked ? 'text-emerald-600 bg-emerald-100/60' : 'text-slate-300 hover:text-slate-600'
+                        isTracked
+                          ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-100/60 dark:bg-emerald-900/50'
+                          : 'text-slate-300 dark:text-slate-600 hover:text-slate-600 dark:hover:text-slate-300'
                       }`}
                       title={isTracked ? 'Urmărești acest produs' : 'Urmărește produsul'}
                     >
@@ -219,28 +221,30 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
         {/* Right Column: Interactive Price Chart & Statistics (8 cols) */}
         <div className="lg:col-span-8 space-y-6">
           {/* Product Header & Overview Card */}
-          <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-7 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-5 sm:p-7 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
               <div>
-                <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider block mb-1">
+                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider block mb-1">
                   {selectedProduct.category}
                 </span>
-                <h2 className="text-lg sm:text-2xl font-extrabold text-slate-900 tracking-tight">
+                <h2 className="text-lg sm:text-2xl font-extrabold text-slate-900 dark:text-slate-50 tracking-tight">
                   {selectedProduct.name}
                 </h2>
-                <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
-                  <span className="font-semibold text-slate-700">{selectedProduct.brand}</span>
+                <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  <span className="font-semibold text-slate-700 dark:text-slate-300">{selectedProduct.brand}</span>
                   <span>• Unitate de referință: 1 {selectedProduct.normalizedUnit}</span>
                   {selectedProduct.barcode && <span>• EAN: {selectedProduct.barcode}</span>}
                 </div>
               </div>
 
               {/* Timeframe Selector */}
-              <div className="flex items-center bg-slate-100 p-1 rounded-xl self-start sm:self-auto">
+              <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl self-start sm:self-auto">
                 <button
                   onClick={() => setTimeframeDays(30)}
                   className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
-                    timeframeDays === 30 ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                    timeframeDays === 30
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-50 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
                 >
                   30 zile
@@ -248,7 +252,9 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                 <button
                   onClick={() => setTimeframeDays(90)}
                   className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
-                    timeframeDays === 90 ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                    timeframeDays === 90
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-50 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
                 >
                   90 zile
@@ -256,7 +262,9 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                 <button
                   onClick={() => setTimeframeDays(365)}
                   className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
-                    timeframeDays === 365 ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                    timeframeDays === 365
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-50 shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
                 >
                   1 an
@@ -266,54 +274,54 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
             {/* Metrics Row */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-5">
-              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                <span className="text-[11px] text-slate-500 font-medium block">Preț minim curent</span>
-                <span className="text-lg sm:text-xl font-black text-emerald-600 mt-0.5 block">
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">Preț minim curent</span>
+                <span className="text-lg sm:text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5 block">
                   {PriceComparisonService.formatRon(stats.currentLowestPrice)}
                 </span>
-                <span className="text-[10px] text-slate-400 truncate block">la {stats.currentLowestStoreName}</span>
+                <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate block">la {stats.currentLowestStoreName}</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                <span className="text-[11px] text-slate-500 font-medium block">Preț mediu</span>
-                <span className="text-lg sm:text-xl font-black text-slate-900 mt-0.5 block">
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">Preț mediu</span>
+                <span className="text-lg sm:text-xl font-black text-slate-900 dark:text-slate-50 mt-0.5 block">
                   {PriceComparisonService.formatRon(stats.averagePrice)}
                 </span>
-                <span className="text-[10px] text-slate-400 block">în ultimele luni</span>
+                <span className="text-[10px] text-slate-400 dark:text-slate-500 block">în ultimele luni</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                <span className="text-[11px] text-slate-500 font-medium block">Maxim înregistrat</span>
-                <span className="text-lg sm:text-xl font-black text-slate-900 mt-0.5 block">
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">Maxim înregistrat</span>
+                <span className="text-lg sm:text-xl font-black text-slate-900 dark:text-slate-50 mt-0.5 block">
                   {PriceComparisonService.formatRon(stats.maxRecordedPrice)}
                 </span>
-                <span className="text-[10px] text-slate-400 block">vârf istoric</span>
+                <span className="text-[10px] text-slate-400 dark:text-slate-500 block">vârf istoric</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                <span className="text-[11px] text-slate-500 font-medium block">Ultimul preț plătit</span>
-                <span className="text-lg sm:text-xl font-black text-slate-900 mt-0.5 block">
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">Ultimul preț plătit</span>
+                <span className="text-lg sm:text-xl font-black text-slate-900 dark:text-slate-50 mt-0.5 block">
                   {stats.lastPaidPrice ? PriceComparisonService.formatRon(stats.lastPaidPrice) : 'N/A'}
                 </span>
-                <span className="text-[10px] text-slate-400 truncate block">
+                <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate block">
                   {stats.lastPaidStoreName ? `pe bon la ${stats.lastPaidStoreName}` : 'nescanat încă'}
                 </span>
               </div>
             </div>
 
             {/* Interactive SVG Chart */}
-            <div className="mt-6 pt-4 border-t border-slate-100">
+            <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                  <LineChart className="w-4 h-4 text-emerald-600" />
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                  <LineChart className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   Grafic evoluție preț (RON)
                 </span>
                 {stats.trendPercentage !== 0 && (
                   <span
                     className={`text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
                       stats.trendPercentage < 0
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-rose-100 text-rose-800'
+                        ? 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300'
+                        : 'bg-rose-100 dark:bg-rose-950/70 text-rose-800 dark:text-rose-300'
                     }`}
                   >
                     {stats.trendPercentage < 0 ? (
@@ -327,7 +335,7 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
               </div>
 
               {filteredTimeline.length < 2 ? (
-                <div className="h-48 flex items-center justify-center text-xs text-slate-400 text-center">
+                <div className="h-48 flex items-center justify-center text-xs text-slate-400 dark:text-slate-500 text-center">
                   Nu există încă suficiente observații istorice pentru un grafic pe această perioadă. Scanează mai multe bonuri!
                 </div>
               ) : (
@@ -347,7 +355,7 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                             y1={y}
                             x2={chartWidth - padding.right}
                             y2={y}
-                            stroke="#e2e8f0"
+                            className="stroke-slate-200 dark:stroke-slate-700/80"
                             strokeDasharray="4 4"
                           />
                           <text
@@ -355,7 +363,7 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                             y={y + 3}
                             textAnchor="end"
                             fontSize="10"
-                            fill="#94a3b8"
+                            className="fill-slate-400 dark:fill-slate-400"
                             fontWeight="500"
                           >
                             {priceVal.toFixed(2)}
@@ -383,7 +391,7 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                     {/* Main Trend Line */}
                     <polyline
                       fill="none"
-                      stroke="#059669"
+                      stroke="#10b981"
                       strokeWidth="3"
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -400,7 +408,7 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                             cx={cx}
                             cy={cy}
                             r="5"
-                            className="fill-white stroke-emerald-600 stroke-2 hover:r-7 transition-all"
+                            className="fill-white dark:fill-slate-900 stroke-emerald-600 dark:stroke-emerald-400 stroke-2 hover:r-7 transition-all"
                           />
                           {/* Point label */}
                           <text
@@ -408,7 +416,7 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                             y={chartHeight - 12}
                             textAnchor="middle"
                             fontSize="9"
-                            fill="#64748b"
+                            className="fill-slate-500 dark:fill-slate-400"
                           >
                             {p.date.split('-').slice(1).join('/')}
                           </text>
@@ -422,22 +430,22 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
           </div>
 
           {/* Active Price Alerts for this or other products */}
-          <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-7 shadow-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-5 sm:p-7 shadow-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
               <div className="flex items-center gap-2">
-                <Bell className="w-5 h-5 text-emerald-600" />
-                <h3 className="font-bold text-slate-900 text-base">Alerte de preț active ({alerts.length})</h3>
+                <Bell className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                <h3 className="font-bold text-slate-900 dark:text-slate-50 text-base">Alerte de preț active ({alerts.length})</h3>
               </div>
               <button
                 onClick={() => setShowAddAlertModal(true)}
-                className="text-xs font-semibold text-emerald-600 hover:underline"
+                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline"
               >
                 + Adaugă alertă
               </button>
             </div>
 
             {alerts.length === 0 ? (
-              <p className="text-xs text-slate-400 py-4 text-center">
+              <p className="text-xs text-slate-400 dark:text-slate-500 py-4 text-center">
                 Nu ai nicio alertă configurată. Setează o alertă pentru a fi anunțat când un produs scade sub prețul dorit.
               </p>
             ) : (
@@ -445,20 +453,20 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                 {alerts.map(alert => (
                   <div
                     key={alert.id}
-                    className="p-3.5 rounded-2xl border border-emerald-100 bg-emerald-50/40 flex items-center justify-between"
+                    className="p-3.5 rounded-2xl border border-emerald-100 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/30 flex items-center justify-between"
                   >
                     <div>
-                      <span className="font-bold text-xs text-slate-800 block line-clamp-1">
+                      <span className="font-bold text-xs text-slate-800 dark:text-slate-100 block line-clamp-1">
                         {alert.productName}
                       </span>
-                      <div className="text-[11px] text-slate-600 mt-1 flex items-center gap-2">
-                        <span>Preț țintă: <strong className="text-emerald-700">{PriceComparisonService.formatRon(alert.targetPrice)}</strong></span>
+                      <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 flex items-center gap-2">
+                        <span>Preț țintă: <strong className="text-emerald-700 dark:text-emerald-400">{PriceComparisonService.formatRon(alert.targetPrice)}</strong></span>
                         <span>• Acum: {PriceComparisonService.formatRon(alert.currentLowestPrice)}</span>
                       </div>
                     </div>
                     <button
                       onClick={() => handleDeleteAlert(alert.id)}
-                      className="p-1 text-slate-400 hover:text-rose-600 rounded-md"
+                      className="p-1 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-md"
                       title="Șterge alerta"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -473,18 +481,18 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
       {/* Add Alert Modal */}
       {showAddAlertModal && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl animate-in fade-in zoom-in-95">
-            <h3 className="text-base font-bold text-slate-900">
+        <div className="fixed inset-0 z-50 bg-black/50 dark:bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 dark:border dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl animate-in fade-in zoom-in-95">
+            <h3 className="text-base font-bold text-slate-900 dark:text-slate-50">
               Setează o alertă de preț
             </h3>
-            <p className="text-xs text-slate-500 mt-1">
-              Pentru: <strong className="text-slate-800">{selectedProduct.name}</strong>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              Pentru: <strong className="text-slate-800 dark:text-slate-200">{selectedProduct.name}</strong>
             </p>
 
             <form onSubmit={handleSaveAlert} className="mt-4 space-y-4">
               <div>
-                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
                   Preț țintă dorit (lei)
                 </label>
                 <div className="relative">
@@ -495,20 +503,20 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                     required
                     value={targetAlertPrice}
                     onChange={e => setTargetAlertPrice(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm font-bold text-slate-900 focus:border-emerald-500"
+                    className="w-full px-3 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
                   />
-                  <span className="absolute right-3 top-3 text-xs text-slate-400 font-bold">RON</span>
+                  <span className="absolute right-3 top-3 text-xs text-slate-400 dark:text-slate-500 font-bold">RON</span>
                 </div>
-                <span className="text-[11px] text-slate-500 mt-1 block">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
                   Prețul minim actual este de {PriceComparisonService.formatRon(stats.currentLowestPrice)}.
                 </span>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setShowAddAlertModal(false)}
-                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-sm font-medium"
+                  className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-medium"
                 >
                   Anulează
                 </button>

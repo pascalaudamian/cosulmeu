@@ -56,7 +56,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
   return (
     <nav
       aria-label="Navigație mobilă rapidă"
-      className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-lg border-t border-slate-200/90 px-2 py-1 pb-safe no-print"
+      className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-lg border-t border-slate-200/90 dark:border-slate-800 px-2 py-1 pb-safe no-print transition-colors"
     >
       <div className="grid grid-cols-5 gap-1 items-center max-w-md mx-auto">
         {navItems.map(item => {
@@ -70,17 +70,17 @@ export const MobileNav: React.FC<MobileNavProps> = ({
               onFocus={() => onPrefetchTab?.(item.id)}
               className={`min-h-[48px] relative flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-colors cursor-pointer ${
                 item.isActive
-                  ? 'text-emerald-700 font-semibold'
-                  : 'text-slate-500 hover:text-slate-900 font-medium'
+                  ? 'text-emerald-700 dark:text-emerald-400 font-semibold'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 font-medium'
               }`}
               aria-label={item.ariaLabel}
               aria-current={item.isActive ? 'page' : undefined}
             >
               {item.isActive && (
-                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-full bg-emerald-600" aria-hidden="true" />
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-full bg-emerald-600 dark:bg-emerald-400" aria-hidden="true" />
               )}
               <div className="relative">
-                <Icon className={`w-5 h-5 ${item.isActive ? 'stroke-[2.2] text-emerald-600' : 'stroke-[1.75]'}`} />
+                <Icon className={`w-5 h-5 ${item.isActive ? 'stroke-[2.2] text-emerald-600 dark:text-emerald-400' : 'stroke-[1.75]'}`} />
                 {item.badge !== undefined && (
                   <span className="absolute -top-1.5 -right-2 bg-emerald-600 text-white text-[9px] font-bold px-1 min-w-[15px] h-[15px] flex items-center justify-center rounded-full tabular-nums">
                     {item.badge}
