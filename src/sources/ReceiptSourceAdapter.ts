@@ -61,19 +61,51 @@ export class ReceiptSourceAdapter implements PriceSourceAdapter {
   }
 
   /**
-   * Sync prices directly from confirmed receipts
+   * Private receipts must NOT automatically publish into public product_offers.
+   * Requires explicit verified consent & strict validation.
    */
-  async importData(): Promise<SourceImportResult> {
+  async importData(options?: { explicitVerifiedConsent?: boolean }): Promise<SourceImportResult> {
     const startedAt = new Date().toISOString();
     const receipts = StorageService.getReceipts();
-    const allProducts = StorageService.getAllProducts();
 
+    if (!options?.explicitVerifiedConsent) {
+      const completedAt = new Date().toISOString();
+      const syncRun: SourceSyncRun = {
+        id: `sync-rec-${Date.now()}`,
+        sourceId: this.id,
+        sourceName: this.name,
+        startedAt,
+        completedAt,
+        status: 'success',
+        recordsProcessed: 0,
+        recordsImported: 0,
+        duplicatesFound: 0,
+        invalidRecords: 0,
+        errors: [],
+        summary:
+          'Bonurile personale rămân private per utilizator. Publicarea automată în catalogul public este dezactivată.'
+      };
+      return {
+        success: true,
+        syncRun,
+        importedOffers: [],
+        matchCandidates: [],
+        summaryMessage: syncRun.summary
+      };
+    }
+
+    const allProducts = StorageService.getAllProducts();
     let importedCount = 0;
     const offers: ProductOffer[] = [];
 
     for (const receipt of receipts) {
+      if (receipt.verifiedStatus !== 'confirmed' || receipt.validationStatus === 'NEEDS_REVIEW' || receipt.validationStatus === 'INVALID') {
+        continue;
+      }
       for (const item of receipt.items) {
-        if (!item.matchedProductId) continue;
+        if (item.isSgr || item.isCouponOrDiscountLine || !item.matchedProductId || item.mathValid === false) {
+          continue;
+        }
         const prod = allProducts.find(p => p.id === item.matchedProductId);
         if (!prod) continue;
 
@@ -88,9 +120,9 @@ export class ReceiptSourceAdapter implements PriceSourceAdapter {
           isPromo: item.discount > 0,
           promoDetails: item.discount > 0 ? `Reducere bon: -${item.discount.toFixed(2)} lei` : undefined,
           observationDate: receipt.date,
-          source: 'verified',
-          confidenceLevel: 'high',
-          verificationStatus: 'verified',
+          source: 'user_reported',
+          confidenceLevel: 'medium',
+          verificationStatus: 'pending',
           lastChecked: receipt.date
         };
 
@@ -98,8 +130,6 @@ export class ReceiptSourceAdapter implements PriceSourceAdapter {
         importedCount++;
       }
     }
-
-    StorageService.addOrUpdateOffers(offers);
 
     const completedAt = new Date().toISOString();
     const syncRun: SourceSyncRun = {
@@ -114,7 +144,7 @@ export class ReceiptSourceAdapter implements PriceSourceAdapter {
       duplicatesFound: 0,
       invalidRecords: 0,
       errors: [],
-      summary: `Sincronizate cu succes ${importedCount} oferte verificate din ${receipts.length} bonuri fiscale.`
+      summary: `Evaluate ${importedCount} observații candidate (status pending, fără publicare automată directă în catalog).`
     };
 
     StorageService.addSyncRun(syncRun);
@@ -128,3 +158,4 @@ export class ReceiptSourceAdapter implements PriceSourceAdapter {
     };
   }
 }
+

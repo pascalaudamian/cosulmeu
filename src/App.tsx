@@ -554,7 +554,9 @@ export default function App() {
     try {
       const nextIds = new Set(nextReceipts.map(receipt => receipt.id));
       const removed = dashboardData.receipts.filter(receipt => !nextIds.has(receipt.id));
-      await Promise.all(removed.map(receipt => deleteReceiptForUser(user.id, receipt.id)));
+      await Promise.all(
+        removed.map(receipt => deleteReceiptForUser(user.id, receipt.id, receipt.imagePaths))
+      );
       await mutateDashboardData(current => current ? { ...current, receipts: nextReceipts } : current, { revalidate: false });
       setDataWriteError(null);
     } catch (error) {
@@ -757,22 +759,9 @@ export default function App() {
 
   const handleReceiptSaved = async (savedReceipt: Receipt) => {
     if (!user) {
+      // Salvare exclusiv locală în modul vizitator (fără publicare în coada publică de descoperire)
       StorageService.addReceipt(savedReceipt);
-      const discoveryCandidates = savedReceipt.items.map((item, index) => ({
-        id: `rec-prod-${savedReceipt.id}-${index}`,
-        receiptId: savedReceipt.id,
-        rawName: item.rawName,
-        extractedPrice: item.unitPrice,
-        extractedQuantity: item.quantity,
-        category: item.category,
-        targetSearchStatus: 'pending' as const,
-        matchedProductId: item.matchedProductId,
-        searchAttempts: 0,
-        createdAt: new Date().toISOString()
-      }));
-      StorageService.addReceiptProducts(discoveryCandidates);
       setReceipts(StorageService.getReceipts());
-      setTrackedProductIds(StorageService.getTrackedProducts());
       return;
     }
     if (!dashboardData) throw new Error('Datele contului nu sunt încărcate. Încearcă din nou.');

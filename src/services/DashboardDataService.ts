@@ -9,9 +9,11 @@ import type {
   ShoppingListItem,
   Store,
   UnitType,
+  UserPriceObservation,
   VerificationStatus
 } from '../types.js';
 import { supabase } from '../lib/supabase.js';
+import { buildUserPriceObservations, computeReceiptFingerprint } from './ReceiptParserEngine.js';
 
 interface DatabaseRow {
   [key: string]: any;
@@ -180,14 +182,31 @@ function mapReceiptItem(value: unknown, index: number): ReceiptItem {
   return {
     id: stringValue(item.id, `item-${index}`),
     rawName: stringValue(item.rawName, 'Produs'),
+    normalizedName: stringValue(item.normalizedName) || undefined,
     matchedProductId: stringValue(item.matchedProductId) || undefined,
     matchedProductName: stringValue(item.matchedProductName) || undefined,
+    eanCode: stringValue(item.eanCode) || undefined,
+    internalCode: stringValue(item.internalCode) || undefined,
     quantity: numberValue(item.quantity, 1),
+    unit: item.unit ? validUnit(item.unit) : 'buc',
     unitPrice: numberValue(item.unitPrice),
     totalPrice: numberValue(item.totalPrice),
     discount: numberValue(item.discount),
     vatRate: item.vatRate == null ? undefined : numberValue(item.vatRate),
+    isWeighted: Boolean(item.isWeighted),
+    isSgr: Boolean(item.isSgr),
+    isCouponOrDiscountLine: Boolean(item.isCouponOrDiscountLine),
     confidence: VALID_CONFIDENCE_LEVELS.has(confidence) ? confidence : 'medium',
+    confidenceScore: item.confidenceScore == null ? undefined : numberValue(item.confidenceScore),
+    confidenceDetails: item.confidenceDetails && typeof item.confidenceDetails === 'object' ? item.confidenceDetails as ReceiptItem['confidenceDetails'] : undefined,
+    mathValid: item.mathValid == null ? undefined : Boolean(item.mathValid),
+    mathDiscrepancy: item.mathDiscrepancy == null ? undefined : numberValue(item.mathDiscrepancy),
+    matchStatus: ['matched', 'ambiguous', 'unmatched'].includes(stringValue(item.matchStatus))
+      ? item.matchStatus as ReceiptItem['matchStatus']
+      : undefined,
+    matchCandidates: Array.isArray(item.matchCandidates) ? item.matchCandidates : undefined,
+    provenance: item.provenance && typeof item.provenance === 'object' ? item.provenance as ReceiptItem['provenance'] : undefined,
+    rawLineText: stringValue(item.rawLineText) || undefined,
     category: stringValue(item.category) as ReceiptItem['category']
   };
 }
@@ -198,21 +217,53 @@ function mapReceipt(row: DatabaseRow, storeById: Map<string, Store>): Receipt {
   const storeId = stringValue(row.store_id);
   const store = storeById.get(storeId);
   const purchasedAt = stringValue(row.purchased_at) || stringValue(row.created_at);
+  const imagePaths = Array.isArray(extracted.imagePaths)
+    ? extracted.imagePaths.filter((p: unknown): p is string => typeof p === 'string')
+    : row.image_path
+      ? [stringValue(row.image_path)]
+      : undefined;
+
   return {
     id: stringValue(row.id),
-    storeId,
+    storeId: storeId || stringValue(extracted.storeId) || 'unknown',
     storeName: stringValue(row.merchant_name, store?.name || 'Magazin'),
     storeAddress: stringValue(extracted.storeAddress) || undefined,
     fiscalNumber: stringValue(extracted.fiscalNumber) || undefined,
+    receiptNumber: stringValue(row.receipt_number || extracted.receiptNumber) || undefined,
     date: purchasedAt.slice(0, 10),
     time: stringValue(extracted.time) || undefined,
     items,
     subtotal: numberValue(extracted.subtotal, numberValue(row.total_amount) + numberValue(extracted.discountTotal)),
     discountTotal: numberValue(extracted.discountTotal),
+    couponsTotal: extracted.couponsTotal == null ? undefined : numberValue(extracted.couponsTotal),
+    sgrTotal: extracted.sgrTotal == null ? undefined : numberValue(extracted.sgrTotal),
+    vatTotal: extracted.vatTotal == null ? undefined : numberValue(extracted.vatTotal),
+    vatBreakdown: Array.isArray(extracted.vatBreakdown) ? extracted.vatBreakdown : undefined,
+    printedTotal: extracted.printedTotal == null ? undefined : numberValue(extracted.printedTotal),
+    calculatedTotal: extracted.calculatedTotal == null ? undefined : numberValue(extracted.calculatedTotal),
+    discrepancyAmount: extracted.discrepancyAmount == null ? undefined : numberValue(extracted.discrepancyAmount),
     total: numberValue(row.total_amount, numberValue(extracted.total)),
     currency: 'RON',
+    paymentMethod: stringValue(row.payment_method || extracted.paymentMethod) || undefined,
+    imagePaths,
     createdAt: stringValue(row.created_at, purchasedAt),
-    verifiedStatus: row.status === 'processed' ? 'confirmed' : 'draft'
+    processedAt: stringValue(row.processed_at || extracted.processedAt) || undefined,
+    verifiedStatus: row.status === 'processed' ? 'confirmed' : 'draft',
+    validationStatus: ['VALID', 'NEEDS_REVIEW', 'INVALID'].includes(stringValue(row.validation_status || extracted.validationStatus))
+      ? (row.validation_status || extracted.validationStatus) as Receipt['validationStatus']
+      : undefined,
+    validationReasons: Array.isArray(extracted.validationReasons) ? extracted.validationReasons : undefined,
+    confidenceScores: extracted.confidenceScores && typeof extracted.confidenceScores === 'object'
+      ? extracted.confidenceScores as Receipt['confidenceScores']
+      : undefined,
+    rawOcrText: stringValue(extracted.rawOcrText) || undefined,
+    originalExtractedData: extracted.originalExtractedData && typeof extracted.originalExtractedData === 'object'
+      ? extracted.originalExtractedData as Record<string, any>
+      : undefined,
+    userCorrections: extracted.userCorrections && typeof extracted.userCorrections === 'object'
+      ? extracted.userCorrections as Record<string, any>
+      : undefined,
+    contentFingerprint: stringValue(row.content_fingerprint || extracted.contentFingerprint) || undefined
   };
 }
 
@@ -279,25 +330,60 @@ function timestampForReceipt(receipt: Receipt): string {
 }
 
 function receiptExtractedData(receipt: Receipt, localId?: string): DatabaseRow {
+  const fingerprint = receipt.contentFingerprint || computeReceiptFingerprint(receipt);
   return {
+    storeId: receipt.storeId || null,
     subtotal: receipt.subtotal,
     discountTotal: receipt.discountTotal,
+    couponsTotal: receipt.couponsTotal ?? 0,
+    sgrTotal: receipt.sgrTotal ?? 0,
+    vatTotal: receipt.vatTotal ?? null,
+    vatBreakdown: receipt.vatBreakdown || null,
+    printedTotal: receipt.printedTotal ?? receipt.total,
+    calculatedTotal: receipt.calculatedTotal ?? receipt.total,
+    discrepancyAmount: receipt.discrepancyAmount ?? 0,
     time: receipt.time || null,
     fiscalNumber: receipt.fiscalNumber || null,
+    receiptNumber: receipt.receiptNumber || null,
     storeAddress: receipt.storeAddress || null,
+    paymentMethod: receipt.paymentMethod || null,
     verifiedStatus: receipt.verifiedStatus,
+    validationStatus: receipt.validationStatus || 'VALID',
+    validationReasons: receipt.validationReasons || [],
+    confidenceScores: receipt.confidenceScores || null,
+    rawOcrText: receipt.rawOcrText || null,
+    originalExtractedData: receipt.originalExtractedData || null,
+    userCorrections: receipt.userCorrections || null,
+    imagePaths: receipt.imagePaths || [],
+    contentFingerprint: fingerprint,
+    processedAt: receipt.processedAt || new Date().toISOString(),
     localImportId: localId || null,
     items: receipt.items.map(item => ({
       id: item.id,
       rawName: item.rawName,
+      normalizedName: item.normalizedName || null,
       matchedProductId: item.matchedProductId || null,
       matchedProductName: item.matchedProductName || null,
+      eanCode: item.eanCode || null,
+      internalCode: item.internalCode || null,
       quantity: item.quantity,
+      unit: item.unit || 'buc',
       unitPrice: item.unitPrice,
       totalPrice: item.totalPrice,
       discount: item.discount,
       vatRate: item.vatRate ?? null,
+      isWeighted: Boolean(item.isWeighted),
+      isSgr: Boolean(item.isSgr),
+      isCouponOrDiscountLine: Boolean(item.isCouponOrDiscountLine),
       confidence: item.confidence,
+      confidenceScore: item.confidenceScore ?? null,
+      confidenceDetails: item.confidenceDetails || null,
+      mathValid: item.mathValid ?? true,
+      mathDiscrepancy: item.mathDiscrepancy ?? 0,
+      matchStatus: item.matchStatus || 'unmatched',
+      matchCandidates: item.matchCandidates || null,
+      provenance: item.provenance || {},
+      rawLineText: item.rawLineText || null,
       category: item.category || null
     }))
   };
@@ -403,7 +489,7 @@ export function countLocalDashboardData(snapshot: LocalDashboardSnapshot): Local
 export async function loadDashboardData(userId: string): Promise<DashboardData> {
   const [receiptsResult, listsResult, alertsResult, profileResult] = await Promise.all([
     supabase.from('receipts').select(
-      'id,store_id,merchant_name,purchased_at,total_amount,currency,extracted_data,status,created_at'
+      'id,store_id,image_path,merchant_name,purchased_at,total_amount,currency,extracted_data,status,created_at'
     ).eq('user_id', userId).neq('status', 'failed').order('purchased_at', { ascending: false, nullsFirst: false }),
     supabase.from('shopping_lists').select(
       'id,user_id,name,description,is_archived,created_at,updated_at'
@@ -495,33 +581,241 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
   };
 }
 
+async function uploadPrivateReceiptImages(
+  userId: string,
+  receiptUuid: string,
+  imageUrls: string[]
+): Promise<string[]> {
+  const uploadedPaths: string[] = [];
+  for (let i = 0; i < imageUrls.length; i++) {
+    const src = imageUrls[i];
+    const match = src.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,(.+)$/i);
+    if (!match) continue;
+    const rawMime = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
+    const ext = rawMime === 'image/png' ? 'png' : rawMime === 'image/webp' ? 'webp' : 'jpg';
+    const base64 = match[2];
+    const binary = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    const objectPath = `${userId}/${receiptUuid}/page-${i + 1}.${ext}`;
+
+    const { error } = await supabase.storage
+      .from('receipt-images')
+      .upload(objectPath, binary, {
+        contentType: rawMime,
+        upsert: true
+      });
+    if (!error) {
+      uploadedPaths.push(objectPath);
+    }
+  }
+  return uploadedPaths;
+}
+
+export async function getSignedReceiptImageUrls(paths: string[]): Promise<string[]> {
+  if (!paths.length) return [];
+  try {
+    const { data, error } = await supabase.storage
+      .from('receipt-images')
+      .createSignedUrls(paths, 3600);
+    if (error || !data) return [];
+    return data.map(d => d.signedUrl).filter((url): url is string => Boolean(url));
+  } catch {
+    return [];
+  }
+}
+
 export async function saveReceiptForUser(
   userId: string,
   receipt: Receipt,
   stores: Store[]
 ): Promise<Receipt> {
-  const id = await stableUuid(userId, 'receipt', receipt.id);
+  const id = isUuid(receipt.id) ? receipt.id : await stableUuid(userId, 'receipt', receipt.id);
   const storeId = resolveStoreId(receipt.storeId || receipt.storeName, stores);
+  const fingerprint = receipt.contentFingerprint || computeReceiptFingerprint(receipt);
+
+  // Upload original receipt images into private Supabase Storage bucket if available
+  const rawImages = receipt.imageUrls?.length
+    ? receipt.imageUrls
+    : receipt.imageUrl
+      ? [receipt.imageUrl]
+      : [];
+  const uploadedPaths = rawImages.length
+    ? await uploadPrivateReceiptImages(userId, id, rawImages)
+    : (receipt.imagePaths || []);
+
+  const enrichedReceipt: Receipt = {
+    ...receipt,
+    id,
+    imagePaths: uploadedPaths,
+    contentFingerprint: fingerprint
+  };
+  const extractedPayload = receiptExtractedData(enrichedReceipt);
+  const purchasedAt = timestampForReceipt(enrichedReceipt);
+  const observations = buildUserPriceObservations(enrichedReceipt, userId);
+
+  // Attempt atomic v2 RPC first (when migration 010 is applied in Supabase)
+  const rpcReceiptJson = {
+    id,
+    store_id: storeId,
+    image_path: uploadedPaths[0] || null,
+    merchant_name: enrichedReceipt.storeName,
+    purchased_at: purchasedAt,
+    total_amount: enrichedReceipt.total,
+    currency: 'RON',
+    extracted_data: extractedPayload,
+    status: enrichedReceipt.verifiedStatus === 'confirmed' ? 'processed' : 'uploaded',
+    receipt_number: enrichedReceipt.receiptNumber || null,
+    payment_method: enrichedReceipt.paymentMethod || null,
+    sgr_total: enrichedReceipt.sgrTotal ?? 0,
+    coupons_total: enrichedReceipt.couponsTotal ?? 0,
+    vat_total: enrichedReceipt.vatTotal ?? null,
+    printed_total: enrichedReceipt.printedTotal ?? enrichedReceipt.total,
+    calculated_total: enrichedReceipt.calculatedTotal ?? enrichedReceipt.total,
+    discrepancy_amount: enrichedReceipt.discrepancyAmount ?? 0,
+    validation_status: enrichedReceipt.validationStatus || 'VALID',
+    validation_reasons: enrichedReceipt.validationReasons || [],
+    confidence_scores: enrichedReceipt.confidenceScores || {},
+    raw_ocr_text: enrichedReceipt.rawOcrText || null,
+    original_extracted_data: enrichedReceipt.originalExtractedData || null,
+    user_corrections: enrichedReceipt.userCorrections || null,
+    image_paths: uploadedPaths,
+    content_fingerprint: fingerprint
+  };
+
+  const validMatchedIds = await validProductIds(
+    enrichedReceipt.items.map(it => it.matchedProductId || '')
+  );
+
+  const rpcItemsJson = enrichedReceipt.items.map(it => ({
+    product_id: validMatchedIds.has(it.matchedProductId || '') ? it.matchedProductId : null,
+    raw_name: it.rawName,
+    normalized_name: it.normalizedName || null,
+    ean_code: it.eanCode || null,
+    internal_code: it.internalCode || null,
+    quantity: it.quantity,
+    unit: it.unit || 'buc',
+    unit_price: it.unitPrice,
+    total_price: it.totalPrice,
+    discount: it.discount || 0,
+    vat_rate: it.vatRate ?? null,
+    is_weighted: Boolean(it.isWeighted),
+    is_sgr: Boolean(it.isSgr),
+    confidence_score: it.confidenceScore ?? null,
+    confidence_details: it.confidenceDetails || null,
+    math_valid: it.mathValid ?? true,
+    match_status: it.matchStatus || 'unmatched',
+    provenance: it.provenance || {},
+    raw_line_text: it.rawLineText || null
+  }));
+
+  const rpcObsJson = observations.map(obs => ({
+    product_id: validMatchedIds.has(obs.productId || '') ? obs.productId : null,
+    product_name: obs.productName,
+    store_id: storeId,
+    store_name: obs.storeName,
+    purchase_date: obs.purchaseDate,
+    quantity: obs.quantity,
+    unit: obs.unit,
+    unit_price: obs.unitPrice,
+    discount: obs.discount,
+    effective_paid_unit_price: obs.effectivePaidUnitPrice,
+    total_paid: obs.totalPaid,
+    source_receipt_label: obs.sourceReceiptLabel || null
+  }));
+
+  const { error: rpcError } = await supabase.rpc('save_receipt_v2', {
+    p_receipt: rpcReceiptJson,
+    p_items: rpcItemsJson,
+    p_observations: rpcObsJson
+  });
+
+  if (!rpcError) {
+    const { data: refreshed, error: readBackErr } = await supabase
+      .from('receipts')
+      .select('id,store_id,image_path,merchant_name,purchased_at,total_amount,currency,extracted_data,status,created_at')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single();
+    if (!readBackErr && refreshed) {
+      return mapReceipt(refreshed, new Map(stores.map(store => [store.id, store])));
+    }
+  }
+
+  // Fallback compatible with existing public.receipts columns (storing full 2.0 payload in extracted_data)
   const payload = {
     id,
     user_id: userId,
     store_id: storeId,
-    merchant_name: receipt.storeName,
-    purchased_at: timestampForReceipt(receipt),
-    total_amount: receipt.total,
+    image_path: uploadedPaths[0] || null,
+    merchant_name: enrichedReceipt.storeName,
+    purchased_at: purchasedAt,
+    total_amount: enrichedReceipt.total,
     currency: 'RON',
-    extracted_data: receiptExtractedData(receipt),
-    status: receipt.verifiedStatus === 'confirmed' ? 'processed' : 'uploaded'
+    extracted_data: extractedPayload,
+    status: enrichedReceipt.verifiedStatus === 'confirmed' ? 'processed' : 'uploaded'
   };
   const { data, error } = await supabase.from('receipts').upsert(payload, { onConflict: 'id' })
-    .select('id,store_id,merchant_name,purchased_at,total_amount,currency,extracted_data,status,created_at')
+    .select('id,store_id,image_path,merchant_name,purchased_at,total_amount,currency,extracted_data,status,created_at')
     .single();
   throwIfError(error, 'Nu am putut salva bonul în contul Supabase');
   if (!data) throw new Error('Supabase nu a returnat bonul salvat.');
   return mapReceipt(data, new Map(stores.map(store => [store.id, store])));
 }
 
-export async function deleteReceiptForUser(userId: string, receiptId: string): Promise<void> {
+export async function fetchUserPersonalPriceHistory(
+  userId: string,
+  fallbackReceipts: Receipt[] = []
+): Promise<UserPriceObservation[]> {
+  try {
+    const { data, error } = await supabase
+      .from('user_price_observations')
+      .select('id,user_id,receipt_id,receipt_item_id,product_id,product_name,store_id,store_name,purchase_date,quantity,unit,unit_price,discount,effective_paid_unit_price,total_paid,currency,source_receipt_label')
+      .eq('user_id', userId)
+      .order('purchase_date', { ascending: false })
+      .limit(300);
+
+    if (!error && Array.isArray(data) && data.length > 0) {
+      return data.map(row => ({
+        id: stringValue(row.id),
+        userId: stringValue(row.user_id),
+        receiptId: stringValue(row.receipt_id),
+        receiptItemId: stringValue(row.receipt_item_id) || undefined,
+        productId: stringValue(row.product_id) || undefined,
+        productName: stringValue(row.product_name, 'Produs'),
+        storeId: stringValue(row.store_id) || undefined,
+        storeName: stringValue(row.store_name, 'Magazin'),
+        purchaseDate: stringValue(row.purchase_date).slice(0, 10),
+        quantity: numberValue(row.quantity, 1),
+        unit: validUnit(row.unit),
+        unitPrice: numberValue(row.unit_price),
+        discount: numberValue(row.discount),
+        effectivePaidUnitPrice: numberValue(row.effective_paid_unit_price),
+        totalPaid: numberValue(row.total_paid),
+        currency: 'RON',
+        sourceReceiptLabel: stringValue(row.source_receipt_label) || undefined
+      }));
+    }
+  } catch {
+    // Table may not exist yet before migration 010 — derive strictly from user's own confirmed receipts
+  }
+
+  return fallbackReceipts
+    .filter(r => r.verifiedStatus === 'confirmed')
+    .flatMap(r => buildUserPriceObservations(r, userId))
+    .sort((a, b) => b.purchaseDate.localeCompare(a.purchaseDate));
+}
+
+export async function deleteReceiptForUser(userId: string, receiptId: string, imagePaths?: string[]): Promise<void> {
+  // Remove associated private receipt images if present
+  if (imagePaths && imagePaths.length > 0) {
+    try {
+      const ownedPaths = imagePaths.filter(p => p.startsWith(`${userId}/`));
+      if (ownedPaths.length > 0) {
+        await supabase.storage.from('receipt-images').remove(ownedPaths);
+      }
+    } catch {
+      // Non-blocking storage cleanup
+    }
+  }
   const { error } = await supabase.from('receipts').delete().eq('id', receiptId).eq('user_id', userId);
   throwIfError(error, 'Nu am putut șterge bonul din contul Supabase');
 }

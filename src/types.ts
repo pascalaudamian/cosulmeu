@@ -180,17 +180,81 @@ export interface ShoppingList {
   isArchived?: boolean;
 }
 
+export type ReceiptConfidenceBand =
+  | 'high_confidence'   // 95-100: încredere ridicată
+  | 'good_confidence'   // 80-94: încredere bună
+  | 'uncertain'         // 60-79: incert
+  | 'needs_correction'; // < 60: necesită corectare
+
+export type ReceiptValidationStatus = 'VALID' | 'NEEDS_REVIEW' | 'INVALID';
+
+export type ReceiptFieldProvenance = 'ocr' | 'calculated' | 'manual';
+
+export interface ReceiptConfidenceBreakdown {
+  overall: number;
+  band: ReceiptConfidenceBand;
+  retailer: number;
+  date: number;
+  total: number;
+  itemsAverage: number;
+}
+
+export interface ReceiptVatEntry {
+  code?: string;
+  rate: number;
+  taxableAmount?: number;
+  vatAmount?: number;
+  grossAmount?: number;
+}
+
+export interface ReceiptMatchCandidate {
+  productId: string;
+  productName: string;
+  brand?: string;
+  packageWeightOrVolume?: number;
+  packageUnit?: UnitType;
+  score: number;
+  matchMethod: 'ean_exact' | 'name_brand_quantity' | 'manual';
+}
+
 export interface ReceiptItem {
   id: string;
   rawName: string;
+  normalizedName?: string;
   matchedProductId?: string;
   matchedProductName?: string;
+  eanCode?: string;
+  internalCode?: string;
   quantity: number;
+  unit?: UnitType;
   unitPrice: number;
   totalPrice: number;
   discount: number;
   vatRate?: number;
+  isWeighted?: boolean;
+  isSgr?: boolean;
+  isCouponOrDiscountLine?: boolean;
   confidence: ConfidenceLevel;
+  confidenceScore?: number; // 0-100
+  confidenceDetails?: {
+    product: number;
+    quantity: number;
+    unitPrice: number;
+    lineTotal: number;
+  };
+  mathValid?: boolean;
+  mathDiscrepancy?: number;
+  matchStatus?: 'matched' | 'ambiguous' | 'unmatched';
+  matchCandidates?: ReceiptMatchCandidate[];
+  provenance?: {
+    rawName?: ReceiptFieldProvenance;
+    quantity?: ReceiptFieldProvenance;
+    unitPrice?: ReceiptFieldProvenance;
+    totalPrice?: ReceiptFieldProvenance;
+    discount?: ReceiptFieldProvenance;
+    matchedProductId?: ReceiptFieldProvenance;
+  };
+  rawLineText?: string;
   category?: ProductCategory;
 }
 
@@ -200,16 +264,61 @@ export interface Receipt {
   storeName: string;
   storeAddress?: string;
   fiscalNumber?: string;
+  receiptNumber?: string;
   date: string;
   time?: string;
   items: ReceiptItem[];
   subtotal: number;
   discountTotal: number;
+  couponsTotal?: number;
+  sgrTotal?: number;
+  vatTotal?: number;
+  vatBreakdown?: ReceiptVatEntry[];
+  printedTotal?: number;
+  calculatedTotal?: number;
+  discrepancyAmount?: number;
   total: number;
   currency: 'RON';
+  paymentMethod?: string;
   imageUrl?: string;
+  imageUrls?: string[];
+  imagePaths?: string[];
   createdAt: string;
+  processedAt?: string;
   verifiedStatus: 'confirmed' | 'draft';
+  validationStatus?: ReceiptValidationStatus;
+  validationReasons?: string[];
+  confidenceScores?: ReceiptConfidenceBreakdown;
+  rawOcrText?: string;
+  originalExtractedData?: Record<string, any>;
+  userCorrections?: Record<string, any>;
+  contentFingerprint?: string;
+  duplicateWarning?: {
+    isDuplicate: boolean;
+    matchingReceiptId?: string;
+    matchReason?: string;
+  };
+}
+
+export interface UserPriceObservation {
+  id: string;
+  userId?: string;
+  receiptId: string;
+  receiptItemId?: string;
+  productId?: string;
+  productName: string;
+  storeId?: string;
+  storeName: string;
+  purchaseDate: string;
+  quantity: number;
+  unit: UnitType;
+  unitPrice: number;
+  discount: number;
+  effectivePaidUnitPrice: number;
+  totalPaid: number;
+  currency: 'RON';
+  sourceReceiptLabel?: string;
+  isSgr?: boolean;
 }
 
 export interface PriceAlert {

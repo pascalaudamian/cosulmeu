@@ -101,3 +101,232 @@ export const priceAuditRemediationRequestSchema = z
 export type PriceAuditQueryInput = z.infer<typeof priceAuditQuerySchema>;
 export type PriceAuditRemediationItemInput = z.infer<typeof priceAuditRemediationItemSchema>;
 export type PriceAuditRemediationRequestInput = z.infer<typeof priceAuditRemediationRequestSchema>;
+
+// =========================================================================
+// Receipt Scanner 2.0 Validation & Image Binary Security
+// =========================================================================
+
+export const ALLOWED_RECEIPT_IMAGE_MIMES = [
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp'
+] as const;
+
+export const MAX_RECEIPT_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB per page
+
+export const receiptImagePayloadSchema = z.object({
+  base64: z.string().min(32, 'Conținut imagine invalid sau gol.').max(15_000_000),
+  mimeType: z.enum(ALLOWED_RECEIPT_IMAGE_MIMES).default('image/jpeg'),
+  fileName: z.string().trim().max(180).optional()
+});
+
+export const scanReceiptRequestSchema = z
+  .object({
+    imageBase64: z.string().min(32).max(15_000_000).optional(),
+    mimeType: z.string().trim().max(64).optional(),
+    images: z.array(receiptImagePayloadSchema).min(1).max(6).optional(),
+    qualityHints: z
+      .object({
+        isBlurry: z.boolean().optional(),
+        blurScore: z.number().min(0).max(100).optional(),
+        isOverexposed: z.boolean().optional(),
+        isUnderexposed: z.boolean().optional()
+      })
+      .optional()
+  })
+  .superRefine((val, ctx) => {
+    if (!val.imageBase64 && (!val.images || val.images.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Este necesară cel puțin o imagine a bonului fiscal (JPG, PNG sau WEBP).'
+      });
+    }
+    if (val.mimeType && !ALLOWED_RECEIPT_IMAGE_MIMES.includes(val.mimeType.toLowerCase() as any)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['mimeType'],
+        message: 'Format imagine neacceptat. Acceptăm exclusiv JPG, JPEG, PNG și WEBP.'
+      });
+    }
+  });
+
+export const parseReceiptTextRequestSchema = z.object({
+  rawOcrText: z.string().trim().min(5, 'Textul bonului este prea scurt.').max(50000),
+  pagesText: z.array(z.string().max(30000)).max(6).optional(),
+  ocrQuality: z
+    .object({
+      isBlurry: z.boolean().optional(),
+      blurScore: z.number().min(0).max(100).optional(),
+      isOverexposed: z.boolean().optional(),
+      isUnderexposed: z.boolean().optional(),
+      isTruncated: z.boolean().optional(),
+      ocrTextConfidence: z.number().min(0).max(100).optional()
+    })
+    .optional()
+});
+
+export const receiptFieldProvenanceSchema = z.enum(['ocr', 'calculated', 'manual']);
+
+export const receiptItemSaveSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  rawName: z.string().trim().min(1, 'Denumirea produsului este obligatorie.').max(255),
+  normalizedName: z.string().trim().max(255).optional(),
+  matchedProductId: z.string().trim().max(120).optional().nullable(),
+  matchedProductName: z.string().trim().max(255).optional().nullable(),
+  eanCode: z.string().trim().regex(/^\d{8,14}$/).optional().nullable(),
+  internalCode: z.string().trim().max(64).optional().nullable(),
+  quantity: z.coerce.number().positive('Cantitatea trebuie să fie > 0.').max(5000),
+  unit: z.enum(['buc', 'kg', 'g', 'l', 'ml', 'pachet']).default('buc'),
+  unitPrice: z.coerce.number().min(0, 'Prețul unitar nu poate fi negativ.').max(50000),
+  totalPrice: z.coerce.number().min(0, 'Totalul liniei nu poate fi negativ.').max(100000),
+  discount: z.coerce.number().min(0).max(50000).default(0),
+  vatRate: z.coerce.number().min(0).max(30).optional().nullable(),
+  isWeighted: z.boolean().optional(),
+  isSgr: z.boolean().optional(),
+  isCouponOrDiscountLine: z.boolean().optional(),
+  confidence: z.enum(['high', 'medium', 'low']).default('medium'),
+  confidenceScore: z.coerce.number().min(0).max(100).optional(),
+  category: z.string().trim().max(80).optional(),
+  provenance: z
+    .object({
+      rawName: receiptFieldProvenanceSchema.optional(),
+      quantity: receiptFieldProvenanceSchema.optional(),
+      unitPrice: receiptFieldProvenanceSchema.optional(),
+      totalPrice: receiptFieldProvenanceSchema.optional(),
+      discount: receiptFieldProvenanceSchema.optional(),
+      matchedProductId: receiptFieldProvenanceSchema.optional()
+    })
+    .optional(),
+  rawLineText: z.string().max(400).optional()
+});
+
+export const saveReceiptRequestSchema = z.object({
+  receipt: z.object({
+    id: z.string().trim().min(1).max(120),
+    storeId: z.string().trim().min(1).max(80),
+    storeName: z.string().trim().min(1).max(150),
+    storeAddress: z.string().trim().max(250).optional().nullable(),
+    fiscalNumber: z.string().trim().max(80).optional().nullable(),
+    receiptNumber: z.string().trim().max(80).optional().nullable(),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data bonului trebuie să fie în format YYYY-MM-DD.'),
+    time: z.string().trim().max(16).optional().nullable(),
+    items: z.array(receiptItemSaveSchema).min(1, 'Bonul trebuie să conțină cel puțin un articol.').max(300),
+    subtotal: z.coerce.number().min(0).max(200000),
+    discountTotal: z.coerce.number().min(0).max(50000).default(0),
+    couponsTotal: z.coerce.number().min(0).max(50000).optional(),
+    sgrTotal: z.coerce.number().min(0).max(5000).optional(),
+    vatTotal: z.coerce.number().min(0).max(50000).optional(),
+    printedTotal: z.coerce.number().min(0).max(200000).optional(),
+    calculatedTotal: z.coerce.number().min(0).max(200000).optional(),
+    discrepancyAmount: z.coerce.number().min(0).max(200000).optional(),
+    total: z.coerce.number().min(0).max(200000),
+    currency: z.literal('RON').default('RON'),
+    paymentMethod: z.string().trim().max(80).optional().nullable(),
+    verifiedStatus: z.enum(['confirmed', 'draft']).default('confirmed'),
+    validationStatus: z.enum(['VALID', 'NEEDS_REVIEW', 'INVALID']).optional(),
+    validationReasons: z.array(z.string().max(400)).optional(),
+    confidenceScores: z.record(z.string(), z.any()).optional(),
+    rawOcrText: z.string().max(60000).optional().nullable(),
+    originalExtractedData: z.record(z.string(), z.any()).optional().nullable(),
+    userCorrections: z.record(z.string(), z.any()).optional().nullable(),
+    contentFingerprint: z.string().trim().max(120).optional().nullable()
+  }),
+  images: z.array(receiptImagePayloadSchema).max(6).optional(),
+  allowDuplicateOverride: z.boolean().default(false)
+});
+
+/**
+ * Inspects decoded binary magic bytes and rejects SVG, HTML, scripts, or mismatched formats.
+ */
+export function validateReceiptImageBuffer(
+  rawBase64OrDataUrl: string,
+  declaredMime?: string
+): {
+  valid: boolean;
+  buffer?: Buffer;
+  detectedMime?: 'image/jpeg' | 'image/png' | 'image/webp';
+  error?: string;
+} {
+  if (!rawBase64OrDataUrl || typeof rawBase64OrDataUrl !== 'string') {
+    return { valid: false, error: 'Imaginea lipsește.' };
+  }
+
+  const trimmed = rawBase64OrDataUrl.trim();
+  const dataUrlHeader = trimmed.match(/^data:([^;]+);base64,/i);
+  if (dataUrlHeader) {
+    const headerMime = dataUrlHeader[1].toLowerCase();
+    if (!ALLOWED_RECEIPT_IMAGE_MIMES.includes(headerMime as any)) {
+      return {
+        valid: false,
+        error: `Tipul MIME "${headerMime}" nu este permis. Acceptăm doar JPG, PNG și WEBP.`
+      };
+    }
+  }
+
+  if (declaredMime && !ALLOWED_RECEIPT_IMAGE_MIMES.includes(declaredMime.toLowerCase() as any)) {
+    return {
+      valid: false,
+      error: `Tipul MIME declarat "${declaredMime}" nu este permis.`
+    };
+  }
+
+  const pureBase64 = trimmed.replace(/^data:[^;]+;base64,/i, '').replace(/\s+/g, '');
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(pureBase64, 'base64');
+  } catch {
+    return { valid: false, error: 'Date Base64 corupte.' };
+  }
+
+  if (buffer.length < 16) {
+    return { valid: false, error: 'Fișier imagine gol sau invalid.' };
+  }
+  if (buffer.length > MAX_RECEIPT_IMAGE_BYTES) {
+    return { valid: false, error: 'Imaginea depășește limita de 10 MB per fotografie.' };
+  }
+
+  // Explicitly block disguised SVG / HTML / XML payloads
+  const headText = buffer.subarray(0, Math.min(256, buffer.length)).toString('utf8').trimStart().toLowerCase();
+  if (
+    headText.startsWith('<svg') ||
+    headText.startsWith('<?xml') ||
+    headText.startsWith('<!doctype') ||
+    headText.startsWith('<html') ||
+    headText.startsWith('<script') ||
+    headText.includes('<svg')
+  ) {
+    return {
+      valid: false,
+      error: 'Conținut SVG/HTML detectat și blocat din motive de securitate.'
+    };
+  }
+
+  // Magic-byte verification:
+  // JPEG: FF D8 FF
+  const isJpeg = buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  const isPng =
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a;
+  // WEBP: "RIFF" .... "WEBP"
+  const isWebp =
+    buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+
+  if (isJpeg) return { valid: true, buffer, detectedMime: 'image/jpeg' };
+  if (isPng) return { valid: true, buffer, detectedMime: 'image/png' };
+  if (isWebp) return { valid: true, buffer, detectedMime: 'image/webp' };
+
+  return {
+    valid: false,
+    error: 'Semnătura binară a fișierului nu corespunde unei imagini valide JPG, PNG sau WEBP.'
+  };
+}
+

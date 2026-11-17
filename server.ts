@@ -16,21 +16,34 @@ import { CollectionWorker } from './src/services/CollectionWorker.ts';
 import { IndexerScheduler } from './src/services/IndexerScheduler.ts';
 import { PriceQualityMonitor } from './src/indexing/PriceQualityMonitor.ts';
 import { CATEGORIES_TAXONOMY, mapRetailerCategoryToStandard } from './src/data/categories.ts';
-import { STORES } from './src/data/mockData.ts';
+import { PRODUCTS, STORES } from './src/data/mockData.ts';
+import { createClient } from '@supabase/supabase-js';
 import { supabase } from './src/lib/supabase.ts';
 import { CatalogDownloader } from './src/indexing/catalog/CatalogDownloader.ts';
 import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.ts';
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
-import { Store } from './src/types.ts';
+import { Product, Receipt, Store } from './src/types.ts';
 import { createHash } from 'node:crypto';
 import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 import { validatePublicHttpUrl } from './src/utils/urlSecurity.ts';
 import { PriceAuditService } from './src/services/PriceAuditService.ts';
 import {
+  buildAnalyzedReceipt,
+  buildUserPriceObservations,
+  computeReceiptFingerprint,
+  detectDuplicateReceipts,
+  mergeMultiPageOcrTexts,
+  validateReceiptMath
+} from './src/services/ReceiptParserEngine.ts';
+import {
+  parseReceiptTextRequestSchema,
   priceAuditQuerySchema,
-  priceAuditRemediationRequestSchema
+  priceAuditRemediationRequestSchema,
+  saveReceiptRequestSchema,
+  scanReceiptRequestSchema,
+  validateReceiptImageBuffer
 } from './src/server/validation.ts';
 
 function sanitizeApiImageUrl(rawUrl?: string | null): string | undefined {
@@ -90,191 +103,664 @@ if (apiKey) {
   });
 }
 
-// Receipt OCR & Parsing endpoint
-app.post('/api/scan-receipt', async (req, res) => {
-  try {
-    const { imageBase64, mimeType = 'image/jpeg' } = req.body;
+const SUPABASE_URL =
+  process.env.VITE_SUPABASE_URL || 'https://bwanbgbimktluajvwzsj.supabase.co';
+const SUPABASE_ANON_KEY =
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ3YW5iZ2JpbWt0bHVhanZ3enNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3OTM0ODQsImV4cCI6MjEwOTM2OTQ4NH0.dHSKcUjqitbWOBmV_aG5IjWM5L7nTilVML0DOomd9gs';
 
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'Imaginea bonului este obligatorie.' });
-    }
+async function getAuthenticatedSupabaseUser(req: express.Request) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  const token = authHeader.slice(7).trim();
+  if (!token) return null;
 
-    // Clean base64 string if data url header was included
-    const cleanedBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user) {
+    return null;
+  }
 
-    if (ai) {
-      try {
-        const prompt = `Analizează această imagine a unui bon fiscal românesc (Kaufland, Lidl, Carrefour, Auchan, Penny, Profi, Mega Image etc.).
-Extrage informațiile structurate:
-1. storeName (numele retailerului identificat)
-2. storeAddress (adresa sau localitatea magazinului, dacă este vizibilă)
-3. fiscalNumber (numărul bonului fiscal sau CIF, ex: BF 0123 / RO1234567)
-4. date (data emiterii în format YYYY-MM-DD, ex: 2026-10-26)
-5. time (ora emiterii în format HH:MM, ex: 16:45)
-6. items (lista fiecărui produs de pe bon):
-   - rawName: denumirea exactă de pe bon (ex: LAPTE NAPOLACT 1.5% 1L, PAINE TOAST)
-   - quantity: numărul de bucăți sau cantitatea în kg/l (default 1)
-   - unitPrice: prețul unitar în RON
-   - totalPrice: prețul total pentru cantitatea respectivă
-   - discount: valoarea reducerii aplicate pentru această linie (0 dacă nu există reducere)
-   - vatRate: cota TVA identificată (9 sau 19)
-   - category: una din categoriile: 'Fructe și legume', 'Lactate și ouă', 'Carne și pește', 'Panificație', 'Băuturi', 'Produse congelate', 'Produse de bază', 'Curățenie', 'Igienă personală', 'Alte produse'
-7. subtotal: suma produselor înainte de reduceri globale
-8. discountTotal: total reduceri pe bon (RON)
-9. total: totalul final de plată (RON)
-
-Dacă anumite date sunt șterse sau neclare, estimează cu atenție din context. Păstrează moneda ca RON.`;
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: {
-            parts: [
-              {
-                inlineData: {
-                  data: cleanedBase64,
-                  mimeType,
-                },
-              },
-              { text: prompt },
-            ],
-          },
-          config: {
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                storeName: { type: Type.STRING },
-                storeAddress: { type: Type.STRING },
-                fiscalNumber: { type: Type.STRING },
-                date: { type: Type.STRING },
-                time: { type: Type.STRING },
-                items: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      rawName: { type: Type.STRING },
-                      quantity: { type: Type.NUMBER },
-                      unitPrice: { type: Type.NUMBER },
-                      totalPrice: { type: Type.NUMBER },
-                      discount: { type: Type.NUMBER },
-                      vatRate: { type: Type.NUMBER },
-                      category: { type: Type.STRING },
-                    },
-                    required: ['rawName', 'quantity', 'unitPrice', 'totalPrice'],
-                  },
-                },
-                subtotal: { type: Type.NUMBER },
-                discountTotal: { type: Type.NUMBER },
-                total: { type: Type.NUMBER },
-              },
-              required: ['storeName', 'items', 'total'],
-            },
-          },
-        });
-
-        const textOutput = response.text?.trim();
-        if (textOutput) {
-          const parsed = JSON.parse(textOutput);
-          // Înregistrează automat produsele de pe bon ca și candidați de căutare
-          if (Array.isArray(parsed.items)) {
-            const discItems = parsed.items.map((it: any, idx: number) => ({
-              id: `rec-prod-${Date.now()}-${idx}`,
-              rawName: it.rawName,
-              extractedPrice: it.unitPrice,
-              extractedQuantity: it.quantity,
-              category: it.category,
-              targetSearchStatus: 'pending' as const,
-              searchAttempts: 0,
-              createdAt: new Date().toISOString()
-            }));
-            StorageService.addReceiptProducts(discItems);
-          }
-          return res.json({
-            success: true,
-            source: 'gemini_ocr',
-            receipt: parsed,
-          });
-        }
-      } catch (geminiError) {
-        console.warn('Gemini OCR API a întâmpinat o eroare, aplicăm fallback demonstrativ:', geminiError);
+  const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: {
+      headers: {
+        Authorization: `Bearer ${token}`
       }
     }
+  });
 
-    // Graceful fallback for offline / mock testing:
-    // Generate an intelligent structured receipt response
-    const mockReceipt = {
-      storeName: 'Kaufland România',
-      storeAddress: 'Str. Barbu Văcărescu 120, București',
-      fiscalNumber: 'RO1599110 / BF 0184',
-      date: new Date().toISOString().split('T')[0],
-      time: '14:22',
-      items: [
-        {
-          rawName: 'LAPTE NAPOLACT 1.5% 1L',
-          quantity: 2,
-          unitPrice: 6.49,
-          totalPrice: 12.98,
-          discount: 0,
-          vatRate: 9,
-          category: 'Lactate și ouă',
-        },
-        {
-          rawName: 'OUA PROASPETE M 10 BUC',
-          quantity: 1,
-          unitPrice: 10.49,
-          totalPrice: 10.49,
-          discount: 1.0,
-          vatRate: 9,
-          category: 'Lactate și ouă',
-        },
-        {
-          rawName: 'PAINE TOAST 500G',
-          quantity: 1,
-          unitPrice: 4.69,
-          totalPrice: 4.69,
-          discount: 0,
-          vatRate: 9,
-          category: 'Panificație',
-        },
-        {
-          rawName: 'BANANE (KG)',
-          quantity: 1.45,
-          unitPrice: 5.99,
-          totalPrice: 8.69,
-          discount: 0,
-          vatRate: 9,
-          category: 'Fructe și legume',
-        },
-      ],
-      subtotal: 36.85,
-      discountTotal: 1.0,
-      total: 35.85,
-    };
+  return { user: data.user, token, userClient };
+}
 
-    // Înregistrează automat produsele de pe bonul fallback ca și candidați
-    const discItems = mockReceipt.items.map((it, idx) => ({
-      id: `rec-prod-demo-${Date.now()}-${idx}`,
-      rawName: it.rawName,
-      extractedPrice: it.unitPrice,
-      extractedQuantity: it.quantity,
-      category: it.category,
-      targetSearchStatus: 'pending' as const,
-      searchAttempts: 0,
-      createdAt: new Date().toISOString()
+async function loadCatalogProductsForReceipts(): Promise<Product[]> {
+  try {
+    const dbProducts = await DatabaseService.getProducts();
+    if (Array.isArray(dbProducts) && dbProducts.length > 0) {
+      return dbProducts;
+    }
+  } catch {
+    // Fallback to static reference catalog
+  }
+  try {
+    const { data } = await supabase
+      .from('products')
+      .select('id,name,brand,category,default_unit,package_weight_or_volume,package_unit,normalized_unit,barcode,image_url,is_bio,is_romanian_product,base_reference_price')
+      .limit(500);
+    if (Array.isArray(data) && data.length > 0) {
+      return data.map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        brand: row.brand || '',
+        category: row.category || 'Alte produse',
+        defaultUnit: row.default_unit || 'buc',
+        packageWeightOrVolume: Number(row.package_weight_or_volume || 1),
+        packageUnit: row.package_unit || 'buc',
+        normalizedUnit: row.normalized_unit || 'buc',
+        barcode: row.barcode || undefined,
+        imageUrl: row.image_url || undefined,
+        isBio: Boolean(row.is_bio),
+        isRomanianProduct: Boolean(row.is_romanian_product),
+        baseReferencePrice: Number(row.base_reference_price || 0)
+      }));
+    }
+  } catch {
+    // Use local PRODUCTS list
+  }
+  return PRODUCTS;
+}
+
+// Receipt OCR & Structured Extraction 2.0 endpoint
+app.post('/api/scan-receipt', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  try {
+    const parsedReq = scanReceiptRequestSchema.safeParse(req.body);
+    if (!parsedReq.success) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_REQUEST',
+        error: parsedReq.error.issues[0]?.message || 'Date invalide pentru scanarea bonului.'
+      });
+    }
+
+    const input = parsedReq.data;
+    const rawImageList = input.images?.length
+      ? input.images
+      : [{ base64: input.imageBase64!, mimeType: (input.mimeType || 'image/jpeg').toLowerCase() as any }];
+
+    const validatedImages: Array<{ base64: string; mimeType: 'image/jpeg' | 'image/png' | 'image/webp' }> = [];
+    for (const imgItem of rawImageList) {
+      const check = validateReceiptImageBuffer(imgItem.base64, imgItem.mimeType);
+      if (!check.valid || !check.buffer || !check.detectedMime) {
+        return res.status(415).json({
+          success: false,
+          code: 'INVALID_IMAGE_FORMAT',
+          error: check.error || 'Format imagine invalid.'
+        });
+      }
+      validatedImages.push({
+        base64: check.buffer.toString('base64'),
+        mimeType: check.detectedMime
+      });
+    }
+
+    if (!ai) {
+      return res.status(503).json({
+        success: false,
+        code: 'OCR_UNAVAILABLE',
+        retryCapture: true,
+        error: 'Serviciul OCR nu este configurat pe server (lipsește GEMINI_API_KEY). Nu putem interpreta imaginea automat.'
+      });
+    }
+
+    const prompt = `Analizează cu maximă precizie această fotografie (sau aceste fotografii consecutive) a unui bon fiscal românesc (Lidl, Kaufland, Carrefour, Penny, Auchan, Profi, Mega Image, Metro etc.).
+
+REGULI CRITICE:
+1. Dacă imaginea NU este un bon fiscal, este prea neclară, tăiată sever sau supraexpusă încât prețurile nu se pot citi sigur, setează isReadable=false și explică motivul în qualityIssue. NU inventa produse sau prețuri.
+2. Transcrie textul complet vizibil în rawOcrText.
+3. Separă strict:
+   - retailer (storeName, storeAddress, fiscalNumber, receiptNumber)
+   - date (YYYY-MM-DD), time (HH:MM), paymentMethod
+   - produse: rawName (exact de pe bon), eanCode (DOAR dacă este cod de bare valid 8/12/13/14 cifre, altfel null), internalCode (cod intern magazin/PLU), quantity (cantitate numerică cu zecimale pentru kg), unit ('buc'|'kg'|'g'|'l'|'ml'|'pachet'), unitPrice, totalPrice (totalul liniei înainte de reduceri), discount (reducerea aferentă liniei, >= 0), vatRate (5, 9 sau 19), isSgr (true pentru Garanție SGR / RetuRO 0,50 lei), isWeighted (true pentru produse cântărite).
+4. Nu modifica totalul imprimat de pe bon (printedTotal / total) pentru a forța egalitatea cu suma produselor. Raportează separat sgrTotal, couponsTotal, vatTotal, subtotal, discountTotal și printedTotal.`;
+
+    const parts: any[] = validatedImages.map(img => ({
+      inlineData: {
+        data: img.base64,
+        mimeType: img.mimeType
+      }
     }));
-    StorageService.addReceiptProducts(discItems);
+    parts.push({ text: prompt });
+
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: { parts },
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              isReadable: { type: Type.BOOLEAN },
+              qualityIssue: { type: Type.STRING },
+              rawOcrText: { type: Type.STRING },
+              storeName: { type: Type.STRING },
+              storeAddress: { type: Type.STRING },
+              fiscalNumber: { type: Type.STRING },
+              receiptNumber: { type: Type.STRING },
+              date: { type: Type.STRING },
+              time: { type: Type.STRING },
+              paymentMethod: { type: Type.STRING },
+              items: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    rawName: { type: Type.STRING },
+                    eanCode: { type: Type.STRING },
+                    internalCode: { type: Type.STRING },
+                    quantity: { type: Type.NUMBER },
+                    unit: { type: Type.STRING },
+                    unitPrice: { type: Type.NUMBER },
+                    totalPrice: { type: Type.NUMBER },
+                    discount: { type: Type.NUMBER },
+                    vatRate: { type: Type.NUMBER },
+                    isSgr: { type: Type.BOOLEAN },
+                    isWeighted: { type: Type.BOOLEAN },
+                    category: { type: Type.STRING }
+                  },
+                  required: ['rawName', 'quantity', 'unitPrice', 'totalPrice']
+                }
+              },
+              subtotal: { type: Type.NUMBER },
+              discountTotal: { type: Type.NUMBER },
+              couponsTotal: { type: Type.NUMBER },
+              sgrTotal: { type: Type.NUMBER },
+              vatTotal: { type: Type.NUMBER },
+              total: { type: Type.NUMBER }
+            },
+            required: ['isReadable', 'items', 'total']
+          }
+        }
+      });
+    } catch (geminiError: any) {
+      console.error('[receipt-ocr] Provider error:', geminiError?.message || 'OCR error');
+      return res.status(502).json({
+        success: false,
+        code: 'OCR_PROVIDER_ERROR',
+        retryCapture: true,
+        error: 'Nu am putut interpreta imaginea bonului prin OCR. Verifică claritatea fotografiei și încearcă din nou.'
+      });
+    }
+
+    const textOutput = response.text?.trim();
+    if (!textOutput) {
+      return res.status(422).json({
+        success: false,
+        code: 'UNREADABLE_IMAGE',
+        retryCapture: true,
+        error: 'Nu am putut extrage date lizibile din imagine. Fotografiază bonul din nou cu iluminare mai bună.'
+      });
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(textOutput);
+    } catch {
+      return res.status(422).json({
+        success: false,
+        code: 'OCR_PARSE_ERROR',
+        retryCapture: true,
+        error: 'Răspunsul OCR nu a putut fi structurat sigur. Te rugăm să refaci fotografia.'
+      });
+    }
+
+    if (parsed.isReadable === false || (!Array.isArray(parsed.items) || (parsed.items.length === 0 && !parsed.rawOcrText))) {
+      return res.status(422).json({
+        success: false,
+        code: 'UNREADABLE_IMAGE',
+        retryCapture: true,
+        error: parsed.qualityIssue || 'Imaginea este neclară, incompletă sau nu conține un bon fiscal lizibil. Te rugăm să o fotografiezi din nou.'
+      });
+    }
+
+    const catalogProducts = await loadCatalogProductsForReceipts();
+    const analyzed = buildAnalyzedReceipt({
+      extracted: {
+        ...parsed,
+        printedTotal: parsed.total
+      },
+      rawOcrText: parsed.rawOcrText,
+      availableStores: STORES,
+      catalogProducts,
+      ocrQuality: {
+        isBlurry: input.qualityHints?.isBlurry,
+        blurScore: input.qualityHints?.blurScore,
+        isOverexposed: input.qualityHints?.isOverexposed,
+        isUnderexposed: input.qualityHints?.isUnderexposed,
+        ocrTextConfidence: input.qualityHints?.isBlurry ? 68 : 93
+      }
+    });
+
+    // Privacy invariant: Never persist scanned receipt items automatically into public catalog discovery queues or product_offers.
+    return res.json({
+      success: true,
+      source: 'gemini_ocr',
+      receipt: analyzed
+    });
+  } catch (error) {
+    console.error('[receipt-ocr] Internal error');
+    res.status(500).json({
+      success: false,
+      code: 'INTERNAL_ERROR',
+      error: 'Eroare internă la procesarea bonului fiscal.'
+    });
+  }
+});
+
+// Deterministic structured parsing endpoint for raw OCR text (including multi-page receipts)
+app.post('/api/receipts/parse-text', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  try {
+    const parsedReq = parseReceiptTextRequestSchema.safeParse(req.body);
+    if (!parsedReq.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsedReq.error.issues[0]?.message || 'Text OCR invalid.'
+      });
+    }
+
+    const combinedText = parsedReq.data.pagesText?.length
+      ? mergeMultiPageOcrTexts(parsedReq.data.pagesText)
+      : parsedReq.data.rawOcrText;
+
+    const catalogProducts = await loadCatalogProductsForReceipts();
+    const analyzed = buildAnalyzedReceipt({
+      rawOcrText: combinedText,
+      availableStores: STORES,
+      catalogProducts,
+      ocrQuality: parsedReq.data.ocrQuality
+    });
 
     return res.json({
       success: true,
-      source: 'demo_ocr_fallback',
-      receipt: mockReceipt,
+      receipt: analyzed
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Nu am putut interpreta textul bonului.' });
+  }
+});
+
+// Authenticated receipt persistence & duplicate verification
+app.post('/api/receipts/save', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({
+        success: false,
+        error: 'Autentificare necesară pentru salvarea bonurilor în istoricul personal.'
+      });
+    }
+
+    const parsedReq = saveReceiptRequestSchema.safeParse(req.body);
+    if (!parsedReq.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsedReq.error.issues[0]?.message || 'Datele bonului sunt invalide.'
+      });
+    }
+
+    const { receipt: inputReceipt, images, allowDuplicateOverride } = parsedReq.data;
+
+    // Validate image buffers if provided
+    const validatedBuffers: Array<{ buffer: Buffer; mimeType: 'image/jpeg' | 'image/png' | 'image/webp' }> = [];
+    if (images?.length) {
+      for (const img of images) {
+        const check = validateReceiptImageBuffer(img.base64, img.mimeType);
+        if (!check.valid || !check.buffer || !check.detectedMime) {
+          return res.status(415).json({
+            success: false,
+            error: check.error || 'Imagine atașată invalidă.'
+          });
+        }
+        validatedBuffers.push({ buffer: check.buffer, mimeType: check.detectedMime });
+      }
+    }
+
+    const validatedReceipt = validateReceiptMath({
+      ...(inputReceipt as unknown as Receipt),
+      currency: 'RON',
+      createdAt: new Date().toISOString()
+    });
+    const fingerprint = validatedReceipt.contentFingerprint || computeReceiptFingerprint(validatedReceipt);
+
+    // Check existing receipts owned by this user strictly via RLS-scoped userClient
+    const { data: existingRows, error: existingErr } = await auth.userClient
+      .from('receipts')
+      .select('id,store_id,merchant_name,purchased_at,total_amount,extracted_data,created_at')
+      .eq('user_id', auth.user.id)
+      .order('purchased_at', { ascending: false })
+      .limit(100);
+
+    if (existingErr) {
+      return res.status(500).json({ success: false, error: 'Nu am putut verifica istoricul de bonuri.' });
+    }
+
+    const existingReceipts: Receipt[] = (existingRows || []).map((row: any) => ({
+      id: row.id,
+      storeId: row.store_id || row.extracted_data?.storeId || 'unknown',
+      storeName: row.merchant_name || 'Magazin',
+      date: String(row.purchased_at || row.created_at || '').slice(0, 10),
+      time: row.extracted_data?.time || undefined,
+      receiptNumber: row.extracted_data?.receiptNumber || undefined,
+      fiscalNumber: row.extracted_data?.fiscalNumber || undefined,
+      items: Array.isArray(row.extracted_data?.items) ? row.extracted_data.items : [],
+      subtotal: Number(row.extracted_data?.subtotal ?? row.total_amount ?? 0),
+      discountTotal: Number(row.extracted_data?.discountTotal ?? 0),
+      total: Number(row.total_amount ?? 0),
+      currency: 'RON',
+      createdAt: row.created_at || new Date().toISOString(),
+      verifiedStatus: 'confirmed',
+      contentFingerprint: row.extracted_data?.contentFingerprint || undefined
+    }));
+
+    const duplicateCheck = detectDuplicateReceipts(
+      { ...validatedReceipt, contentFingerprint: fingerprint },
+      existingReceipts
+    );
+    if (duplicateCheck.isDuplicate && !allowDuplicateOverride) {
+      return res.status(409).json({
+        success: false,
+        code: 'DUPLICATE_RECEIPT',
+        duplicateWarning: duplicateCheck,
+        error: duplicateCheck.matchReason || 'Acest bon pare a fi duplicat.'
+      });
+    }
+
+    const receiptUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(validatedReceipt.id)
+      ? validatedReceipt.id
+      : crypto.randomUUID();
+
+    // Upload private receipt images if bucket is available
+    const uploadedPaths: string[] = [];
+    for (let i = 0; i < validatedBuffers.length; i++) {
+      const { buffer, mimeType } = validatedBuffers[i];
+      const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
+      const objectPath = `${auth.user.id}/${receiptUuid}/page-${i + 1}.${ext}`;
+      const { error: upErr } = await auth.userClient.storage
+        .from('receipt-images')
+        .upload(objectPath, buffer, { contentType: mimeType, upsert: true });
+      if (!upErr) {
+        uploadedPaths.push(objectPath);
+      }
+    }
+
+    const observations = buildUserPriceObservations({ ...validatedReceipt, id: receiptUuid }, auth.user.id);
+    const extractedPayload = {
+      ...validatedReceipt,
+      id: receiptUuid,
+      imagePaths: uploadedPaths,
+      contentFingerprint: fingerprint,
+      processedAt: new Date().toISOString()
+    };
+
+    const storeMatch = STORES.find(s => s.id === validatedReceipt.storeId);
+    const purchasedAt = `${validatedReceipt.date}T${validatedReceipt.time || '12:00'}:00`;
+
+    // Persist via save_receipt_v2 RPC (atomic) or base receipts table fallback
+    const { error: rpcErr } = await auth.userClient.rpc('save_receipt_v2', {
+      p_receipt: {
+        id: receiptUuid,
+        store_id: storeMatch?.id || null,
+        image_path: uploadedPaths[0] || null,
+        merchant_name: validatedReceipt.storeName,
+        purchased_at: purchasedAt,
+        total_amount: validatedReceipt.total,
+        currency: 'RON',
+        extracted_data: extractedPayload,
+        status: validatedReceipt.verifiedStatus === 'confirmed' ? 'processed' : 'uploaded',
+        receipt_number: validatedReceipt.receiptNumber || null,
+        payment_method: validatedReceipt.paymentMethod || null,
+        sgr_total: validatedReceipt.sgrTotal ?? 0,
+        coupons_total: validatedReceipt.couponsTotal ?? 0,
+        vat_total: validatedReceipt.vatTotal ?? null,
+        printed_total: validatedReceipt.printedTotal ?? validatedReceipt.total,
+        calculated_total: validatedReceipt.calculatedTotal ?? validatedReceipt.total,
+        discrepancy_amount: validatedReceipt.discrepancyAmount ?? 0,
+        validation_status: validatedReceipt.validationStatus || 'VALID',
+        validation_reasons: validatedReceipt.validationReasons || [],
+        confidence_scores: validatedReceipt.confidenceScores || {},
+        raw_ocr_text: validatedReceipt.rawOcrText || null,
+        original_extracted_data: validatedReceipt.originalExtractedData || null,
+        user_corrections: validatedReceipt.userCorrections || null,
+        image_paths: uploadedPaths,
+        content_fingerprint: fingerprint
+      },
+      p_items: validatedReceipt.items.map(it => ({
+        product_id: it.matchedProductId || null,
+        raw_name: it.rawName,
+        normalized_name: it.normalizedName || null,
+        ean_code: it.eanCode || null,
+        internal_code: it.internalCode || null,
+        quantity: it.quantity,
+        unit: it.unit || 'buc',
+        unit_price: it.unitPrice,
+        total_price: it.totalPrice,
+        discount: it.discount || 0,
+        vat_rate: it.vatRate ?? null,
+        is_weighted: Boolean(it.isWeighted),
+        is_sgr: Boolean(it.isSgr),
+        confidence_score: it.confidenceScore ?? null,
+        confidence_details: it.confidenceDetails || null,
+        math_valid: it.mathValid ?? true,
+        match_status: it.matchStatus || 'unmatched',
+        provenance: it.provenance || {},
+        raw_line_text: it.rawLineText || null
+      })),
+      p_observations: observations.map(obs => ({
+        product_id: obs.productId || null,
+        product_name: obs.productName,
+        store_id: storeMatch?.id || null,
+        store_name: obs.storeName,
+        purchase_date: obs.purchaseDate,
+        quantity: obs.quantity,
+        unit: obs.unit,
+        unit_price: obs.unitPrice,
+        discount: obs.discount,
+        effective_paid_unit_price: obs.effectivePaidUnitPrice,
+        total_paid: obs.totalPaid,
+        source_receipt_label: obs.sourceReceiptLabel || null
+      }))
     });
 
-  } catch (error) {
-    console.error('Eroare procesare bon:', error);
-    res.status(500).json({ error: 'Eroare internă la procesarea bonului fiscal.' });
+    if (rpcErr) {
+      const { error: upsertErr } = await auth.userClient.from('receipts').upsert(
+        {
+          id: receiptUuid,
+          user_id: auth.user.id,
+          store_id: storeMatch?.id || null,
+          image_path: uploadedPaths[0] || null,
+          merchant_name: validatedReceipt.storeName,
+          purchased_at: purchasedAt,
+          total_amount: validatedReceipt.total,
+          currency: 'RON',
+          extracted_data: extractedPayload,
+          status: validatedReceipt.verifiedStatus === 'confirmed' ? 'processed' : 'uploaded'
+        },
+        { onConflict: 'id' }
+      );
+      if (upsertErr) {
+        return res.status(500).json({ success: false, error: 'Nu am putut salva bonul în baza de date.' });
+      }
+    }
+
+    return res.status(201).json({
+      success: true,
+      receiptId: receiptUuid,
+      validationStatus: validatedReceipt.validationStatus,
+      observationsCount: observations.length
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare internă la salvarea bonului.' });
   }
+});
+
+// Authenticated personal price history endpoint (strictly user-scoped)
+app.get('/api/receipts/personal-history', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+  }
+
+  try {
+    const { data, error } = await auth.userClient
+      .from('user_price_observations')
+      .select('id,receipt_id,receipt_item_id,product_id,product_name,store_id,store_name,purchase_date,quantity,unit,unit_price,discount,effective_paid_unit_price,total_paid,currency,source_receipt_label')
+      .eq('user_id', auth.user.id)
+      .order('purchase_date', { ascending: false })
+      .limit(300);
+
+    if (!error && Array.isArray(data)) {
+      return res.json({
+        success: true,
+        source: 'user_price_observations',
+        observations: data
+      });
+    }
+
+    // Fallback: derive strictly from user's own confirmed receipts
+    const { data: receiptsRows, error: recErr } = await auth.userClient
+      .from('receipts')
+      .select('id,store_id,merchant_name,purchased_at,total_amount,extracted_data,status,created_at')
+      .eq('user_id', auth.user.id)
+      .eq('status', 'processed')
+      .order('purchased_at', { ascending: false })
+      .limit(100);
+
+    if (recErr) {
+      return res.status(500).json({ success: false, error: 'Nu am putut încărca istoricul personal de prețuri.' });
+    }
+
+    const mappedReceipts: Receipt[] = (receiptsRows || []).map((row: any) => ({
+      id: row.id,
+      storeId: row.store_id || row.extracted_data?.storeId || 'unknown',
+      storeName: row.merchant_name || 'Magazin',
+      date: String(row.purchased_at || row.created_at || '').slice(0, 10),
+      receiptNumber: row.extracted_data?.receiptNumber || undefined,
+      items: Array.isArray(row.extracted_data?.items) ? row.extracted_data.items : [],
+      subtotal: Number(row.extracted_data?.subtotal ?? row.total_amount ?? 0),
+      discountTotal: Number(row.extracted_data?.discountTotal ?? 0),
+      total: Number(row.total_amount ?? 0),
+      currency: 'RON',
+      createdAt: row.created_at || new Date().toISOString(),
+      verifiedStatus: 'confirmed'
+    }));
+
+    const derived = mappedReceipts.flatMap(r => buildUserPriceObservations(r, auth.user.id));
+    return res.json({
+      success: true,
+      source: 'receipts_fallback',
+      observations: derived
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare internă la citirea istoricului personal.' });
+  }
+});
+
+// Private signed URL endpoint for receipt images (owner verified)
+app.get('/api/receipts/:id/image', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+  }
+
+  const receiptId = req.params.id;
+  const { data: row, error } = await auth.userClient
+    .from('receipts')
+    .select('id,user_id,image_path,extracted_data')
+    .eq('id', receiptId)
+    .eq('user_id', auth.user.id)
+    .maybeSingle();
+
+  if (error || !row) {
+    return res.status(404).json({ success: false, error: 'Bonul nu a fost găsit sau aparține altui utilizator.' });
+  }
+
+  const paths: string[] = Array.isArray(row.extracted_data?.imagePaths) && row.extracted_data.imagePaths.length > 0
+    ? row.extracted_data.imagePaths
+    : row.image_path
+      ? [row.image_path]
+      : [];
+
+  if (paths.length === 0) {
+    return res.status(404).json({ success: false, error: 'Nu există imagini atașate acestui bon.' });
+  }
+
+  const ownedPaths = paths.filter(p => typeof p === 'string' && p.startsWith(`${auth.user.id}/`));
+  if (ownedPaths.length === 0) {
+    return res.status(403).json({ success: false, error: 'Acces interzis la imaginile bonului.' });
+  }
+
+  const { data: signedData, error: signErr } = await auth.userClient.storage
+    .from('receipt-images')
+    .createSignedUrls(ownedPaths, 300);
+
+  if (signErr || !signedData) {
+    return res.status(404).json({ success: false, error: 'Imaginile nu sunt disponibile în stocarea privată.' });
+  }
+
+  return res.json({
+    success: true,
+    signedUrls: signedData.map(item => item.signedUrl).filter(Boolean)
+  });
+});
+
+// Authenticated owner-scoped receipt deletion (cleans up private storage images too)
+app.delete('/api/receipts/:id', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+  }
+
+  const receiptId = req.params.id;
+  const { data: row } = await auth.userClient
+    .from('receipts')
+    .select('id,user_id,image_path,extracted_data')
+    .eq('id', receiptId)
+    .eq('user_id', auth.user.id)
+    .maybeSingle();
+
+  if (!row) {
+    return res.status(404).json({ success: false, error: 'Bonul nu a fost găsit.' });
+  }
+
+  const paths: string[] = Array.isArray(row.extracted_data?.imagePaths)
+    ? row.extracted_data.imagePaths
+    : row.image_path
+      ? [row.image_path]
+      : [];
+  const ownedPaths = paths.filter(p => typeof p === 'string' && p.startsWith(`${auth.user.id}/`));
+  if (ownedPaths.length > 0) {
+    await auth.userClient.storage.from('receipt-images').remove(ownedPaths);
+  }
+
+  const { error: delErr } = await auth.userClient
+    .from('receipts')
+    .delete()
+    .eq('id', receiptId)
+    .eq('user_id', auth.user.id);
+
+  if (delErr) {
+    return res.status(500).json({ success: false, error: 'Nu am putut șterge bonul.' });
+  }
+
+  return res.json({ success: true });
 });
 
 // Admin protection middleware
