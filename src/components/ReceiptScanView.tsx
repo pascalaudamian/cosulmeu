@@ -1,4 +1,6 @@
 import React, { useState, useRef } from 'react';
+import { CameraCapture } from './CameraCapture.js';
+import type { ProcessedReceiptImage, ReceiptImageQualityReport } from '../utils/receiptImageProcessor.js';
 import {
   Camera,
   Upload,
@@ -47,6 +49,8 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
   const [rotation, setRotation] = useState<number>(0);
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [imageQuality, setImageQuality] = useState<ReceiptImageQualityReport | null>(null);
 
   // Editable parsed receipt state
   const [parsedReceipt, setParsedReceipt] = useState<Receipt | null>(null);
@@ -54,7 +58,6 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
   const [isSaving, setIsSaving] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   // Handle file select
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -69,6 +72,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
     const reader = new FileReader();
     reader.onload = () => {
       setImageSrc(reader.result as string);
+      setImageQuality(null);
       setParsedReceipt(null);
       setScanError(null);
       setSaveSuccess(false);
@@ -76,6 +80,16 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
     reader.readAsDataURL(file);
   };
 
+
+  const handleCameraCapture = (image: ProcessedReceiptImage) => {
+    setImageSrc(image.enhancedDataUrl);
+    setImageQuality(image.quality);
+    setRotation(image.rotation);
+    setParsedReceipt(null);
+    setScanError(null);
+    setSaveSuccess(false);
+    setIsCameraOpen(false);
+  };
 
   // Rotate image
   const handleRotate = () => {
@@ -302,16 +316,8 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                 </p>
 
                 <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-                  <input
-                    type="file"
-                    ref={cameraInputRef}
-                    accept="image/*"
-                    capture="environment"
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
                   <button
-                    onClick={() => cameraInputRef.current?.click()}
+                    onClick={() => setIsCameraOpen(true)}
                     className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all"
                   >
                     <Camera className="w-4 h-4" />
@@ -355,7 +361,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                     <span className="hidden sm:inline">Rotește</span>
                   </button>
                   <button
-                    onClick={() => setImageSrc(null)}
+                    onClick={() => { setImageSrc(null); setImageQuality(null); }}
                     className="p-2 rounded-xl text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-xs font-semibold transition-colors"
                   >
                     Schimbă imaginea
@@ -394,10 +400,21 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                 </div>
               )}
 
+              {imageQuality && (
+                <div className={`flex gap-3 rounded-xl border p-3.5 text-xs ${imageQuality.status === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100' : imageQuality.status === 'blocked' ? 'border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-100' : 'border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100'}`} role="status" aria-live="polite">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <div>
+                    <p className="font-bold">{imageQuality.status === 'ok' ? 'Calitate bună pentru OCR' : imageQuality.status === 'blocked' ? 'Imaginea trebuie refăcută' : 'Recomandare: refă fotografia'}</p>
+                    <p className="mt-1 opacity-80">Claritate {imageQuality.blurScore}% · contrast {imageQuality.contrastScore}% · luminozitate {imageQuality.meanBrightness}/255</p>
+                    {imageQuality.warnings.map(warning => <p key={warning} className="mt-1">{warning}</p>)}
+                  </div>
+                </div>
+              )}
+
               {/* Scan Trigger Button */}
               <div className="flex justify-end gap-3">
                 <button
-                  disabled={isScanning}
+                  disabled={isScanning || imageQuality?.status === 'blocked'}
                   onClick={handleProcessScan}
                   className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
                 >
@@ -408,6 +425,10 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {isCameraOpen && (
+        <CameraCapture onCapture={handleCameraCapture} onCancel={() => setIsCameraOpen(false)} />
       )}
 
       {/* Editable Confirmation Review Screen */}
