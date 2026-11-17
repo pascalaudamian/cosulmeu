@@ -1133,11 +1133,25 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
     return this.runPilotImportForRetailer('lidl');
   }
 
+  /** Returnează sursele active, cu datele PostgreSQL prioritare față de cache-ul local. */
+  static async getActiveCatalogSources(): Promise<CatalogSource[]> {
+    const localSources = StorageService.getCatalogSources();
+    let dbSources: CatalogSource[] = [];
+    try {
+      dbSources = await DatabaseService.getCatalogSources();
+    } catch {}
+
+    const mergedById = new Map<string, CatalogSource>();
+    for (const source of localSources) mergedById.set(source.id, source);
+    for (const source of dbSources) mergedById.set(source.id, source);
+
+    return Array.from(mergedById.values()).filter(source => source.status === 'active');
+  }
+
   /**
-   * Rezolvă sursele de import ale unui retailer (DB + memorie) și sintetizează automat o sursă web
-   * din pagina oficială a retailerului dacă nu există un catalog dedicat configurat.
+   * Rezolvă sursele active ale retailerului și sintetizează un fallback web doar când rularea nu are o selecție confirmată.
    */
-  static async resolveRetailerImportContext(retailerId: string): Promise<{
+  static async resolveRetailerImportContext(retailerId: string, requestedSourceIds?: string[]): Promise<{
     sources: CatalogSource[];
     activeSources: CatalogSource[];
     websiteUrl?: string;
@@ -1156,10 +1170,13 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
     for (const s of dbSources) byId.set(s.id, s);
 
     const sources = Array.from(byId.values());
-    let activeSources = sources.filter(s => s.status !== 'disabled');
+    const requestedSourceIdSet = requestedSourceIds ? new Set(requestedSourceIds) : null;
+    let activeSources = sources.filter(
+      source => source.status === 'active' && (!requestedSourceIdSet || requestedSourceIdSet.has(source.id))
+    );
     let synthesizedWebSource = false;
 
-    if (sources.length === 0 && storeInfo.websiteUrl) {
+    if (sources.length === 0 && storeInfo.websiteUrl && requestedSourceIds === undefined) {
       const webSource: CatalogSource = {
         id: `cat-src-${retailerId}-web`,
         retailerId,
@@ -1197,7 +1214,7 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
   /**
    * Rulează importul pentru un retailer specific (Lidl, Kaufland, Auchan sau orice retailer cu catalog/pagină web)
    */
-  static async runPilotImportForRetailer(retailerId: string): Promise<{
+  static async runPilotImportForRetailer(retailerId: string, requestedSourceIds?: string[]): Promise<{
     success: boolean;
     retailerId: string;
     totalExtracted: number;
@@ -1209,7 +1226,7 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
     documentUrl?: string;
     error?: string;
   }> {
-    const context = await this.resolveRetailerImportContext(retailerId);
+    const context = await this.resolveRetailerImportContext(retailerId, requestedSourceIds);
 
     if (context.sources.length === 0) {
       return {
@@ -1364,35 +1381,27 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
   /**
    * Rulează importul automat pentru toți retailerii marcați ca activi
    */
-  static async runActiveImports(): Promise<{
+  static async runActiveImports(requestedSourceIds?: string[]): Promise<{
     results: Array<{ retailerId: string; success: boolean; totalExtracted: number; published: number; usedWebsiteFallback?: boolean; error?: string }>;
     totalExtracted: number;
     totalPublished: number;
+    totalSourcesProcessed: number;
   }> {
-    const localSources = StorageService.getCatalogSources();
-    let dbSources: CatalogSource[] = [];
-    try {
-      dbSources = await DatabaseService.getCatalogSources();
-    } catch {}
-
-    const mergedById = new Map<string, CatalogSource>();
-    for (const s of localSources) mergedById.set(s.id, s);
-    for (const s of dbSources) mergedById.set(s.id, s);
-
-    const activeRetailerIds = Array.from(
-      new Set(
-        Array.from(mergedById.values())
-          .filter(s => s.status === 'active')
-          .map(s => s.retailerId)
-      )
+    const requestedSourceIdSet = requestedSourceIds ? new Set(requestedSourceIds) : null;
+    const activeSources = (await this.getActiveCatalogSources()).filter(
+      source => !requestedSourceIdSet || requestedSourceIdSet.has(source.id)
     );
+    const activeRetailerIds = Array.from(new Set(activeSources.map(source => source.retailerId)));
 
     const results: Array<{ retailerId: string; success: boolean; totalExtracted: number; published: number; usedWebsiteFallback?: boolean; error?: string }> = [];
     let totalExtracted = 0;
     let totalPublished = 0;
 
     for (const rId of activeRetailerIds) {
-      const res = await this.runPilotImportForRetailer(rId);
+      const retailerSourceIds = activeSources
+        .filter(source => source.retailerId === rId)
+        .map(source => source.id);
+      const res = await this.runPilotImportForRetailer(rId, retailerSourceIds);
       results.push({
         retailerId: res.retailerId,
         success: res.success,
@@ -1405,7 +1414,7 @@ Iaurt Natural 3.5% grasime 400g 2,99 lei`;
       totalPublished += res.published;
     }
 
-    return { results, totalExtracted, totalPublished };
+    return { results, totalExtracted, totalPublished, totalSourcesProcessed: activeSources.length };
   }
 
   /**

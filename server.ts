@@ -3412,13 +3412,27 @@ app.post('/api/admin/catalog-importer/run-pilot', requireAdminAuth, async (req, 
   }
 });
 
-// 7b. Rulare Import pentru toate sursele active
+// 7b. Previzualizare exactă a surselor care pot fi rulate
+app.get('/api/admin/catalog-importer/active-sources', requireAdminAuth, async (req, res) => {
+  try {
+    const sources = await CatalogStagingManager.getActiveCatalogSources();
+    res.json({ success: true, sources, count: sources.length });
+  } catch (err: any) {
+    res.status(500).json({ error: `Eroare la obținerea surselor active: ${err.message}` });
+  }
+});
+
+// 7c. Rulare Import pentru toate sursele active
 app.post('/api/admin/catalog-importer/run-active', requireAdminAuth, async (req, res) => {
   try {
-    const result = await CatalogStagingManager.runActiveImports();
+    const sourceIds = req.body?.sourceIds;
+    if (sourceIds !== undefined && (!Array.isArray(sourceIds) || sourceIds.some((id: unknown) => typeof id !== 'string'))) {
+      return res.status(400).json({ error: 'Lista surselor active selectate este invalidă.' });
+    }
+    const result = await CatalogStagingManager.runActiveImports(sourceIds);
     res.json({
       success: true,
-      message: `Rularea surselor active a fost finalizată: ${result.totalExtracted} oferte extrase, ${result.totalPublished} publicate.`,
+      message: `Rularea celor ${result.totalSourcesProcessed} surse active a fost finalizată: ${result.totalExtracted} oferte extrase, ${result.totalPublished} publicate.`,
       result
     });
   } catch (err: any) {
