@@ -22,6 +22,7 @@ import {
 import { Receipt, ReceiptItem, ProductCategory } from '../types.js';
 import { STORES } from '../data/mockData.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { ReceiptValidator } from '../services/ReceiptValidator.js';
 
 interface ReceiptScanViewProps {
   onReceiptSaved: (receipt: Receipt) => void | Promise<void>;
@@ -135,9 +136,13 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
         unitPrice: it.unitPrice || 0,
         totalPrice: it.totalPrice || (it.quantity || 1) * (it.unitPrice || 0),
         discount: it.discount || 0,
-        vatRate: it.vatRate || 9,
         category: (it.category as ProductCategory) || 'Alte produse',
-        confidence: 'high'
+        confidence: it.confidence === 'low' ? 'low' : it.confidence === 'medium' ? 'medium' : 'high',
+        confidenceScore: Number.isFinite(it.confidenceScore) ? it.confidenceScore : undefined,
+        vatRate: Number.isFinite(it.vatRate) ? it.vatRate : 9,
+        isWeighted: Boolean(it.isWeighted),
+        isSgr: Boolean(it.isSgr),
+        matchStatus: it.matchStatus === 'ambiguous' || it.matchStatus === 'unmatched' ? it.matchStatus : undefined
       }));
 
       const finalReceipt: Receipt = {
@@ -149,16 +154,20 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
         date: rec.date || new Date().toISOString().split('T')[0],
         time: rec.time || '12:00',
         items: mappedItems,
-        subtotal: rec.subtotal || mappedItems.reduce((s, i) => s + i.totalPrice, 0),
-        discountTotal: rec.discountTotal || 0,
-        total: rec.total || mappedItems.reduce((s, i) => s + i.totalPrice - i.discount, 0),
+        subtotal: rec.subtotal ?? mappedItems.reduce((s, i) => s + i.totalPrice, 0),
+        discountTotal: rec.discountTotal ?? 0,
+        sgrTotal: rec.sgrTotal ?? 0,
+        vatTotal: rec.vatTotal,
+        vatBreakdown: rec.vatBreakdown,
+        printedTotal: rec.printedTotal ?? rec.total,
+        total: rec.total ?? mappedItems.reduce((s, i) => s + i.totalPrice - i.discount, 0),
         currency: 'RON',
         imageUrl: imageSrc,
         createdAt: new Date().toISOString(),
         verifiedStatus: 'confirmed'
       };
 
-      setParsedReceipt(finalReceipt);
+      setParsedReceipt(ReceiptValidator.validate(finalReceipt));
     } catch (err: any) {
       console.error('Eroare scanare:', err);
       setScanError(err.message || 'Eroare la procesarea bonului. Verifică imaginea.');
@@ -184,12 +193,12 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
     const newSubtotal = Math.round(updatedItems.reduce((s, i) => s + i.totalPrice, 0) * 100) / 100;
     const newTotal = Math.round((newSubtotal - parsedReceipt.discountTotal) * 100) / 100;
 
-    setParsedReceipt({
+    setParsedReceipt(ReceiptValidator.validate({
       ...parsedReceipt,
       items: updatedItems,
       subtotal: newSubtotal,
       total: newTotal
-    });
+    }));
   };
 
   // Delete line item
@@ -199,12 +208,12 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
     const newSubtotal = Math.round(updatedItems.reduce((s, i) => s + i.totalPrice, 0) * 100) / 100;
     const newTotal = Math.max(0, Math.round((newSubtotal - parsedReceipt.discountTotal) * 100) / 100);
 
-    setParsedReceipt({
+    setParsedReceipt(ReceiptValidator.validate({
       ...parsedReceipt,
       items: updatedItems,
       subtotal: newSubtotal,
       total: newTotal
-    });
+    }));
   };
 
   // Add line item
@@ -225,12 +234,12 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
     const newSubtotal = Math.round(updatedItems.reduce((s, i) => s + i.totalPrice, 0) * 100) / 100;
     const newTotal = Math.round((newSubtotal - parsedReceipt.discountTotal) * 100) / 100;
 
-    setParsedReceipt({
+    setParsedReceipt(ReceiptValidator.validate({
       ...parsedReceipt,
       items: updatedItems,
       subtotal: newSubtotal,
       total: newTotal
-    });
+    }));
   };
 
   // Confirm & Save Receipt
@@ -239,7 +248,9 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
     setIsSaving(true);
     setScanError(null);
     try {
-      await onReceiptSaved(parsedReceipt);
+      const validatedReceipt = ReceiptValidator.validate(parsedReceipt);
+      await onReceiptSaved(validatedReceipt);
+      setParsedReceipt(validatedReceipt);
       setSaveSuccess(true);
     } catch (error) {
       setScanError(error instanceof Error ? error.message : 'Bonul nu a putut fi salvat.');
@@ -503,6 +514,16 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
             </div>
           </div>
 
+          {parsedReceipt.validationStatus === 'NEEDS_REVIEW' && (
+            <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-800/70 text-amber-900 dark:text-amber-100 text-xs" role="status" aria-live="polite">
+              <p className="font-bold">Bonul necesită verificare manuală</p>
+              <ul className="mt-1 list-disc pl-4 space-y-0.5">
+                {(parsedReceipt.validationReasons || []).map((reason, index) => <li key={`${index}-${reason}`}>{reason}</li>)}
+              </ul>
+              <p className="mt-2">SGR: {PriceComparisonService.formatRon(parsedReceipt.sgrTotal || 0)} · TVA calculat: {PriceComparisonService.formatRon(parsedReceipt.vatTotal || 0)}</p>
+            </div>
+          )}
+
           {/* Discrepancy Warning if Items Sum != Receipt Total */}
           {hasDiscrepancy && (
             <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200/80 dark:border-amber-800/70 text-amber-900 dark:text-amber-100 text-xs flex items-start gap-2.5">
@@ -531,7 +552,7 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {parsedReceipt.items.map((item, idx) => (
-                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                  <tr key={item.id} className={`${item.requiresManualReview ? 'bg-amber-50/70 dark:bg-amber-950/20' : ''} hover:bg-slate-50/50 dark:hover:bg-slate-800/40`}>
                     <td className="p-2.5 pl-4">
                       <input
                         type="text"
@@ -539,6 +560,11 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
                         onChange={e => handleUpdateItem(idx, 'rawName', e.target.value)}
                         className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 focus:border-emerald-500 focus:outline-none text-sm font-semibold text-slate-800 dark:text-slate-100"
                       />
+                      {item.requiresManualReview && (
+                        <p className="mt-1 text-[11px] font-medium text-amber-800 dark:text-amber-300" role="status">
+                          Verificare manuală: {(item.manualReviewReasons || []).join(' ')}
+                        </p>
+                      )}
                     </td>
                     <td className="p-2.5">
                       <input
