@@ -244,6 +244,8 @@ export interface ReceiptItem {
   };
   mathValid?: boolean;
   mathDiscrepancy?: number;
+  requiresManualReview?: boolean;
+  manualReviewReasons?: string[];
   matchStatus?: 'matched' | 'ambiguous' | 'unmatched';
   matchCandidates?: ReceiptMatchCandidate[];
   provenance?: {
