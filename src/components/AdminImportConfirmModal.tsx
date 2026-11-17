@@ -1,11 +1,8 @@
 import React from 'react';
 import {
   Play,
-  AlertTriangle,
   CheckCircle2,
   X,
-  Server,
-  Layers,
   ShieldCheck,
   RefreshCw
 } from 'lucide-react';
@@ -18,6 +15,7 @@ interface AdminImportConfirmModalProps {
   title: string;
   targetDescription: string;
   retailers: { id: string; name: string; format: string; status?: string; defaultStatus?: string }[];
+  listHeading?: string;
 }
 
 export const AdminImportConfirmModal: React.FC<AdminImportConfirmModalProps> = ({
@@ -27,7 +25,8 @@ export const AdminImportConfirmModal: React.FC<AdminImportConfirmModalProps> = (
   isRunning,
   title,
   targetDescription,
-  retailers
+  retailers,
+  listHeading
 }) => {
   if (!open) return null;
 
@@ -66,7 +65,7 @@ export const AdminImportConfirmModal: React.FC<AdminImportConfirmModalProps> = (
         {/* Retailers List */}
         <div className="space-y-2">
           <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">
-            Retaileri și surse ce vor fi procesate ({retailers.length}):
+            {listHeading || 'Retaileri și surse ce vor fi procesate'} ({retailers.length}):
           </span>
           <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden divide-y divide-slate-100 dark:divide-slate-800 max-h-48 overflow-y-auto text-xs bg-white dark:bg-slate-950/40">
             {retailers.length === 0 ? (
