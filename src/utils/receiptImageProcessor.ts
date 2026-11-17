@@ -384,7 +384,7 @@ export async function processReceiptDataUrl(
     id,
     fileName,
     mimeType,
-    originalDataUrl,
+    originalDataUrl: dataUrl,
     enhancedDataUrl,
     width: finalCanvas.width,
     height: finalCanvas.height,
