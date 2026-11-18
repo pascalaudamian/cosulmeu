@@ -389,9 +389,88 @@ export interface MultiStoreOptimization {
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
+export type CookieConsentCategory = 'necessary' | 'preferences' | 'analytics' | 'marketing';
+
+export type CookieConsentMethod = 'banner_accept_all' | 'banner_reject_optional' | 'custom_preferences' | 'withdrawal';
+
+export interface CookieConsentCategoriesState {
+  necessary: true;
+  preferences: boolean;
+  analytics: boolean;
+  marketing: boolean;
+}
+
+export interface CookieConsentState {
+  visitorSessionId: string;
+  policyVersion: string;
+  bannerVersion: string;
+  consentGiven: boolean;
+  consentMethod: CookieConsentMethod;
+  categories: CookieConsentCategoriesState;
+  updatedAt: string;
+}
+
+export type GdprRequestType =
+  | 'access_data'
+  | 'export_data'
+  | 'rectification'
+  | 'erasure_account'
+  | 'erasure_optional_data'
+  | 'restriction_processing'
+  | 'objection'
+  | 'withdraw_consent'
+  | 'other';
+
+export type GdprRequestStatus = 'noua' | 'in_verificare' | 'procesata' | 'respinsa_justificat';
+
+export interface GdprRequestRecord {
+  id: string;
+  userId?: string;
+  requestType: GdprRequestType;
+  status: GdprRequestStatus;
+  details?: string | null;
+  requestedFormat?: 'json' | 'csv' | null;
+  requestedAt: string;
+  resolvedAt?: string | null;
+  adminResponse?: string | null;
+}
+
+export interface CommunicationConsentRecord {
+  id: string;
+  userId?: string;
+  channel: 'email_marketing' | 'optional_notifications' | 'price_alerts' | 'essential_account';
+  isGranted: boolean;
+  consentTextVersion: string;
+  source: 'signup' | 'profile' | 'gdpr_center' | 'withdrawal';
+  recordedAt: string;
+}
+
+export interface GdprDataExportPayload {
+  exportedAt: string;
+  policyVersion: string;
+  operatorNote: string;
+  account: {
+    userId: string;
+    email?: string;
+    createdAt?: string;
+  };
+  profile: Record<string, any> | null;
+  preferences: Record<string, any> | null;
+  shoppingLists: Array<Record<string, any>>;
+  priceAlerts: Array<Record<string, any>>;
+  receipts: Array<Record<string, any>>;
+  priceObservations: Array<Record<string, any>>;
+  storageFiles: Array<{ bucket: string; path: string }>;
+  communicationConsents: CommunicationConsentRecord[];
+  cookieConsents: Array<Record<string, any>>;
+  gdprRequests: GdprRequestRecord[];
+}
+
 export interface UserProfile {
   id?: string;
   name: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
   username?: string;
   avatarUrl?: string;
@@ -407,6 +486,13 @@ export interface UserProfile {
   role?: 'user' | 'admin';
   monthlySavingsGoal: number;
   notificationsEnabled: boolean;
+  optionalNotificationsEnabled?: boolean;
+  marketingConsent?: boolean;
+  marketingConsentUpdatedAt?: string;
+  marketingConsentWithdrawnAt?: string;
+  restrictionRequested?: boolean;
+  restrictionReason?: string;
+  restrictionUpdatedAt?: string;
   defaultTransportCostEstimate: number;
   useLoyaltyCards: boolean; // whether user has supermarket loyalty cards
   createdAt?: string;

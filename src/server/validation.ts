@@ -330,3 +330,79 @@ export function validateReceiptImageBuffer(
   };
 }
 
+// =========================================================================
+// GDPR & Cookie Consent Validation Schemas
+// =========================================================================
+
+export const gdprConsentRecordSchema = z.object({
+  visitorSessionId: z.string().trim().min(6).max(120),
+  policyVersion: z.string().trim().min(2).max(64),
+  bannerVersion: z.string().trim().min(2).max(64),
+  consentMethod: z.enum(['banner_accept_all', 'banner_reject_optional', 'custom_preferences', 'withdrawal']),
+  categories: z.object({
+    necessary: z.literal(true).default(true),
+    preferences: z.boolean().default(false),
+    analytics: z.boolean().default(false),
+    marketing: z.boolean().default(false)
+  })
+});
+
+export const gdprProfileUpdateSchema = z.object({
+  firstName: z.string().trim().max(80).optional().nullable(),
+  lastName: z.string().trim().max(80).optional().nullable(),
+  displayName: z.string().trim().max(120).optional().nullable(),
+  email: z.string().trim().email('Adresa de email este invalidă.').max(160).optional(),
+  phone: z.string().trim().max(32).optional().nullable(),
+  city: z.string().trim().max(80).optional().nullable(),
+  preferredLanguage: z.enum(['ro', 'en']).optional(),
+  optionalNotificationsEnabled: z.boolean().optional(),
+  marketingConsent: z.boolean().optional(),
+  restrictionRequested: z.boolean().optional(),
+  restrictionReason: z.string().trim().max(400).optional().nullable()
+});
+
+export const gdprRequestTypeSchema = z.enum([
+  'access_data',
+  'export_data',
+  'rectification',
+  'erasure_account',
+  'erasure_optional_data',
+  'restriction_processing',
+  'objection',
+  'withdraw_consent',
+  'other'
+]);
+
+export const gdprRequestStatusSchema = z.enum([
+  'noua',
+  'in_verificare',
+  'procesata',
+  'respinsa_justificat'
+]);
+
+export const gdprRequestCreateSchema = z.object({
+  requestType: gdprRequestTypeSchema,
+  details: z.string().trim().max(1500).optional().nullable(),
+  requestedFormat: z.enum(['json', 'csv']).optional().nullable()
+});
+
+export const gdprAdminRequestUpdateSchema = z.object({
+  status: gdprRequestStatusSchema,
+  adminResponse: z.string().trim().max(2000).optional().nullable()
+});
+
+export const gdprWithdrawConsentSchema = z.object({
+  channels: z
+    .array(z.enum(['email_marketing', 'optional_notifications', 'price_alerts', 'cookies_optional']))
+    .min(1, 'Selectează cel puțin o categorie pentru retragere.')
+});
+
+export const gdprDeleteAccountSchema = z.object({
+  confirmationText: z.string().trim().refine(val => val.toUpperCase() === 'STERGE CONTUL', {
+    message: 'Trebuie să tastezi exact „STERGE CONTUL” pentru a confirma ștergerea ireversibilă.'
+  }),
+  password: z.string().min(1).max(200).optional(),
+  reason: z.string().trim().max(500).optional().nullable()
+});
+
+

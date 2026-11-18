@@ -17,7 +17,7 @@ import { IndexerScheduler } from './src/services/IndexerScheduler.ts';
 import { PriceQualityMonitor } from './src/indexing/PriceQualityMonitor.ts';
 import { CATEGORIES_TAXONOMY, mapRetailerCategoryToStandard } from './src/data/categories.ts';
 import { PRODUCTS, STORES } from './src/data/mockData.ts';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from './src/lib/supabase.ts';
 import { CatalogDownloader } from './src/indexing/catalog/CatalogDownloader.ts';
 import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.ts';
@@ -38,6 +38,12 @@ import {
   validateReceiptMath
 } from './src/services/ReceiptParserEngine.ts';
 import {
+  gdprAdminRequestUpdateSchema,
+  gdprConsentRecordSchema,
+  gdprDeleteAccountSchema,
+  gdprProfileUpdateSchema,
+  gdprRequestCreateSchema,
+  gdprWithdrawConsentSchema,
   parseReceiptTextRequestSchema,
   priceAuditQuerySchema,
   priceAuditRemediationRequestSchema,
@@ -45,6 +51,10 @@ import {
   scanReceiptRequestSchema,
   validateReceiptImageBuffer
 } from './src/server/validation.ts';
+import {
+  MARKETING_CONSENT_TEXT_VERSION,
+  PRIVACY_POLICY_VERSION
+} from './src/config/legalConfig.ts';
 
 function sanitizeApiImageUrl(rawUrl?: string | null): string | undefined {
   if (!rawUrl || !rawUrl.trim()) return undefined;
@@ -788,6 +798,1171 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
 
   next();
 };
+
+// =========================================================================
+// GDPR & Cookie Consent Backend Endpoints (Server-Side Security & RLS)
+// =========================================================================
+
+function getSupabaseAdminClient() {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceRoleKey || !serviceRoleKey.trim()) {
+    return null;
+  }
+  return createClient(SUPABASE_URL, serviceRoleKey.trim(), {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+}
+
+function hashUserIdForLog(userId: string): string {
+  return crypto.createHash('sha256').update(userId).digest('hex');
+}
+
+function escapeCsvCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  let str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  // Protect spreadsheets from formula injection
+  if (/^[=+\-@\t\r]/.test(str)) {
+    str = `'${str}`;
+  }
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+const AUDIT_PII_FORBIDDEN_KEYS = new Set([
+  'email',
+  'phone',
+  'phone_number',
+  'first_name',
+  'last_name',
+  'full_name',
+  'display_name',
+  'ip',
+  'ip_address',
+  'user_agent',
+  'password',
+  'token',
+  'cnp'
+]);
+
+function sanitizeAuditMetadata(metadata?: Record<string, unknown>): Record<string, unknown> {
+  if (!metadata || typeof metadata !== 'object') return {};
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(metadata)) {
+    if (!AUDIT_PII_FORBIDDEN_KEYS.has(k.toLowerCase())) {
+      clean[k] = v;
+    }
+  }
+  return clean;
+}
+
+async function logGdprOperation(params: {
+  operationType:
+    | 'consent_recorded'
+    | 'data_accessed'
+    | 'data_exported'
+    | 'data_rectified'
+    | 'consent_withdrawn'
+    | 'restriction_updated'
+    | 'gdpr_request_created'
+    | 'gdpr_request_resolved'
+    | 'account_deleted';
+  userId?: string | null;
+  actorType: 'user' | 'admin' | 'anonymous' | 'system';
+  status?: 'success' | 'partial' | 'failed';
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const adminClient = getSupabaseAdminClient();
+  const actorHash = params.userId ? hashUserIdForLog(params.userId) : null;
+  const safeMetadata = sanitizeAuditMetadata(params.metadata);
+  const status = params.status || 'success';
+
+  if (adminClient) {
+    try {
+      await adminClient.from('gdpr_operation_logs').insert({
+        operation_type: params.operationType,
+        user_id_hash: actorHash,
+        actor_type: params.actorType,
+        status,
+        metadata: safeMetadata
+      });
+    } catch {
+      // ignore if migration 011 has not yet been applied
+    }
+
+    try {
+      await adminClient.from('audit_log').insert({
+        action: params.operationType,
+        actor_hash: actorHash,
+        actor_type: params.actorType,
+        resource_type:
+          params.operationType === 'account_deleted'
+            ? 'account'
+            : params.operationType === 'data_exported'
+            ? 'gdpr_export'
+            : params.operationType === 'consent_recorded' || params.operationType === 'consent_withdrawn'
+            ? 'consent'
+            : 'gdpr_requests',
+        status,
+        metadata: safeMetadata
+      });
+    } catch {
+      // ignore if audit_log migration has not yet been applied
+    }
+  }
+}
+
+async function listUserStorageFiles(
+  client: SupabaseClient<any, any, any>,
+  bucket: string,
+  userId: string
+): Promise<string[]> {
+  try {
+    const { data, error } = await client.storage.from(bucket).list(userId, { limit: 200 });
+    if (error || !Array.isArray(data)) return [];
+    const results: string[] = [];
+    for (const entry of data) {
+      if (!entry.name) continue;
+      if (entry.id) {
+        results.push(`${userId}/${entry.name}`);
+      } else {
+        // Nested folder (e.g., receiptId/page.jpg)
+        const { data: nested } = await client.storage
+          .from(bucket)
+          .list(`${userId}/${entry.name}`, { limit: 100 });
+        if (Array.isArray(nested)) {
+          for (const sub of nested) {
+            if (sub.name) {
+              results.push(`${userId}/${entry.name}/${sub.name}`);
+            }
+          }
+        }
+      }
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+async function buildUserGdprDataset(
+  userClient: SupabaseClient<any, any, any>,
+  user: { id: string; email?: string; created_at?: string }
+) {
+  const [
+    profileRes,
+    prefsRes,
+    listsRes,
+    alertsRes,
+    receiptsRes,
+    obsRes,
+    commRes,
+    cookieRes,
+    requestsRes,
+    receiptFiles,
+    avatarFiles
+  ] = await Promise.all([
+    userClient.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+    userClient.from('user_preferences').select('*').eq('user_id', user.id).maybeSingle(),
+    userClient
+      .from('shopping_lists')
+      .select('*, shopping_list_items(*)')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false }),
+    userClient
+      .from('price_alerts')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false }),
+    userClient
+      .from('receipts')
+      .select('*, receipt_items(*)')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false }),
+    userClient
+      .from('user_price_observations')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('purchase_date', { ascending: false }),
+    userClient
+      .from('communication_consents')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('recorded_at', { ascending: false }),
+    userClient
+      .from('cookie_consents')
+      .select('id,visitor_session_id,policy_version,banner_version,consent_method,categories,consent_given,created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false }),
+    userClient
+      .from('gdpr_requests')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('requested_at', { ascending: false }),
+    listUserStorageFiles(userClient, 'receipt-images', user.id),
+    listUserStorageFiles(userClient, 'avatars', user.id)
+  ]);
+
+  const storageFiles = [
+    ...receiptFiles.map(filePath => ({ bucket: 'receipt-images', path: filePath })),
+    ...avatarFiles.map(filePath => ({ bucket: 'avatars', path: filePath }))
+  ];
+
+  return {
+    exportedAt: new Date().toISOString(),
+    policyVersion: PRIVACY_POLICY_VERSION,
+    operatorNote:
+      'Export generat pentru titularul contului din platforma Coșul Meu (operator persoană fizică, România).',
+    account: {
+      userId: user.id,
+      email: user.email,
+      createdAt: user.created_at
+    },
+    profile: profileRes.data || null,
+    preferences: prefsRes.data || null,
+    shoppingLists: listsRes.data || [],
+    priceAlerts: alertsRes.data || [],
+    receipts: receiptsRes.data || [],
+    priceObservations: obsRes.data || [],
+    storageFiles,
+    communicationConsents: (commRes.data || []).map((row: any) => ({
+      id: row.id,
+      userId: row.user_id,
+      channel: row.channel,
+      isGranted: Boolean(row.is_granted),
+      consentTextVersion: row.consent_text_version,
+      source: row.source,
+      recordedAt: row.recorded_at
+    })),
+    cookieConsents: cookieRes.data || [],
+    gdprRequests: (requestsRes.data || []).map((row: any) => ({
+      id: row.id,
+      userId: row.user_id,
+      requestType: row.request_type,
+      status: row.status,
+      details: row.details,
+      requestedFormat: row.requested_format,
+      requestedAt: row.requested_at,
+      resolvedAt: row.resolved_at,
+      adminResponse: row.admin_response
+    }))
+  };
+}
+
+function isMissingRelationError(err: { code?: string; message?: string } | null | undefined): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').toUpperCase();
+  const msg = String(err.message || '').toLowerCase();
+  return (
+    code === 'PGRST205' ||
+    code === '42P01' ||
+    msg.includes('could not find the table') ||
+    msg.includes('does not exist')
+  );
+}
+
+export interface GdprAccountDeletionSummary {
+  receiptImagesDeleted: number;
+  avatarFilesDeleted: number;
+  tablesCleaned: string[];
+  failedTables: Array<{ table: string; error: string }>;
+  storageErrors: Array<{ bucket: string; error: string }>;
+  retainedComplianceProofs: string[];
+  authUserDeleted: boolean;
+  completedFully: boolean;
+  partialFailure: boolean;
+  remediationSteps: string[];
+  remediationRequestId?: string | null;
+  warning?: string;
+}
+
+async function executeGdprAccountDeletion(params: {
+  userId: string;
+  cleanupClient: SupabaseClient<any, any, any>;
+  adminClient: SupabaseClient<any, any, any> | null;
+  reason?: string | null;
+}): Promise<{ summary: GdprAccountDeletionSummary }> {
+  const { userId, cleanupClient, adminClient } = params;
+  const summary: GdprAccountDeletionSummary = {
+    receiptImagesDeleted: 0,
+    avatarFilesDeleted: 0,
+    tablesCleaned: [],
+    failedTables: [],
+    storageErrors: [],
+    retainedComplianceProofs: [
+      'audit_log / gdpr_operation_logs (exclusiv hash SHA-256 al operațiunii, fără PII)',
+      'cookie_consents (pseudonimizat cu user_id = NULL când tabelul este aplicat și service_role este activ)'
+    ],
+    authUserDeleted: false,
+    completedFully: false,
+    partialFailure: false,
+    remediationSteps: []
+  };
+
+  // 1. Delete private receipt images & avatars, recording any storage errors
+  for (const bucket of ['receipt-images', 'avatars'] as const) {
+    try {
+      const files = await listUserStorageFiles(cleanupClient, bucket, userId);
+      if (files.length > 0) {
+        const { error: removeErr } = await cleanupClient.storage.from(bucket).remove(files);
+        if (removeErr) {
+          summary.storageErrors.push({ bucket, error: removeErr.message || 'Eroare ștergere fișiere Storage' });
+        } else if (bucket === 'receipt-images') {
+          summary.receiptImagesDeleted = files.length;
+        } else {
+          summary.avatarFilesDeleted = files.length;
+        }
+      }
+    } catch (err: any) {
+      summary.storageErrors.push({ bucket, error: err?.message || 'Excepție ștergere Storage' });
+    }
+  }
+
+  // 2. Delete user-owned rows cleanly (children first) with explicit error checking
+  try {
+    const { data: userLists, error: listsSelectErr } = await cleanupClient
+      .from('shopping_lists')
+      .select('id')
+      .eq('user_id', userId);
+    if (listsSelectErr && !isMissingRelationError(listsSelectErr)) {
+      summary.failedTables.push({ table: 'shopping_lists', error: listsSelectErr.message });
+    } else if (Array.isArray(userLists) && userLists.length > 0) {
+      const { error: itemsDelErr } = await cleanupClient
+        .from('shopping_list_items')
+        .delete()
+        .in('list_id', userLists.map((l: any) => l.id));
+      if (itemsDelErr && !isMissingRelationError(itemsDelErr)) {
+        summary.failedTables.push({ table: 'shopping_list_items', error: itemsDelErr.message });
+      } else {
+        summary.tablesCleaned.push('shopping_list_items');
+      }
+    }
+  } catch (err: any) {
+    summary.failedTables.push({ table: 'shopping_list_items', error: err?.message || 'Eroare ștergere articole liste' });
+  }
+
+  for (const table of [
+    'shopping_lists',
+    'price_alerts',
+    'user_price_observations',
+    'receipt_items',
+    'receipts',
+    'communication_consents',
+    'gdpr_requests',
+    'user_preferences'
+  ]) {
+    try {
+      const { error: delErr } = await cleanupClient.from(table).delete().eq('user_id', userId);
+      if (!delErr) {
+        summary.tablesCleaned.push(table);
+      } else if (!isMissingRelationError(delErr)) {
+        summary.failedTables.push({ table, error: delErr.message });
+      }
+    } catch (err: any) {
+      summary.failedTables.push({ table, error: err?.message || 'Eroare ștergere tabel' });
+    }
+  }
+
+  // 3. Keep cookie consent proof pseudonymized (unlink user_id) via service_role when present
+  if (adminClient) {
+    try {
+      const { error: ccErr } = await adminClient
+        .from('cookie_consents')
+        .update({ user_id: null })
+        .eq('user_id', userId);
+      if (ccErr && !isMissingRelationError(ccErr)) {
+        summary.failedTables.push({ table: 'cookie_consents', error: ccErr.message });
+      }
+    } catch (err: any) {
+      summary.failedTables.push({ table: 'cookie_consents', error: err?.message || 'Eroare pseudonimizare cookie_consents' });
+    }
+  }
+
+  // 4. Delete profile row
+  try {
+    const { error: profDelErr } = await cleanupClient.from('profiles').delete().eq('id', userId);
+    if (!profDelErr) {
+      summary.tablesCleaned.push('profiles');
+    } else if (!isMissingRelationError(profDelErr)) {
+      summary.failedTables.push({ table: 'profiles', error: profDelErr.message });
+    }
+  } catch (err: any) {
+    summary.failedTables.push({ table: 'profiles', error: err?.message || 'Eroare ștergere profiles' });
+  }
+
+  // 5. Delete Supabase Auth account (requires service_role)
+  if (adminClient) {
+    try {
+      const { error: deleteUserErr } = await adminClient.auth.admin.deleteUser(userId);
+      if (!deleteUserErr) {
+        summary.authUserDeleted = true;
+      } else {
+        summary.remediationSteps.push(
+          `Ștergerea contului din Supabase Auth a eșuat (${deleteUserErr.message}). Reîncearcă sau solicită intervenția operatorului.`
+        );
+      }
+    } catch (err: any) {
+      summary.remediationSteps.push(
+        `Eroare neașteptată la ștergerea Supabase Auth (${err?.message || 'necunoscută'}).`
+      );
+    }
+  } else {
+    summary.remediationSteps.push(
+      'Cheia server-side SUPABASE_SERVICE_ROLE_KEY nu este configurată în acest mediu; ștergerea înregistrării din Supabase Auth necesită configurarea cheii în Vercel sau intervenția manuală a operatorului.'
+    );
+  }
+
+  if (summary.storageErrors.length > 0) {
+    summary.remediationSteps.push(
+      `Fișiere Storage neșterse în bucket-urile: ${summary.storageErrors.map(s => s.bucket).join(', ')}. Reîncearcă ștergerea din panoul de administrare Supabase Storage.`
+    );
+  }
+
+  if (summary.failedTables.length > 0) {
+    summary.remediationSteps.push(
+      `Tabele cu erori la ștergere: ${summary.failedTables.map(f => f.table).join(', ')}. Verifică politicile RLS sau conexiunea la baza de date și reîncearcă.`
+    );
+  }
+
+  summary.completedFully =
+    summary.failedTables.length === 0 &&
+    summary.storageErrors.length === 0 &&
+    summary.authUserDeleted;
+  summary.partialFailure = !summary.completedFully;
+
+  if (summary.partialFailure) {
+    summary.warning = summary.authUserDeleted
+      ? 'Contul Auth a fost șters, dar au existat erori parțiale la curățarea unor tabele sau fișiere.'
+      : 'Datele aplicației au fost curățate parțial/integral, dar contul de autentificare (auth.users) sau unele resurse necesită remediere suplimentară.';
+
+    // Create a fallback tracking request if Auth user still exists so operator can complete Art. 17 erasure
+    if (!summary.authUserDeleted) {
+      try {
+        const ticketClient = adminClient || cleanupClient;
+        const { data: ticketRow } = await ticketClient
+          .from('gdpr_requests')
+          .insert({
+            user_id: userId,
+            request_type: 'erasure_account',
+            status: 'in_verificare',
+            details: `Ștergere parțială în așteptare finalizare (Auth=${summary.authUserDeleted}; erori tabele=${summary.failedTables.length}; erori storage=${summary.storageErrors.length}).`
+          })
+          .select('id')
+          .maybeSingle();
+        if (ticketRow?.id) {
+          summary.remediationRequestId = ticketRow.id;
+        }
+      } catch {
+        // non-blocking if gdpr_requests table not yet applied
+      }
+    }
+  }
+
+  await logGdprOperation({
+    operationType: 'account_deleted',
+    userId,
+    actorType: 'user',
+    status: summary.completedFully ? 'success' : 'partial',
+    metadata: {
+      receiptImagesDeleted: summary.receiptImagesDeleted,
+      avatarFilesDeleted: summary.avatarFilesDeleted,
+      tablesCleanedCount: summary.tablesCleaned.length,
+      failedTablesCount: summary.failedTables.length,
+      storageErrorsCount: summary.storageErrors.length,
+      authUserDeleted: summary.authUserDeleted,
+      completedFully: summary.completedFully
+    }
+  });
+
+  return { summary };
+}
+
+// 1. Cookie Consent Proof Endpoint (public or authenticated)
+app.post('/api/gdpr/consent', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const parsed = gdprConsentRecordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      success: false,
+      error: parsed.error.issues[0]?.message || 'Date invalide pentru consimțământ cookie.'
+    });
+  }
+
+  const auth = await getAuthenticatedSupabaseUser(req);
+  const input = parsed.data;
+  const client = auth ? auth.userClient : supabase;
+  let persistedInDb = false;
+
+  try {
+    const { error: insertErr } = await client.from('cookie_consents').insert({
+      user_id: auth ? auth.user.id : null,
+      visitor_session_id: input.visitorSessionId,
+      policy_version: input.policyVersion,
+      banner_version: input.bannerVersion,
+      consent_method: input.consentMethod,
+      categories: input.categories,
+      consent_given: true,
+      user_agent_summary: String(req.headers['user-agent'] || '').slice(0, 180) || null
+    });
+    if (!insertErr) {
+      persistedInDb = true;
+    }
+
+    if (auth) {
+      await auth.userClient
+        .from('user_preferences')
+        .upsert(
+          {
+            user_id: auth.user.id,
+            cookie_consent_version: input.policyVersion,
+            cookie_preferences: input.categories,
+            updated_at: new Date().toISOString()
+          },
+          { onConflict: 'user_id' }
+        );
+    }
+  } catch {
+    persistedInDb = false;
+  }
+
+  await logGdprOperation({
+    operationType: input.consentMethod === 'withdrawal' ? 'consent_withdrawn' : 'consent_recorded',
+    userId: auth?.user.id || null,
+    actorType: auth ? 'user' : 'anonymous',
+    status: persistedInDb ? 'success' : 'partial',
+    metadata: {
+      policyVersion: input.policyVersion,
+      consentMethod: input.consentMethod,
+      categories: input.categories
+    }
+  });
+
+  return res.json({
+    success: true,
+    persistedInDb,
+    consent: {
+      visitorSessionId: input.visitorSessionId,
+      policyVersion: input.policyVersion,
+      bannerVersion: input.bannerVersion,
+      consentMethod: input.consentMethod,
+      categories: input.categories
+    }
+  });
+});
+
+// 2. Read strictly own GDPR personal data summary (Auth required)
+app.get('/api/gdpr/my-data', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară pentru consultarea datelor personale.' });
+  }
+
+  try {
+    const dataset = await buildUserGdprDataset(auth.userClient, auth.user);
+    await logGdprOperation({
+      operationType: 'data_accessed',
+      userId: auth.user.id,
+      actorType: 'user',
+      status: 'success'
+    });
+    return res.json({ success: true, data: dataset });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Nu am putut prelua datele personale ale contului.' });
+  }
+});
+
+// 3. Rectify own profile, contact details, communication preferences or restriction flag
+app.patch('/api/gdpr/profile', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+  }
+
+  const parsed = gdprProfileUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      success: false,
+      error: parsed.error.issues[0]?.message || 'Date invalide pentru actualizarea profilului.'
+    });
+  }
+
+  const input = parsed.data;
+  const now = new Date().toISOString();
+  const profilePatch: Record<string, unknown> = { updated_at: now };
+
+  if (input.firstName !== undefined) profilePatch.first_name = input.firstName || null;
+  if (input.lastName !== undefined) profilePatch.last_name = input.lastName || null;
+  if (input.displayName !== undefined) {
+    profilePatch.display_name = input.displayName || null;
+  } else if (input.firstName !== undefined || input.lastName !== undefined) {
+    const combined = [input.firstName, input.lastName].filter(Boolean).join(' ').trim();
+    if (combined) profilePatch.display_name = combined;
+  }
+  if (input.phone !== undefined) profilePatch.phone = input.phone || null;
+  if (input.city !== undefined) profilePatch.city = input.city || 'București';
+  if (input.preferredLanguage !== undefined) profilePatch.preferred_language = input.preferredLanguage;
+  if (input.restrictionRequested !== undefined) {
+    profilePatch.restriction_requested = input.restrictionRequested;
+    profilePatch.restriction_reason = input.restrictionReason || null;
+    profilePatch.restriction_updated_at = now;
+  }
+
+  const { error: profErr } = await auth.userClient
+    .from('profiles')
+    .update(profilePatch)
+    .eq('id', auth.user.id);
+
+  if (profErr) {
+    return res.status(500).json({ success: false, error: 'Nu am putut actualiza profilul.' });
+  }
+
+  let emailChangePendingConfirmation = false;
+  if (input.email && input.email.toLowerCase() !== (auth.user.email || '').toLowerCase()) {
+    const { error: emailErr } = await auth.userClient.auth.updateUser({ email: input.email });
+    if (emailErr) {
+      return res.status(400).json({
+        success: false,
+        error: emailErr.message || 'Nu am putut iniția modificarea adresei de email.'
+      });
+    }
+    emailChangePendingConfirmation = true;
+  }
+
+  const prefPatch: Record<string, unknown> = { user_id: auth.user.id, updated_at: now };
+  let hasPrefUpdates = false;
+  const commInserts: Array<Record<string, unknown>> = [];
+
+  if (input.optionalNotificationsEnabled !== undefined) {
+    prefPatch.optional_notifications_enabled = input.optionalNotificationsEnabled;
+    hasPrefUpdates = true;
+    commInserts.push({
+      user_id: auth.user.id,
+      channel: 'optional_notifications',
+      is_granted: input.optionalNotificationsEnabled,
+      consent_text_version: MARKETING_CONSENT_TEXT_VERSION,
+      source: 'gdpr_center'
+    });
+  }
+
+  if (input.marketingConsent !== undefined) {
+    prefPatch.marketing_consent = input.marketingConsent;
+    prefPatch.marketing_consent_updated_at = now;
+    if (!input.marketingConsent) {
+      prefPatch.marketing_consent_withdrawn_at = now;
+    }
+    hasPrefUpdates = true;
+    commInserts.push({
+      user_id: auth.user.id,
+      channel: 'email_marketing',
+      is_granted: input.marketingConsent,
+      consent_text_version: MARKETING_CONSENT_TEXT_VERSION,
+      source: input.marketingConsent ? 'gdpr_center' : 'withdrawal'
+    });
+  }
+
+  if (hasPrefUpdates) {
+    await auth.userClient.from('user_preferences').upsert(prefPatch, { onConflict: 'user_id' });
+  }
+  if (commInserts.length > 0) {
+    try {
+      await auth.userClient.from('communication_consents').insert(commInserts);
+    } catch {
+      // ignore if table not yet created
+    }
+  }
+
+  const profileFieldsUpdated = Object.keys(profilePatch).filter(k => k !== 'updated_at');
+  const withdrawnChannels: string[] = [];
+  if (input.marketingConsent === false) withdrawnChannels.push('email_marketing');
+  if (input.optionalNotificationsEnabled === false) withdrawnChannels.push('optional_notifications');
+
+  if (withdrawnChannels.length > 0) {
+    await logGdprOperation({
+      operationType: 'consent_withdrawn',
+      userId: auth.user.id,
+      actorType: 'user',
+      status: 'success',
+      metadata: { channels: withdrawnChannels, source: 'gdpr_profile_patch' }
+    });
+  }
+
+  if (input.restrictionRequested !== undefined || profileFieldsUpdated.length > 0 || emailChangePendingConfirmation) {
+    await logGdprOperation({
+      operationType: input.restrictionRequested !== undefined ? 'restriction_updated' : 'data_rectified',
+      userId: auth.user.id,
+      actorType: 'user',
+      status: 'success',
+      metadata: {
+        fieldsUpdated: profileFieldsUpdated,
+        emailChangePendingConfirmation
+      }
+    });
+  }
+
+  return res.json({
+    success: true,
+    emailChangePendingConfirmation,
+    message: emailChangePendingConfirmation
+      ? 'Datele au fost actualizate. Verifică noua adresă de email pentru confirmarea schimbării.'
+      : 'Datele personale au fost actualizate cu succes.'
+  });
+});
+
+// 4. Export own GDPR data in JSON or CSV (Auth required)
+app.get('/api/gdpr/export', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară pentru exportul datelor.' });
+  }
+
+  const format = String(req.query.format || 'json').toLowerCase() === 'csv' ? 'csv' : 'json';
+
+  try {
+    const dataset = await buildUserGdprDataset(auth.userClient, auth.user);
+    try {
+      await auth.userClient.from('gdpr_requests').insert({
+        user_id: auth.user.id,
+        request_type: 'export_data',
+        status: 'procesata',
+        requested_format: format,
+        details: `Export automat generat de utilizator (${format.toUpperCase()}).`,
+        resolved_at: new Date().toISOString()
+      });
+    } catch {
+      // non-blocking audit
+    }
+
+    await logGdprOperation({
+      operationType: 'data_exported',
+      userId: auth.user.id,
+      actorType: 'user',
+      status: 'success',
+      metadata: { format }
+    });
+
+    if (format === 'csv') {
+      const rows: string[][] = [['Categorie', 'Identificator', 'Data', 'Detalii']];
+      rows.push(['Cont', dataset.account.userId, dataset.account.createdAt || '', dataset.account.email || '']);
+      if (dataset.profile) {
+        rows.push([
+          'Profil',
+          String(dataset.profile.id || ''),
+          String(dataset.profile.updated_at || ''),
+          JSON.stringify({
+            firstName: dataset.profile.first_name,
+            lastName: dataset.profile.last_name,
+            displayName: dataset.profile.display_name,
+            phone: dataset.profile.phone,
+            city: dataset.profile.city
+          })
+        ]);
+      }
+      if (dataset.preferences) {
+        rows.push(['Preferinte', String(dataset.preferences.user_id || ''), String(dataset.preferences.updated_at || ''), JSON.stringify(dataset.preferences)]);
+      }
+      for (const l of dataset.shoppingLists) {
+        rows.push(['ListaCumparaturi', String(l.id || ''), String(l.created_at || ''), `${l.name || ''} (${Array.isArray(l.shopping_list_items) ? l.shopping_list_items.length : 0} articole)`]);
+      }
+      for (const a of dataset.priceAlerts) {
+        rows.push(['AlertaPret', String(a.id || ''), String(a.created_at || ''), `${a.product_name || ''}: tinta ${a.target_price || ''}`]);
+      }
+      for (const r of dataset.receipts) {
+        rows.push(['BonFiscal', String(r.id || ''), String(r.purchase_date || r.created_at || ''), `${r.store_name || ''} | Total ${r.total_amount || 0} RON`]);
+      }
+      for (const o of dataset.priceObservations) {
+        rows.push(['ObservatiePret', String(o.id || ''), String(o.purchase_date || ''), `${o.product_name || ''} (${o.store_name || ''}): ${o.effective_paid_unit_price || 0} RON`]);
+      }
+      for (const c of dataset.communicationConsents) {
+        rows.push(['ConsimtamantComunicari', c.id, c.recordedAt, `${c.channel}=${c.isGranted} (${c.source})`]);
+      }
+      for (const ck of dataset.cookieConsents) {
+        rows.push(['ConsimtamantCookie', String(ck.id || ''), String(ck.created_at || ''), JSON.stringify(ck.categories)]);
+      }
+      for (const gr of dataset.gdprRequests) {
+        rows.push(['SolicitareGDPR', gr.id, gr.requestedAt, `${gr.requestType} | status=${gr.status}`]);
+      }
+
+      const csvBody = '\uFEFF' + rows.map(line => line.map(escapeCsvCell).join(',')).join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="cosul-meu-date-personale-${new Date().toISOString().slice(0, 10)}.csv"`);
+      return res.send(csvBody);
+    }
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="cosul-meu-date-personale-${new Date().toISOString().slice(0, 10)}.json"`);
+    return res.send(JSON.stringify(dataset, null, 2));
+  } catch {
+    return res.status(500).json({ success: false, error: 'Exportul datelor personale a eșuat.' });
+  }
+});
+
+// 5. List & Submit own GDPR Requests (Auth required, strictly isolated to auth.user.id)
+app.get('/api/gdpr/requests', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+  }
+
+  const { data, error } = await auth.userClient
+    .from('gdpr_requests')
+    .select('*')
+    .eq('user_id', auth.user.id)
+    .order('requested_at', { ascending: false });
+
+  if (error) {
+    return res.status(500).json({ success: false, error: 'Nu am putut încărca istoricul solicitărilor GDPR.' });
+  }
+
+  return res.json({
+    success: true,
+    requests: (data || []).map((row: any) => ({
+      id: row.id,
+      userId: row.user_id,
+      requestType: row.request_type,
+      status: row.status,
+      details: row.details,
+      requestedFormat: row.requested_format,
+      requestedAt: row.requested_at,
+      resolvedAt: row.resolved_at,
+      adminResponse: row.admin_response
+    }))
+  });
+});
+
+app.post('/api/gdpr/requests', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+  }
+
+  const parsed = gdprRequestCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      success: false,
+      error: parsed.error.issues[0]?.message || 'Date invalide pentru solicitarea GDPR.'
+    });
+  }
+
+  const input = parsed.data;
+  const { data, error } = await auth.userClient
+    .from('gdpr_requests')
+    .insert({
+      user_id: auth.user.id,
+      request_type: input.requestType,
+      status: 'noua',
+      details: input.details || null,
+      requested_format: input.requestedFormat || null
+    })
+    .select('*')
+    .single();
+
+  if (error || !data) {
+    return res.status(500).json({ success: false, error: 'Nu am putut înregistra solicitarea GDPR.' });
+  }
+
+  if (input.requestType === 'restriction_processing') {
+    await auth.userClient
+      .from('profiles')
+      .update({
+        restriction_requested: true,
+        restriction_reason: input.details || 'Solicitare restricționare prelucrare GDPR',
+        restriction_updated_at: new Date().toISOString()
+      })
+      .eq('id', auth.user.id);
+  }
+
+  await logGdprOperation({
+    operationType: 'gdpr_request_created',
+    userId: auth.user.id,
+    actorType: 'user',
+    status: 'success',
+    metadata: { requestType: input.requestType }
+  });
+
+  return res.status(201).json({
+    success: true,
+    request: {
+      id: data.id,
+      userId: data.user_id,
+      requestType: data.request_type,
+      status: data.status,
+      details: data.details,
+      requestedFormat: data.requested_format,
+      requestedAt: data.requested_at,
+      resolvedAt: data.resolved_at,
+      adminResponse: data.admin_response
+    }
+  });
+});
+
+// 6. Withdraw optional consents (Auth required)
+app.post('/api/gdpr/withdraw-consents', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+  }
+
+  const parsed = gdprWithdrawConsentSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      success: false,
+      error: parsed.error.issues[0]?.message || 'Selectează cel puțin un canal pentru retragere.'
+    });
+  }
+
+  const channels = parsed.data.channels;
+  const now = new Date().toISOString();
+  const prefPatch: Record<string, unknown> = { user_id: auth.user.id, updated_at: now };
+  const commRows: Array<Record<string, unknown>> = [];
+
+  if (channels.includes('email_marketing')) {
+    prefPatch.marketing_consent = false;
+    prefPatch.marketing_consent_withdrawn_at = now;
+    commRows.push({
+      user_id: auth.user.id,
+      channel: 'email_marketing',
+      is_granted: false,
+      consent_text_version: MARKETING_CONSENT_TEXT_VERSION,
+      source: 'withdrawal'
+    });
+  }
+  if (channels.includes('optional_notifications')) {
+    prefPatch.optional_notifications_enabled = false;
+    commRows.push({
+      user_id: auth.user.id,
+      channel: 'optional_notifications',
+      is_granted: false,
+      consent_text_version: MARKETING_CONSENT_TEXT_VERSION,
+      source: 'withdrawal'
+    });
+  }
+  if (channels.includes('price_alerts')) {
+    prefPatch.price_alerts_enabled = false;
+    commRows.push({
+      user_id: auth.user.id,
+      channel: 'price_alerts',
+      is_granted: false,
+      consent_text_version: MARKETING_CONSENT_TEXT_VERSION,
+      source: 'withdrawal'
+    });
+  }
+  if (channels.includes('cookies_optional')) {
+    prefPatch.cookie_preferences = {
+      necessary: true,
+      preferences: false,
+      analytics: false,
+      marketing: false
+    };
+  }
+
+  await auth.userClient.from('user_preferences').upsert(prefPatch, { onConflict: 'user_id' });
+  if (commRows.length > 0) {
+    try {
+      await auth.userClient.from('communication_consents').insert(commRows);
+    } catch {
+      // ignore if table missing
+    }
+  }
+
+  await logGdprOperation({
+    operationType: 'consent_withdrawn',
+    userId: auth.user.id,
+    actorType: 'user',
+    status: 'success',
+    metadata: { channels }
+  });
+
+  return res.json({
+    success: true,
+    withdrawnChannels: channels,
+    message: 'Consimțământul pentru categoriile selectate a fost retras.'
+  });
+});
+
+// 7. Permanent Account Deletion („Șterge contul”) with reauthentication & private storage cleanup
+app.post('/api/gdpr/delete-account', async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const auth = await getAuthenticatedSupabaseUser(req);
+  if (!auth) {
+    return res.status(401).json({ success: false, error: 'Autentificare necesară pentru ștergerea contului.' });
+  }
+
+  const parsed = gdprDeleteAccountSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      success: false,
+      error: parsed.error.issues[0]?.message || 'Confirmare invalidă pentru ștergerea contului.'
+    });
+  }
+
+  const identities = Array.isArray(auth.user.identities) ? auth.user.identities : [];
+  const hasPasswordIdentity =
+    identities.some((id: any) => id?.provider === 'email') ||
+    auth.user.app_metadata?.provider === 'email';
+
+  if (hasPasswordIdentity && auth.user.email) {
+    if (!parsed.data.password) {
+      return res.status(403).json({
+        success: false,
+        code: 'REAUTH_REQUIRED',
+        error: 'Pentru siguranță, introdu parola curentă a contului pentru a confirma ștergerea.'
+      });
+    }
+    const verifyClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+    const { error: reauthErr } = await verifyClient.auth.signInWithPassword({
+      email: auth.user.email,
+      password: parsed.data.password
+    });
+    if (reauthErr) {
+      return res.status(403).json({
+        success: false,
+        code: 'REAUTH_FAILED',
+        error: 'Parola curentă este incorectă. Ștergerea contului a fost blocată.'
+      });
+    }
+  }
+
+  const userId = auth.user.id;
+  const adminClient = getSupabaseAdminClient();
+  const cleanupClient = adminClient || auth.userClient;
+
+  const deletionResult = await executeGdprAccountDeletion({
+    userId,
+    cleanupClient,
+    adminClient,
+    reason: parsed.data.reason || null
+  });
+
+  if (!deletionResult.summary.completedFully) {
+    return res.status(207).json({
+      success: false,
+      partialFailure: true,
+      completedFully: false,
+      summary: deletionResult.summary,
+      error:
+        deletionResult.summary.warning ||
+        'Ștergerea contului a fost executată doar parțial. Consultă pașii de remediere de mai jos.',
+      message:
+        'Ștergere parțială: unele date sau înregistrarea din Auth nu au putut fi eliminate complet.'
+    });
+  }
+
+  return res.json({
+    success: true,
+    partialFailure: false,
+    completedFully: true,
+    summary: deletionResult.summary,
+    message: 'Contul și toate datele personale asociate au fost șterse definitiv.'
+  });
+});
+
+// 8. Admin / Operator GDPR Requests Management (protected by requireAdminAuth)
+app.get('/api/admin/gdpr/requests', requireAdminAuth, async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const adminClient = getSupabaseAdminClient();
+  if (!adminClient) {
+    return res.status(503).json({
+      success: false,
+      error: 'SUPABASE_SERVICE_ROLE_KEY nu este configurat pe server pentru listarea solicitărilor GDPR.',
+      requests: []
+    });
+  }
+
+  const { data, error } = await adminClient
+    .from('gdpr_requests')
+    .select('*')
+    .order('requested_at', { ascending: false })
+    .limit(200);
+
+  if (error) {
+    return res.status(500).json({ success: false, error: 'Nu am putut citi solicitările GDPR.' });
+  }
+
+  return res.json({
+    success: true,
+    requests: (data || []).map((row: any) => ({
+      id: row.id,
+      userId: row.user_id,
+      requestType: row.request_type,
+      status: row.status,
+      details: row.details,
+      requestedFormat: row.requested_format,
+      requestedAt: row.requested_at,
+      resolvedAt: row.resolved_at,
+      adminResponse: row.admin_response
+    }))
+  });
+});
+
+app.patch('/api/admin/gdpr/requests/:id', requireAdminAuth, async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  const adminClient = getSupabaseAdminClient();
+  if (!adminClient) {
+    return res.status(503).json({
+      success: false,
+      error: 'SUPABASE_SERVICE_ROLE_KEY nu este configurat pe server.'
+    });
+  }
+
+  const parsed = gdprAdminRequestUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      success: false,
+      error: parsed.error.issues[0]?.message || 'Date invalide pentru actualizarea solicitării GDPR.'
+    });
+  }
+
+  const isResolved = parsed.data.status === 'procesata' || parsed.data.status === 'respinsa_justificat';
+  const now = new Date().toISOString();
+
+  const { data, error } = await adminClient
+    .from('gdpr_requests')
+    .update({
+      status: parsed.data.status,
+      admin_response: parsed.data.adminResponse || null,
+      resolved_at: isResolved ? now : null,
+      updated_at: now
+    })
+    .eq('id', req.params.id)
+    .select('*')
+    .maybeSingle();
+
+  if (error || !data) {
+    return res.status(404).json({ success: false, error: 'Solicitarea GDPR nu a fost găsită.' });
+  }
+
+  await logGdprOperation({
+    operationType: 'gdpr_request_resolved',
+    userId: data.user_id,
+    actorType: 'admin',
+    status: 'success',
+    metadata: { requestId: data.id, newStatus: parsed.data.status }
+  });
+
+  return res.json({
+    success: true,
+    request: {
+      id: data.id,
+      userId: data.user_id,
+      requestType: data.request_type,
+      status: data.status,
+      details: data.details,
+      requestedFormat: data.requested_format,
+      requestedAt: data.requested_at,
+      resolvedAt: data.resolved_at,
+      adminResponse: data.admin_response
+    }
+  });
+});
 
   // User authentication API. Passwords and administrator keys are stored only as hashes.
   app.post('/api/auth/register', async (req, res) => {
@@ -4401,5 +5576,5 @@ if (isMainModule && process.env.NODE_ENV !== 'test') {
   });
 }
 
-export { app, ADMIN_API_KEY };
+export { app, ADMIN_API_KEY, executeGdprAccountDeletion };
 

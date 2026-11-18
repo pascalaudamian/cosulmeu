@@ -79,6 +79,7 @@ import { AdminAddRetailerModal } from './AdminAddRetailerModal.tsx';
 import { AdminKpiDrilldownModal, DrilldownType } from './AdminKpiDrilldownModal.tsx';
 import { AdminStagingOfferDrawer } from './AdminStagingOfferDrawer.tsx';
 import { AdminPriceAuditTab } from './AdminPriceAuditTab.tsx';
+import { AdminGdprRequestsTab } from './AdminGdprRequestsTab.tsx';
 
 interface AdminSourcesViewProps {
   onRefreshAll?: () => void;
@@ -93,6 +94,7 @@ export type AdminTabId =
   | 'price-audit'
   | 'staging'
   | 'logs'
+  | 'gdpr'
   | 'security'
   | 'settings';
 
@@ -105,6 +107,7 @@ const TABS: { id: AdminTabId; label: string; icon: React.FC<{ className?: string
   { id: 'price-audit', label: 'Audit Prețuri', icon: ShieldAlert },
   { id: 'staging', label: 'Validare și publicare', icon: CheckCheck },
   { id: 'logs', label: 'Jurnal și erori', icon: FileText },
+  { id: 'gdpr', label: 'Solicitări GDPR', icon: ShieldCheck },
   { id: 'security', label: 'Utilizatori și securitate', icon: ShieldCheck },
   { id: 'settings', label: 'Setări', icon: Sliders }
 ];
@@ -2843,6 +2846,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === 'gdpr' && (
+        <AdminGdprRequestsTab fetchWithAuth={fetchWithAuth} />
       )}
 
       {/* ========================================================================= */}

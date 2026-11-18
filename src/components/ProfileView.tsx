@@ -30,6 +30,10 @@ import { StorageService } from '../services/StorageService.js';
 import { ROMANIAN_CITIES, STORES } from '../data/mockData.js';
 import { useAuth } from '../auth/AuthProvider.js';
 import { supabase } from '../lib/supabase.js';
+import { ProfileGdprSection } from './ProfileGdprSection.js';
+import type { LegalRoutePath } from '../config/legalConfig.js';
+
+export type ProfileTab = 'profile' | 'privacy';
 
 interface ProfileViewProps {
   userProfile: UserProfile;
@@ -39,6 +43,9 @@ interface ProfileViewProps {
   onNavigateToAuth?: () => void;
   themeMode?: ThemeMode;
   onChangeTheme?: (theme: ThemeMode) => void | Promise<void>;
+  onOpenCookieSettings?: () => void;
+  onNavigateLegal?: (path: LegalRoutePath) => void;
+  initialTab?: ProfileTab;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -48,13 +55,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onSignOut,
   onNavigateToAuth,
   themeMode = 'light',
-  onChangeTheme
+  onChangeTheme,
+  onOpenCookieSettings,
+  onNavigateLegal,
+  initialTab = 'profile'
 }) => {
   const { user, signOut, updatePassword } = useAuth();
+  const [activeTab, setActiveTab] = useState<ProfileTab>(initialTab);
   const [profile, setProfile] = useState<UserProfile>(userProfile);
   const [savedFeedback, setSavedFeedback] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   // Avatar upload state
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -188,17 +198,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     setProfile({ ...profile, preferredStores: updated });
   };
 
-  const handleExportData = () => {
-    const jsonStr = StorageService.exportDataAsJson();
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `cosul-meu-export-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   // Formatare dată de creare
   const formattedCreatedDate = profile.createdAt
     ? new Date(profile.createdAt).toLocaleDateString('ro-RO', {
@@ -282,8 +281,56 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
       )}
 
-      {/* Profile Identity Card */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-5 sm:p-7 shadow-xs">
+      {/* Profile Section Tabs */}
+      <div
+        role="tablist"
+        aria-label="Secțiuni profil și confidențialitate"
+        className="flex flex-wrap gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800"
+      >
+        <button
+          id="profile-tab-general"
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'profile'}
+          aria-controls="profile-panel-general"
+          onClick={() => setActiveTab('profile')}
+          className={`flex-1 min-w-[180px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 transition-all cursor-pointer ${
+            activeTab === 'profile'
+              ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs border border-slate-200/80 dark:border-slate-700'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+          }`}
+        >
+          <User className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span>Profil și preferințe</span>
+        </button>
+
+        <button
+          id="profile-tab-privacy"
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'privacy'}
+          aria-controls="profile-panel-privacy"
+          onClick={() => setActiveTab('privacy')}
+          className={`flex-1 min-w-[220px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 transition-all cursor-pointer ${
+            activeTab === 'privacy'
+              ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs border border-slate-200/80 dark:border-slate-700'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+          }`}
+        >
+          <Shield className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span>Confidențialitate și date personale</span>
+        </button>
+      </div>
+
+      {activeTab === 'profile' && (
+        <div
+          id="profile-panel-general"
+          role="tabpanel"
+          aria-labelledby="profile-tab-general"
+          className="space-y-6"
+        >
+          {/* Profile Identity Card */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-5 sm:p-7 shadow-xs">
         <div className="flex flex-col sm:flex-row items-center sm:items-start gap-5">
           {/* Avatar with Upload Button */}
           <div className="relative group shrink-0">
@@ -471,6 +518,32 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Prenume (opțional)
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: Ștefan"
+                value={profile.firstName || ''}
+                onChange={e => setProfile({ ...profile, firstName: e.target.value })}
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-semibold text-slate-800 dark:text-slate-100 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Nume (opțional)
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: Popescu"
+                value={profile.lastName || ''}
+                onChange={e => setProfile({ ...profile, lastName: e.target.value })}
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm font-semibold text-slate-800 dark:text-slate-100 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 outline-none"
+              />
+            </div>
+
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
                 Nume Afișat
@@ -701,80 +774,40 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
       )}
 
-      {/* Section 4: Rol & Permisiuni de Sistem */}
-      <div className="bg-slate-50 dark:bg-slate-900/70 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-xs text-slate-800 dark:text-slate-200">
-        <div className="flex items-center gap-2 mb-2">
-          <Shield className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-          <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Nivel de Acces & Permisiuni</h3>
-        </div>
-        <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-          Contul tău are rolul de{' '}
-          <strong className="text-slate-900 dark:text-slate-100 font-bold uppercase">{currentRole}</strong>.
-          {currentRole === 'admin'
-            ? ' Ai acces deplin la panoul administrativ de gestionare a cataloagelor și verificării calității datelor.'
-            : ' Ai acces privat deplin la listele personale, bonuri scanate și alerte, protejate prin PostgreSQL Row Level Security (RLS). Rolul de administrator este protejat împotriva auto-escaladării.'}
-        </p>
-      </div>
-
-      {/* GDPR & Data Management */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-5 sm:p-7 shadow-xs space-y-4">
-        <div className="flex items-center gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
-          <Shield className="w-5 h-5 text-slate-700 dark:text-slate-300" />
-          <h3 className="font-bold text-base text-slate-900 dark:text-slate-100">Confidențialitate & Date Personale (GDPR)</h3>
-        </div>
-
-        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-          Datele tale personale sunt protejate pe baza identității tale de autentificare Supabase (<code className="bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 px-1 py-0.5 rounded text-[11px] font-mono">{user?.id || 'mod-local'}</code>).
-        </p>
-
-        <div className="flex flex-wrap items-center gap-3 pt-2">
-          <button
-            onClick={handleExportData}
-            className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <Download className="w-4 h-4" />
-            <span>Exportă datele mele (JSON)</span>
-          </button>
-
-          <button
-            onClick={() => setShowResetConfirm(true)}
-            className="px-4 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-950/80 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <Trash2 className="w-4 h-4" />
-            <span>Resetează memoria locală</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Confirm Reset Modal */}
-      {showResetConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/50 dark:bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl animate-in fade-in zoom-in-95">
-            <div className="w-10 h-10 rounded-full bg-rose-100 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400 flex items-center justify-center mb-3">
-              <AlertTriangle className="w-5 h-5" />
+          {/* Section 4: Rol & Permisiuni de Sistem */}
+          <div className="bg-slate-50 dark:bg-slate-900/70 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 shadow-xs text-slate-800 dark:text-slate-200">
+            <div className="flex items-center gap-2 mb-2">
+              <Shield className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">Nivel de Acces & Permisiuni</h3>
             </div>
-            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">Confirmare resetare</h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-              Toate listele salvate și datele locale vor fi resetate. Această acțiune nu poate fi anulată.
+            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+              Contul tău are rolul de{' '}
+              <strong className="text-slate-900 dark:text-slate-100 font-bold uppercase">{currentRole}</strong>.
+              {currentRole === 'admin'
+                ? ' Ai acces deplin la panoul administrativ de gestionare a cataloagelor și verificării calității datelor.'
+                : ' Ai acces privat deplin la listele personale, bonuri scanate și alerte, protejate prin PostgreSQL Row Level Security (RLS). Rolul de administrator este protejat împotriva auto-escaladării.'}
             </p>
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                onClick={() => setShowResetConfirm(false)}
-                className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-medium cursor-pointer"
-              >
-                Anulează
-              </button>
-              <button
-                onClick={() => {
-                  onResetAllData();
-                  setShowResetConfirm(false);
-                }}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold cursor-pointer"
-              >
-                Da, resetează
-              </button>
-            </div>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'privacy' && (
+        <div
+          id="profile-panel-privacy"
+          role="tabpanel"
+          aria-labelledby="profile-tab-privacy"
+        >
+          {/* GDPR & Privacy Control Center */}
+          <ProfileGdprSection
+            userProfile={profile}
+            onUpdateProfile={updated => {
+              setProfile(updated);
+              onUpdateProfile(updated);
+            }}
+            onResetAllData={onResetAllData}
+            onOpenCookieSettings={onOpenCookieSettings}
+            onNavigateLegal={onNavigateLegal}
+          />
         </div>
       )}
     </div>

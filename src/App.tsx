@@ -14,6 +14,25 @@ import {
 import { Navbar } from './components/Navbar.js';
 import { MobileNav } from './components/MobileNav.js';
 import { DashboardView } from './components/DashboardView.js';
+import { Footer } from './components/Footer.js';
+import { CookieConsentBanner } from './components/CookieConsentBanner.js';
+import { CookiePreferencesModal } from './components/CookiePreferencesModal.js';
+import {
+  acceptAllCookies,
+  getEffectiveCookieCategories,
+  getStoredCookieConsent,
+  hasCategoryConsent,
+  rejectOptionalCookies,
+  saveCookieConsentChoice,
+  scriptConsentController,
+  shouldShowCookieBanner,
+  withdrawOptionalCookieConsent
+} from './services/CookieConsentService.js';
+import {
+  LEGAL_ROUTE_MAP,
+  resolveLegalRouteFromPath,
+  type LegalRoutePath
+} from './config/legalConfig.js';
 
 const loadProductsView = () => import('./components/ProductsView.js');
 const loadProductDetailView = () => import('./components/ProductDetailView.js');
@@ -26,6 +45,7 @@ const loadStoresView = () => import('./components/StoresView.js');
 const loadProfileView = () => import('./components/ProfileView.js');
 const loadAdminSourcesView = () => import('./components/AdminSourcesView.js');
 const loadAuthScreen = () => import('./components/AuthScreen.js');
+const loadLegalPagesView = () => import('./components/LegalPagesView.js');
 
 const ProductsView = lazy(() => loadProductsView().then(m => ({ default: m.ProductsView })));
 const ProductDetailView = lazy(() => loadProductDetailView().then(m => ({ default: m.ProductDetailView })));
@@ -38,6 +58,7 @@ const StoresView = lazy(() => loadStoresView().then(m => ({ default: m.StoresVie
 const ProfileView = lazy(() => loadProfileView().then(m => ({ default: m.ProfileView })));
 const AdminSourcesView = lazy(() => loadAdminSourcesView().then(m => ({ default: m.AdminSourcesView })));
 const AuthScreen = lazy(() => loadAuthScreen().then(m => ({ default: m.AuthScreen })));
+const LegalPagesView = lazy(() => loadLegalPagesView().then(m => ({ default: m.LegalPagesView })));
 
 const TAB_PREFETCHERS: Record<string, () => Promise<unknown>> = {
   products: loadProductsView,
@@ -83,7 +104,6 @@ import {
   saveUserThemePreference
 } from './services/ThemeService.js';
 import { ShoppingList, Receipt, UserProfile, PriceAlert, Product, ProductOffer, Store, ThemeMode } from './types.js';
-import { ShieldCheck } from 'lucide-react';
 import { useAuth } from './auth/AuthProvider.js';
 import { supabase } from './lib/supabase.js';
 import { PRODUCTS } from './data/mockData.js';
@@ -114,7 +134,7 @@ const canonicalizeStores = (rawStores: Store[]): Store[] => {
 };
 
 export default function App() {
-  const { user, loading, signOut } = useAuth();
+  const { user, session, loading, signOut } = useAuth();
   const {
     data: dashboardData,
     error: dashboardLoadError,
@@ -126,6 +146,9 @@ export default function App() {
   const [dashboardImportResult, setDashboardImportResult] = useState<DashboardImportResult | null>(null);
   const [dataWriteError, setDataWriteError] = useState<string | null>(null);
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [activeLegalRoute, setActiveLegalRoute] = useState<LegalRoutePath | null>(() =>
+    typeof window !== 'undefined' ? resolveLegalRouteFromPath(window.location.pathname) : null
+  );
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [productFilterCategory, setProductFilterCategory] = useState<string>('toate');
 
@@ -155,9 +178,26 @@ export default function App() {
   const isDarkMode = resolveIsDark(themeMode, systemPrefersDark);
   const catalogLoadedRef = useRef(false);
 
+  // Cookie Consent state (persisted across refresh, navigation & auth)
+  const [cookieConsentState, setCookieConsentState] = useState(() => getStoredCookieConsent());
+  const [showCookieBanner, setShowCookieBanner] = useState(() => shouldShowCookieBanner());
+  const [showCookieModal, setShowCookieModal] = useState(false);
+
   useEffect(() => {
-    applyThemeToDocument(themeMode, systemPrefersDark);
-  }, [themeMode, systemPrefersDark]);
+    const stored = getStoredCookieConsent();
+    setCookieConsentState(stored);
+    setShowCookieBanner(shouldShowCookieBanner(stored));
+    scriptConsentController.evaluateAndLoadScripts(stored);
+    return scriptConsentController.subscribe(next => {
+      setCookieConsentState(next);
+      setShowCookieBanner(shouldShowCookieBanner(next));
+    });
+  }, [currentTab, activeLegalRoute, user?.id]);
+
+  useEffect(() => {
+    const canPersistTheme = hasCategoryConsent('preferences', cookieConsentState);
+    applyThemeToDocument(themeMode, systemPrefersDark, canPersistTheme);
+  }, [themeMode, systemPrefersDark, cookieConsentState]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
@@ -235,19 +275,29 @@ export default function App() {
     Promise.all([
       supabase
         .from('profiles')
-        .select('id, first_name, last_name, display_name, username, avatar_url, phone, phone_number, city, preferred_store_id, preferred_language, role, preferences, created_at')
+        .select('id, first_name, last_name, display_name, username, avatar_url, phone, phone_number, city, preferred_store_id, preferred_language, role, restriction_requested, restriction_reason, restriction_updated_at, preferences, created_at')
         .eq('id', userId)
         .maybeSingle(),
-      loadUserThemePreference(userId)
-    ]).then(async ([profileRes, remoteTheme]) => {
+      loadUserThemePreference(userId),
+      supabase
+        .from('user_preferences')
+        .select('optional_notifications_enabled, marketing_consent, marketing_consent_updated_at, marketing_consent_withdrawn_at')
+        .eq('user_id', userId)
+        .maybeSingle()
+    ]).then(async ([profileRes, remoteTheme, gdprPrefRes]) => {
       if (cancelled) return;
       const data = profileRes.data;
+      const gdprPrefs = gdprPrefRes?.data as any;
       const currentTheme = getStoredThemeMode();
       const resolvedTheme = remoteTheme ?? currentTheme;
 
       if (remoteTheme) {
         setThemeMode(remoteTheme);
-        applyThemeToDocument(remoteTheme, getSystemPrefersDark());
+        applyThemeToDocument(
+          remoteTheme,
+          getSystemPrefersDark(),
+          hasCategoryConsent('preferences', getStoredCookieConsent())
+        );
       } else {
         void saveUserThemePreference(userId, currentTheme, {
           language: data?.preferred_language || 'ro'
@@ -259,6 +309,8 @@ export default function App() {
         const loadedProfile: UserProfile = {
           id: data.id,
           name: data.display_name || [data.first_name, data.last_name].filter(Boolean).join(' ') || user.user_metadata?.display_name || (userEmail ? userEmail.split('@')[0] : 'Utilizator'),
+          firstName: data.first_name || undefined,
+          lastName: data.last_name || undefined,
           email: userEmail || '',
           username: data.username || user.user_metadata?.username || undefined,
           avatarUrl: data.avatar_url || undefined,
@@ -271,7 +323,14 @@ export default function App() {
           preferredStoreId: data.preferred_store_id || undefined,
           role: (data.role as 'user' | 'admin') || (userEmail === 'pascalau.stefan@gmail.com' ? 'admin' : 'user'),
           monthlySavingsGoal: typeof preferences.monthlySavingsGoal === 'number' ? preferences.monthlySavingsGoal : 350,
-          notificationsEnabled: typeof preferences.notificationsEnabled === 'boolean' ? preferences.notificationsEnabled : true,
+          notificationsEnabled: typeof preferences.notificationsEnabled === 'boolean' ? preferences.notificationsEnabled : false,
+          optionalNotificationsEnabled: Boolean(gdprPrefs?.optional_notifications_enabled),
+          marketingConsent: Boolean(gdprPrefs?.marketing_consent),
+          marketingConsentUpdatedAt: gdprPrefs?.marketing_consent_updated_at || undefined,
+          marketingConsentWithdrawnAt: gdprPrefs?.marketing_consent_withdrawn_at || undefined,
+          restrictionRequested: Boolean((data as any).restriction_requested),
+          restrictionReason: (data as any).restriction_reason || undefined,
+          restrictionUpdatedAt: (data as any).restriction_updated_at || undefined,
           preferredStores: Array.isArray(preferences.preferredStores) ? preferences.preferredStores : ['lidl', 'kaufland', 'carrefour', 'auchan'],
           defaultTransportCostEstimate: typeof preferences.defaultTransportCostEstimate === 'number' ? preferences.defaultTransportCostEstimate : 12,
           useLoyaltyCards: typeof preferences.useLoyaltyCards === 'boolean' ? preferences.useLoyaltyCards : true,
@@ -294,7 +353,7 @@ export default function App() {
           preferred_language: 'ro',
           preferences: {
             monthlySavingsGoal: 350,
-            notificationsEnabled: true,
+            notificationsEnabled: false,
             preferredStores: ['lidl', 'kaufland', 'carrefour', 'auchan'],
             defaultTransportCostEstimate: 12,
             useLoyaltyCards: true
@@ -316,7 +375,7 @@ export default function App() {
           preferredLanguage: 'ro',
           theme: resolvedTheme,
           monthlySavingsGoal: 350,
-          notificationsEnabled: true,
+          notificationsEnabled: false,
           preferredStores: ['lidl', 'kaufland', 'carrefour', 'auchan'],
           defaultTransportCostEstimate: 12,
           useLoyaltyCards: true,
@@ -336,7 +395,11 @@ export default function App() {
   const handleChangeTheme = useCallback(async (nextTheme: ThemeMode) => {
     const normalized = normalizeThemeMode(nextTheme);
     setThemeMode(normalized);
-    applyThemeToDocument(normalized, getSystemPrefersDark());
+    applyThemeToDocument(
+      normalized,
+      getSystemPrefersDark(),
+      hasCategoryConsent('preferences', getStoredCookieConsent())
+    );
     setUserProfile(prev => {
       const updated = { ...prev, theme: normalized };
       StorageService.saveUserProfile(updated);
@@ -359,15 +422,22 @@ export default function App() {
 
     if (profile.theme && profile.theme !== themeMode) {
       setThemeMode(effectiveTheme);
-      applyThemeToDocument(effectiveTheme, getSystemPrefersDark());
+      applyThemeToDocument(
+        effectiveTheme,
+        getSystemPrefersDark(),
+        hasCategoryConsent('preferences', getStoredCookieConsent())
+      );
     }
 
     if (user) {
       void supabase.from('profiles').upsert({
         id: user.id,
+        first_name: updatedProfile.firstName || null,
+        last_name: updatedProfile.lastName || null,
         display_name: updatedProfile.name,
         username: updatedProfile.username || null,
         city: updatedProfile.city,
+        phone: updatedProfile.phone || updatedProfile.phoneNumber || null,
         phone_number: updatedProfile.phoneNumber || updatedProfile.phone || null,
         preferred_language: updatedProfile.preferredLanguage || 'ro',
         preferred_store_id: updatedProfile.preferredStoreId || null,
@@ -412,26 +482,51 @@ export default function App() {
 
   // Keep every hook before conditional loading/auth returns.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tabParam = params.get('tab');
-    const productParam = params.get('product');
-    const categoryParam = params.get('category');
-
-    if (categoryParam) setProductFilterCategory(categoryParam);
-
-    if (productParam) {
-      setSelectedProductId(productParam);
-      setCurrentTab('product-detail');
-    } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile', 'auth'].includes(tabParam)) {
-      if (tabParam === 'admin-sources' && !isAdmin) {
-        setCurrentTab(user ? 'profile' : 'auth');
-      } else {
-        setCurrentTab(tabParam);
+    const syncLocationState = () => {
+      const legalRoute = resolveLegalRouteFromPath(window.location.pathname);
+      if (legalRoute) {
+        setActiveLegalRoute(legalRoute);
+        return;
       }
-    }
+
+      setActiveLegalRoute(null);
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab');
+      const productParam = params.get('product');
+      const categoryParam = params.get('category');
+
+      if (categoryParam) setProductFilterCategory(categoryParam);
+
+      if (productParam) {
+        setSelectedProductId(productParam);
+        setCurrentTab('product-detail');
+      } else if (tabParam && ['dashboard', 'products', 'shopping-list', 'compare', 'scan-receipt', 'receipts', 'price-history', 'stores', 'admin-sources', 'profile', 'auth'].includes(tabParam)) {
+        setSelectedProductId(null);
+        if (tabParam === 'admin-sources' && !isAdmin) {
+          setCurrentTab(user ? 'profile' : 'auth');
+        } else {
+          setCurrentTab(tabParam);
+        }
+      } else {
+        setSelectedProductId(null);
+        setCurrentTab('dashboard');
+      }
+    };
+
+    syncLocationState();
+    window.addEventListener('popstate', syncLocationState);
+    return () => window.removeEventListener('popstate', syncLocationState);
   }, [user, isAdmin]);
 
-  if (loading) {
+  useEffect(() => {
+    if (activeLegalRoute) {
+      document.title = `${LEGAL_ROUTE_MAP[activeLegalRoute].title} - Coșul Meu`;
+    } else {
+      document.title = 'Coșul Meu - Comparator Prețuri & Bonuri';
+    }
+  }, [activeLegalRoute]);
+
+  if (loading && !activeLegalRoute) {
     return (
       <div className="min-h-screen flex flex-col bg-[#F8FAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans">
         <header className="sticky top-0 z-40 h-16 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-b border-slate-200/80 dark:border-slate-800">
@@ -598,9 +693,39 @@ export default function App() {
     }
   };
 
+  const handleNavigateToLegalRoute = (path: LegalRoutePath) => {
+    setActiveLegalRoute(path);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const url = new URL(window.location.href);
+    url.pathname = path;
+    url.search = '';
+    url.hash = '';
+    window.history.pushState({}, '', url.toString());
+  };
+
+  const handleNavigateHomeFromLegal = () => {
+    setActiveLegalRoute(null);
+    setSelectedProductId(null);
+    setCurrentTab('dashboard');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const url = new URL(window.location.href);
+    url.pathname = '/';
+    url.search = '';
+    url.hash = '';
+    window.history.pushState({}, '', url.toString());
+  };
+
   const handleSelectTab = (tab: string) => {
+    setActiveLegalRoute(null);
     if (tab === 'admin-sources' && !isAdmin) {
-      setCurrentTab(user ? 'profile' : 'auth');
+      const fallbackTab = user ? 'profile' : 'auth';
+      setCurrentTab(fallbackTab);
+      const url = new URL(window.location.href);
+      url.pathname = '/';
+      url.searchParams.set('tab', fallbackTab);
+      url.searchParams.delete('product');
+      url.searchParams.delete('category');
+      window.history.pushState({}, '', url.toString());
       return;
     }
     setCurrentTab(tab);
@@ -609,6 +734,7 @@ export default function App() {
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
     const url = new URL(window.location.href);
+    url.pathname = '/';
     url.searchParams.set('tab', tab);
     if (tab !== 'products' && tab !== 'product-detail') {
       url.searchParams.delete('product');
@@ -618,31 +744,37 @@ export default function App() {
   };
 
   const handleSelectProduct = (productId: string) => {
+    setActiveLegalRoute(null);
     setSelectedProductId(productId);
     setCurrentTab('product-detail');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     const url = new URL(window.location.href);
+    url.pathname = '/';
     url.searchParams.set('tab', 'products');
     url.searchParams.set('product', productId);
     window.history.pushState({}, '', url.toString());
   };
 
   const handleBackFromDetail = () => {
+    setActiveLegalRoute(null);
     setSelectedProductId(null);
     setCurrentTab('products');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     const url = new URL(window.location.href);
+    url.pathname = '/';
     url.searchParams.delete('product');
     url.searchParams.set('tab', 'products');
     window.history.pushState({}, '', url.toString());
   };
 
   const handleNavigateToCategory = (cat: string) => {
+    setActiveLegalRoute(null);
     setProductFilterCategory(cat);
     setSelectedProductId(null);
     setCurrentTab('products');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     const url = new URL(window.location.href);
+    url.pathname = '/';
     url.searchParams.delete('product');
     url.searchParams.set('tab', 'products');
     url.searchParams.set('category', cat);
@@ -790,7 +922,7 @@ export default function App() {
     <div className="min-h-screen flex flex-col bg-[#F8FAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans selection:bg-emerald-100 dark:selection:bg-emerald-900/60 selection:text-emerald-950 dark:selection:text-emerald-100 transition-colors">
       {/* Top Navbar */}
       <Navbar
-        currentTab={currentTab}
+        currentTab={activeLegalRoute ? '' : currentTab}
         onSelectTab={handleSelectTab}
         onPrefetchTab={handlePrefetchTab}
         userProfile={userProfile}
@@ -814,14 +946,23 @@ export default function App() {
         )}
 
         <Suspense fallback={<TabContentSkeleton />}>
-          {currentTab === 'auth' && (
-            <AuthScreen
-              onSuccess={() => handleSelectTab('dashboard')}
-              onCancel={() => handleSelectTab('dashboard')}
+          {activeLegalRoute ? (
+            <LegalPagesView
+              route={activeLegalRoute}
+              onNavigateHome={handleNavigateHomeFromLegal}
+              onNavigateLegal={handleNavigateToLegalRoute}
+              onOpenCookieSettings={() => setShowCookieModal(true)}
             />
-          )}
+          ) : (
+            <>
+              {currentTab === 'auth' && (
+                <AuthScreen
+                  onSuccess={() => handleSelectTab('dashboard')}
+                  onCancel={() => handleSelectTab('dashboard')}
+                />
+              )}
 
-          {currentTab === 'dashboard' && (
+              {currentTab === 'dashboard' && (
             <DashboardView
               userProfile={userProfile}
               activeList={activeList}
@@ -921,45 +1062,89 @@ export default function App() {
             <AdminSourcesView />
           )}
 
-          {currentTab === 'profile' && (
-            <ProfileView
-              userProfile={userProfile}
-              onUpdateProfile={handleProfileUpdate}
-              onResetAllData={handleResetAllData}
-              onSignOut={signOut}
-              onNavigateToAuth={() => setCurrentTab('auth')}
-              themeMode={themeMode}
-              onChangeTheme={handleChangeTheme}
-            />
+              {currentTab === 'profile' && (
+                <ProfileView
+                  userProfile={userProfile}
+                  onUpdateProfile={handleProfileUpdate}
+                  onResetAllData={handleResetAllData}
+                  onSignOut={signOut}
+                  onNavigateToAuth={() => handleSelectTab('auth')}
+                  themeMode={themeMode}
+                  onChangeTheme={handleChangeTheme}
+                  onOpenCookieSettings={() => setShowCookieModal(true)}
+                  onNavigateLegal={handleNavigateToLegalRoute}
+                />
+              )}
+            </>
           )}
         </Suspense>
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto border-t border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 py-7 text-xs text-slate-500 dark:text-slate-400 no-print pb-20 md:pb-7 transition-colors">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <span className="font-display font-bold text-slate-900 dark:text-slate-100">
-              Coșul<span className="text-emerald-600 dark:text-emerald-400">Meu</span>
-            </span>
-            <span aria-hidden="true">·</span>
-            <span>Comparator independent de prețuri în România</span>
-          </div>
-          <div className="flex items-center gap-3 text-slate-500 dark:text-slate-400">
-            <span>RON (lei)</span>
-            <span aria-hidden="true">·</span>
-            <span>Europe/Bucharest</span>
-            <span aria-hidden="true">·</span>
-            <span className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-medium">
-              <ShieldCheck className="w-3.5 h-3.5" /> {user ? 'Date protejate în cont' : 'Date locale pe dispozitiv'}
-            </span>
-          </div>
-        </div>
-      </footer>
+      <Footer
+        activeLegalRoute={activeLegalRoute}
+        onNavigateLegal={handleNavigateToLegalRoute}
+        onNavigateHome={handleNavigateHomeFromLegal}
+        onOpenCookieSettings={() => setShowCookieModal(true)}
+        isAuthenticated={Boolean(user)}
+      />
+
+      {/* Cookie Consent Banner & Preferences Modal */}
+      <CookieConsentBanner
+        visible={showCookieBanner && !showCookieModal}
+        onAcceptAll={() => {
+          const next = acceptAllCookies(session?.access_token);
+          setCookieConsentState(next);
+          setShowCookieBanner(false);
+        }}
+        onRejectOptional={() => {
+          const next = rejectOptionalCookies(session?.access_token);
+          setCookieConsentState(next);
+          setShowCookieBanner(false);
+        }}
+        onCustomize={() => setShowCookieModal(true)}
+        onNavigateLegal={handleNavigateToLegalRoute}
+      />
+
+      <CookiePreferencesModal
+        open={showCookieModal}
+        initialCategories={getEffectiveCookieCategories()}
+        lastUpdatedAt={cookieConsentState?.updatedAt}
+        onClose={() => setShowCookieModal(false)}
+        onSavePreferences={categories => {
+          const next = saveCookieConsentChoice({
+            categories,
+            consentMethod: 'custom_preferences',
+            accessToken: session?.access_token
+          });
+          setCookieConsentState(next);
+          setShowCookieBanner(false);
+          setShowCookieModal(false);
+        }}
+        onAcceptAll={() => {
+          const next = acceptAllCookies(session?.access_token);
+          setCookieConsentState(next);
+          setShowCookieBanner(false);
+          setShowCookieModal(false);
+        }}
+        onRejectOptional={() => {
+          const next = rejectOptionalCookies(session?.access_token);
+          setCookieConsentState(next);
+          setShowCookieBanner(false);
+          setShowCookieModal(false);
+        }}
+        onWithdrawOptional={() => {
+          const next = withdrawOptionalCookieConsent(session?.access_token);
+          setCookieConsentState(next);
+          setShowCookieBanner(false);
+          setShowCookieModal(false);
+        }}
+        onNavigateLegal={handleNavigateToLegalRoute}
+      />
 
       {/* Mobile Bottom Navigation Bar */}
       <MobileNav
-        currentTab={currentTab}
+        currentTab={activeLegalRoute ? '' : currentTab}
         onSelectTab={handleSelectTab}
         onPrefetchTab={handlePrefetchTab}
         itemsCount={activeList.items.length}

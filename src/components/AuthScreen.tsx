@@ -28,8 +28,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [username, setUsername] = useState('');
+  const [marketingConsent, setMarketingConsent] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -73,7 +75,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         setError('Parola trebuie să aibă cel puțin 8 caractere.');
         return;
       }
-      const result = await signUp(email, password, displayName, username);
+      const combinedName = [firstName.trim(), lastName.trim()].filter(Boolean).join(' ');
+      const result = await signUp(email, password, combinedName, username, {
+        firstName: firstName.trim() || undefined,
+        lastName: lastName.trim() || undefined,
+        marketingConsent
+      });
       setBusy(false);
       if (result.error) {
         setError(result.error);
@@ -206,20 +213,35 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === 'signup' && (
               <>
-                <label className="block">
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Nume & Prenume</span>
-                  <div className="relative mt-1">
-                    <UserRound className="absolute left-3 top-3 text-slate-400" size={17} />
-                    <input
-                      required
-                      type="text"
-                      placeholder="Ex: Ștefan Popescu"
-                      value={displayName}
-                      onChange={e => setDisplayName(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 pl-10 pr-3 text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
-                    />
-                  </div>
-                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Prenume (opțional)</span>
+                    <div className="relative mt-1">
+                      <UserRound className="absolute left-3 top-3 text-slate-400" size={16} />
+                      <input
+                        type="text"
+                        placeholder="Ex: Ștefan"
+                        value={firstName}
+                        onChange={e => setFirstName(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 pl-9 pr-3 text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                      />
+                    </div>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Nume (opțional)</span>
+                    <div className="relative mt-1">
+                      <UserRound className="absolute left-3 top-3 text-slate-400" size={16} />
+                      <input
+                        type="text"
+                        placeholder="Ex: Popescu"
+                        value={lastName}
+                        onChange={e => setLastName(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2.5 pl-9 pr-3 text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                      />
+                    </div>
+                  </label>
+                </div>
 
                 <label className="block">
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Nume de utilizator (opțional)</span>
@@ -275,6 +297,30 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 </button>
               </div>
             </label>
+
+            {mode === 'signup' && (
+              <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/60 p-3 space-y-2">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={marketingConsent}
+                    onChange={e => setMarketingConsent(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0"
+                  />
+                  <span className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                    <strong className="text-slate-800 dark:text-slate-100">Opțional — Newsletter și noutăți prin email:</strong>{' '}
+                    Sunt de acord să primesc mesaje ocazionale despre funcționalități noi sau informații promoționale Coșul Meu. Refuzul nu afectează crearea sau utilizarea contului și îți poți retrage acordul oricând din Profil.
+                  </span>
+                </label>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed pl-6">
+                  Mesajele strict necesare funcționării contului (confirmare email, resetare parolă, securitate sau răspunsuri la solicitările tale) sunt transmise separat în baza executării serviciului, conform{' '}
+                  <a href="/politica-de-confidentialitate" className="underline text-emerald-700 dark:text-emerald-400">
+                    Politicii de confidențialitate
+                  </a>
+                  .
+                </p>
+              </div>
+            )}
 
             {mode === 'login' && (
               <div className="flex justify-end">

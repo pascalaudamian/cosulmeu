@@ -2,12 +2,24 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase.js';
 
+export type SignUpExtraOptions = {
+  firstName?: string;
+  lastName?: string;
+  marketingConsent?: boolean;
+};
+
 export type AuthContextValue = {
   session: Session | null;
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ needsConfirmation?: boolean; error?: string }>;
-  signUp: (email: string, password: string, displayName: string, username?: string) => Promise<{ needsConfirmation?: boolean; error?: string }>;
+  signUp: (
+    email: string,
+    password: string,
+    displayName: string,
+    username?: string,
+    extra?: SignUpExtraOptions
+  ) => Promise<{ needsConfirmation?: boolean; error?: string }>;
   resetPassword: (email: string) => Promise<{ error?: string }>;
   updatePassword: (password: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
@@ -72,19 +84,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         return error ? { error: readableAuthError(error) } : {};
       },
-      async signUp(email, password, displayName, username) {
+      async signUp(email, password, displayName, username, extra) {
         const userEmail = email.trim();
-        const trimmedName = displayName.trim();
+        const firstName = extra?.firstName?.trim() || '';
+        const lastName = extra?.lastName?.trim() || '';
+        const computedDisplay = displayName.trim() || [firstName, lastName].filter(Boolean).join(' ') || userEmail.split('@')[0];
         const customUsername = username ? username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '') : undefined;
+        const explicitMarketingConsent = extra?.marketingConsent === true;
 
         const { data, error } = await supabase.auth.signUp({
           email: userEmail,
           password,
           options: {
             data: {
-              display_name: trimmedName,
-              name: trimmedName,
+              display_name: computedDisplay,
+              name: computedDisplay,
+              first_name: firstName || null,
+              last_name: lastName || null,
               username: customUsername,
+              marketing_consent: explicitMarketingConsent,
               is_admin: userEmail === 'pascalau.stefan@gmail.com'
             },
             emailRedirectTo:

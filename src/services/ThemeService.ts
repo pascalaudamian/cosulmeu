@@ -60,9 +60,25 @@ export function persistThemeLocally(mode: ThemeMode): void {
   }
 }
 
-export function applyThemeToDocument(mode: ThemeMode, systemPrefersDark: boolean = getSystemPrefersDark()): boolean {
+export function clearStoredThemeMode(): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(THEME_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage remove errors
+  }
+}
+
+export function applyThemeToDocument(
+  mode: ThemeMode,
+  systemPrefersDark: boolean = getSystemPrefersDark(),
+  persistLocal: boolean = true
+): boolean {
   const isDark = resolveIsDark(mode, systemPrefersDark);
-  persistThemeLocally(mode);
+  if (persistLocal) {
+    persistThemeLocally(mode);
+  }
 
   try {
     if (typeof document !== 'undefined' && document.documentElement) {
