@@ -360,8 +360,10 @@ export default function App() {
           }
         };
 
-        const { error: profileCreateError } = await supabase.from('profiles').insert(newProfileRow);
-        if (profileCreateError && profileCreateError.code !== '23505') {
+        const { error: profileCreateError } = await supabase
+          .from('profiles')
+          .upsert(newProfileRow, { onConflict: 'id', ignoreDuplicates: true });
+        if (profileCreateError) {
           setDataWriteError('Profilul nu a putut fi inițializat în Supabase.');
         }
 
