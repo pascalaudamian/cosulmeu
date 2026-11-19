@@ -1,41 +1,223 @@
-import { PriceObservation, Product } from '../types.js';
+import {
+  DataSourceType,
+  PriceHistoryInterval,
+  PriceHistoryIntervalStats,
+  PriceObservation,
+  ProductOffer,
+  Receipt,
+  Store
+} from '../types.js';
 import { StorageService } from './StorageService.js';
-import { PRODUCT_OFFERS, STORES } from '../data/mockData.js';
+import { STORES } from '../data/mockData.js';
+import { PriceComparisonService } from './PriceComparisonService.js';
+
+export interface PriceTimelinePoint {
+  date: string;
+  price: number;
+  storeId: string;
+  storeName: string;
+  source: string;
+  sourceType: DataSourceType | string;
+}
 
 export interface ProductPriceStats {
   productId: string;
   currentLowestPrice: number;
+  currentLowestStoreId?: string;
   currentLowestStoreName: string;
-  minRecordedPrice: number;
-  maxRecordedPrice: number;
-  averagePrice: number;
+  minRecordedPrice: number | null;
+  maxRecordedPrice: number | null;
+  averagePrice: number | null;
   lastPaidPrice?: number;
   lastPaidStoreName?: string;
-  trendPercentage: number; // e.g. -5.2 (%)
+  trendPercentage: number;
   observationsCount: number;
-  historyPoints: { date: string; price: number; storeName: string; source: string }[];
+  distinctDaysCount: number;
+  hasSufficientHistory: boolean;
+  historyPoints: PriceTimelinePoint[];
+  intervalStats: Record<PriceHistoryInterval, PriceHistoryIntervalStats>;
+}
+
+const VALID_INTERVALS: PriceHistoryInterval[] = [30, 90, 180, 365];
+
+function formatSourceLabel(source: DataSourceType | string): string {
+  switch (source) {
+    case 'verified':
+      return 'Bon fiscal confirmat';
+    case 'official_feed':
+      return 'Catalog / feed oficial';
+    case 'partner_api':
+      return 'API partener';
+    case 'user_reported':
+      return 'Raportat de utilizator';
+    case 'estimated':
+      return 'Estimare';
+    default:
+      return 'Observație catalog';
+  }
+}
+
+function normalizeStoreLookup(value: string): string {
+  return (value || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+}
+
+function findStore(storeId: string, stores: Store[]): Store | undefined {
+  const key = normalizeStoreLookup(storeId);
+  return stores.find(
+    s =>
+      s.id === storeId ||
+      normalizeStoreLookup(s.id) === key ||
+      normalizeStoreLookup(s.slug || '') === key
+  );
+}
+
+function parseDateSafe(rawDate: string): number {
+  if (!rawDate) return NaN;
+  const isoDay = rawDate.length === 10 ? `${rawDate}T12:00:00Z` : rawDate;
+  return new Date(isoDay).getTime();
 }
 
 export class PriceHistoryService {
   /**
-   * Get price history stats and observation timeline for a specific product
+   * Filtrează strict punctele istorice la intervalul solicitat (30, 90, 180 sau 365 zile).
+   * Nu ocolește niciodată filtrul atunci când există 0 sau 1 observații.
    */
-  static getProductPriceStats(productId: string): ProductPriceStats {
-    const observations = StorageService.getPriceObservations().filter(
-      obs => obs.productId === productId
+  static filterPointsByDays<T extends { date: string }>(
+    points: T[],
+    days: number,
+    now: Date = new Date()
+  ): T[] {
+    if (!Array.isArray(points) || points.length === 0) return [];
+    const safeDays = Number.isFinite(days) && days > 0 ? days : 90;
+    const nowMs = now.getTime();
+    const cutoffMs = nowMs - safeDays * 24 * 60 * 60 * 1000;
+
+    return points.filter(p => {
+      const ts = parseDateSafe(p.date);
+      if (Number.isNaN(ts)) return false;
+      return ts >= cutoffMs && ts <= nowMs + 24 * 60 * 60 * 1000;
+    });
+  }
+
+  /**
+   * Calculează statisticile exacte pentru un interval calendaristic (30 / 90 / 180 / 365 zile).
+   */
+  static computeIntervalStats(
+    points: PriceTimelinePoint[],
+    intervalDays: PriceHistoryInterval,
+    now: Date = new Date()
+  ): PriceHistoryIntervalStats {
+    const filtered = this.filterPointsByDays(points, intervalDays, now);
+    const validPoints = filtered.filter(p => Number.isFinite(p.price) && p.price > 0);
+    const distinctDaysCount = new Set(validPoints.map(p => p.date.slice(0, 10))).size;
+
+    if (validPoints.length === 0) {
+      return {
+        intervalDays,
+        observationsCount: 0,
+        distinctDaysCount: 0,
+        minPrice: null,
+        minPriceDate: null,
+        minPriceStoreId: null,
+        minPriceStoreName: null,
+        maxPrice: null,
+        avgPrice: null,
+        lastObservation: null,
+        hasSufficientHistory: false,
+        noticeRo: `Nu există observații istorice de preț înregistrate în ultimele ${intervalDays} zile.`
+      };
+    }
+
+    let minPoint = validPoints[0];
+    let maxPrice = validPoints[0].price;
+    let sum = 0;
+
+    for (const pt of validPoints) {
+      if (pt.price < minPoint.price) {
+        minPoint = pt;
+      }
+      if (pt.price > maxPrice) {
+        maxPrice = pt.price;
+      }
+      sum += pt.price;
+    }
+
+    const latest = validPoints[validPoints.length - 1];
+    const avgPrice = Math.round((sum / validPoints.length) * 100) / 100;
+    const hasSufficientHistory = validPoints.length >= 2 && distinctDaysCount >= 2;
+
+    let noticeRo: string | undefined;
+    if (validPoints.length === 1) {
+      noticeRo = `Există o singură observație în ultimele ${intervalDays} zile (${latest.date}, ${latest.storeName}) — insuficient pentru a trasa o evoluție de preț.`;
+    } else if (distinctDaysCount < 2) {
+      noticeRo = `Observațiile din ultimele ${intervalDays} zile provin dintr-o singură zi (${latest.date}) — sunt necesare cel puțin 2 zile distincte pentru tendință.`;
+    }
+
+    return {
+      intervalDays,
+      observationsCount: validPoints.length,
+      distinctDaysCount,
+      minPrice: Math.round(minPoint.price * 100) / 100,
+      minPriceDate: minPoint.date,
+      minPriceStoreId: minPoint.storeId,
+      minPriceStoreName: minPoint.storeName,
+      maxPrice: Math.round(maxPrice * 100) / 100,
+      avgPrice,
+      lastObservation: {
+        price: Math.round(latest.price * 100) / 100,
+        date: latest.date,
+        storeId: latest.storeId,
+        storeName: latest.storeName,
+        source: latest.source
+      },
+      hasSufficientHistory,
+      noticeRo
+    };
+  }
+
+  /**
+   * Calculează istoricul real și statisticile pe intervale pentru un produs.
+   * Nu fabrică puncte sintetice atunci când lipsesc observațiile reale.
+   */
+  static getProductPriceStats(
+    productId: string,
+    options?: {
+      offers?: ProductOffer[];
+      observations?: PriceObservation[];
+      stores?: Store[];
+      receipts?: Receipt[];
+      now?: Date;
+    }
+  ): ProductPriceStats {
+    const now = options?.now ?? new Date();
+    const stores = options?.stores ?? STORES;
+    const allObservations = options?.observations ?? StorageService.getPriceObservations();
+    const allOffers = options?.offers ?? StorageService.getProductOffers();
+    const receipts = options?.receipts ?? StorageService.getReceipts();
+
+    const productObservations = allObservations.filter(
+      obs =>
+        obs.productId === productId &&
+        Number.isFinite(obs.price) &&
+        obs.price > 0 &&
+        obs.source !== 'demo' &&
+        obs.source !== 'estimated'
     );
 
-    // Current valid offers from dynamic storage
-    const currentOffers = StorageService.getProductOffers().filter(
-      o => o.productId === productId && (o.verificationStatus !== 'expired' && (!o.validUntil || o.validUntil >= new Date().toISOString().split('T')[0]))
+    // Ofertele valide curente (exclus demo, expired, anomalies)
+    const currentOffers = allOffers.filter(
+      o => o.productId === productId && PriceComparisonService.isOfferValid(o)
     );
+
     let currentLowestPrice = Infinity;
+    let currentLowestStoreId: string | undefined;
     let currentLowestStoreName = '-';
 
     for (const off of currentOffers) {
       if (off.price < currentLowestPrice) {
         currentLowestPrice = off.price;
-        const st = STORES.find(s => s.id === off.storeId);
+        currentLowestStoreId = off.storeId;
+        const st = findStore(off.storeId, stores);
         currentLowestStoreName = st ? st.name : off.storeId;
       }
     }
@@ -44,59 +226,48 @@ export class PriceHistoryService {
       currentLowestPrice = 0;
     }
 
-    // Combine observation points with current offers if no observations exist yet
-    const timeline: { date: string; price: number; storeName: string; source: string }[] = [];
+    const sortedObs = [...productObservations].sort((a, b) => {
+      const diff = parseDateSafe(a.date) - parseDateSafe(b.date);
+      if (diff !== 0) return diff;
+      return a.id.localeCompare(b.id);
+    });
 
-    // Sort observations chronologically
-    const sortedObs = [...observations].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-    );
-
-    for (const obs of sortedObs) {
-      const st = STORES.find(s => s.id === obs.storeId);
-      timeline.push({
-        date: obs.date,
-        price: obs.price,
+    const timeline: PriceTimelinePoint[] = sortedObs.map(obs => {
+      const st = findStore(obs.storeId, stores);
+      return {
+        date: obs.date.slice(0, 10),
+        price: Math.round(obs.price * 100) / 100,
+        storeId: st?.id || obs.storeId,
         storeName: st ? st.name : obs.storeId,
-        source: obs.source === 'verified' ? 'Bon fiscal confirmat' : 'Ofertă magazin'
-      });
-    }
+        source: formatSourceLabel(obs.source),
+        sourceType: obs.source
+      };
+    });
 
-    // If current lowest offer isn't in timeline, append today
-    if (currentLowestPrice > 0) {
-      timeline.push({
-        date: new Date().toISOString().split('T')[0],
-        price: currentLowestPrice,
-        storeName: currentLowestStoreName,
-        source: 'Ofertă curentă'
-      });
-    }
-
-    // Find min, max, avg
     const allPrices = timeline.map(t => t.price).filter(p => p > 0);
-    const minRecordedPrice = allPrices.length > 0 ? Math.min(...allPrices) : currentLowestPrice;
-    const maxRecordedPrice = allPrices.length > 0 ? Math.max(...allPrices) : currentLowestPrice;
-    const averagePrice = allPrices.length > 0
-      ? Math.round((allPrices.reduce((a, b) => a + b, 0) / allPrices.length) * 100) / 100
-      : currentLowestPrice;
+    const minRecordedPrice = allPrices.length > 0 ? Math.min(...allPrices) : null;
+    const maxRecordedPrice = allPrices.length > 0 ? Math.max(...allPrices) : null;
+    const averagePrice =
+      allPrices.length > 0
+        ? Math.round((allPrices.reduce((a, b) => a + b, 0) / allPrices.length) * 100) / 100
+        : null;
 
-    // Check last paid from user's confirmed receipts
-    const receipts = StorageService.getReceipts();
     let lastPaidPrice: number | undefined;
     let lastPaidStoreName: string | undefined;
-
     for (const rec of receipts) {
       const match = rec.items.find(i => i.matchedProductId === productId);
       if (match) {
         lastPaidPrice = match.unitPrice;
         lastPaidStoreName = rec.storeName;
-        break; // receipts are ordered latest first
+        break;
       }
     }
 
-    // Calculate trend percentage (first observed price vs latest)
+    const distinctDaysCount = new Set(timeline.map(t => t.date)).size;
+    const hasSufficientHistory = timeline.length >= 2 && distinctDaysCount >= 2;
+
     let trendPercentage = 0;
-    if (timeline.length >= 2) {
+    if (hasSufficientHistory) {
       const firstPrice = timeline[0].price;
       const latestPrice = timeline[timeline.length - 1].price;
       if (firstPrice > 0) {
@@ -104,9 +275,15 @@ export class PriceHistoryService {
       }
     }
 
+    const intervalStats = {} as Record<PriceHistoryInterval, PriceHistoryIntervalStats>;
+    for (const days of VALID_INTERVALS) {
+      intervalStats[days] = this.computeIntervalStats(timeline, days, now);
+    }
+
     return {
       productId,
-      currentLowestPrice: currentLowestPrice === Infinity ? 0 : currentLowestPrice,
+      currentLowestPrice,
+      currentLowestStoreId,
       currentLowestStoreName,
       minRecordedPrice,
       maxRecordedPrice,
@@ -115,22 +292,10 @@ export class PriceHistoryService {
       lastPaidStoreName,
       trendPercentage,
       observationsCount: timeline.length,
-      historyPoints: timeline
+      distinctDaysCount,
+      hasSufficientHistory,
+      historyPoints: timeline,
+      intervalStats
     };
-  }
-
-  /**
-   * Filter history points by timeframe in days (30, 90, 365)
-   */
-  static filterPointsByDays(
-    points: { date: string; price: number; storeName: string; source: string }[],
-    days: number
-  ) {
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - days);
-
-    const filtered = points.filter(p => new Date(p.date) >= cutoffDate);
-    // If fewer than 2 points in window, include all points so chart displays nicely
-    return filtered.length >= 2 ? filtered : points;
   }
 }

@@ -1,6 +1,6 @@
 // src/components/ProductPriceTrend.tsx
-// Componentă 'Trend Prețuri' pe pagina de detaliu produs folosind Recharts
-// Vizualizează istoricul real de preț și estimează evoluția pentru următoarele săptămâni.
+// Secțiunea „Istoricul prețurilor” pe pagina individuală a produsului (Recharts + 30/90/180/365 zile)
+// Afișează exclusiv observații reale validate, fără valori sintetice sau inventate.
 
 import React, { useMemo, useState } from 'react';
 import {
@@ -17,8 +17,16 @@ import {
   ReferenceLine
 } from 'recharts';
 import { TrendingDown, TrendingUp, Minus, Info, Calendar } from 'lucide-react';
-import { PriceObservation, Store } from '../types.js';
+import {
+  PriceHistoryInterval,
+  PriceObservation,
+  Store
+} from '../types.js';
 import { STORES } from '../data/mockData.js';
+import {
+  PriceHistoryService,
+  PriceTimelinePoint
+} from '../services/PriceHistoryService.js';
 import {
   computePriceTrendForecast,
   formatShortRoDate,
@@ -27,15 +35,53 @@ import {
 } from '../utils/priceTrendForecast.js';
 
 interface ProductPriceTrendProps {
+  productId?: string;
   productName: string;
   observations: PriceObservation[];
   offers?: OfferSnapshotInput[];
   stores?: Store[];
 }
 
+const INTERVAL_OPTIONS: Array<{ days: PriceHistoryInterval; label: string }> = [
+  { days: 30, label: '30 zile' },
+  { days: 90, label: '90 zile' },
+  { days: 180, label: '180 zile' },
+  { days: 365, label: '1 an' }
+];
+
 function formatRonValue(val: number | undefined | null): string {
-  if (val === undefined || val === null || !Number.isFinite(val)) return '—';
+  if (val === undefined || val === null || !Number.isFinite(val)) return 'Indisponibil';
   return `${val.toFixed(2)} lei`;
+}
+
+function normalizeStoreKey(value: string): string {
+  return (value || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+}
+
+function resolveStoreName(storeId: string, stores: Store[]): string {
+  const key = normalizeStoreKey(storeId);
+  const found = stores.find(
+    s =>
+      s.id === storeId ||
+      normalizeStoreKey(s.id) === key ||
+      normalizeStoreKey(s.slug || '') === key
+  );
+  return found?.name || storeId || 'Magazin';
+}
+
+function formatSourceLabel(source: string): string {
+  switch (source) {
+    case 'verified':
+      return 'Bon fiscal confirmat';
+    case 'official_feed':
+      return 'Catalog / feed oficial';
+    case 'partner_api':
+      return 'API partener';
+    case 'user_reported':
+      return 'Raportat de utilizator';
+    default:
+      return 'Observație catalog';
+  }
 }
 
 interface CustomTooltipProps {
@@ -60,22 +106,22 @@ const TrendChartTooltip: React.FC<CustomTooltipProps> = ({ active, payload }) =>
       {!isForecast && point.historicalPrice !== undefined && (
         <div className="space-y-0.5 pt-1 border-t border-slate-700/80">
           <div className="flex items-center justify-between gap-4">
-            <span className="text-slate-300">Preț minim observat:</span>
+            <span className="text-slate-300">Cel mai mic preț:</span>
             <span className="font-mono font-bold text-emerald-400 tabular-nums">
               {formatRonValue(point.historicalPrice)}
             </span>
           </div>
           {point.avgPrice !== undefined && Math.abs(point.avgPrice - point.historicalPrice) >= 0.01 && (
             <div className="flex items-center justify-between gap-4">
-              <span className="text-slate-300">Medie retaileri:</span>
+              <span className="text-slate-300">Preț mediu retaileri:</span>
               <span className="font-mono font-semibold text-slate-200 tabular-nums">
                 {formatRonValue(point.avgPrice)}
               </span>
             </div>
           )}
           {point.stores && point.stores.length > 0 && (
-            <div className="text-[11px] text-slate-400 pt-0.5">
-              Magazine: {point.stores.join(', ')}
+            <div className="text-[11px] text-slate-300 pt-0.5">
+              Retailer: {point.stores.join(', ')}
             </div>
           )}
           {point.sources && point.sources.length > 0 && (
@@ -89,14 +135,14 @@ const TrendChartTooltip: React.FC<CustomTooltipProps> = ({ active, payload }) =>
       {isForecast && point.forecastPrice !== undefined && (
         <div className="space-y-0.5 pt-1 border-t border-slate-700/80">
           <div className="flex items-center justify-between gap-4">
-            <span className="text-slate-300">Preț estimat:</span>
+            <span className="text-slate-300">Estimare statistică:</span>
             <span className="font-mono font-bold text-sky-400 tabular-nums">
               {formatRonValue(point.forecastPrice)}
             </span>
           </div>
           {point.forecastLow !== undefined && point.forecastHigh !== undefined && (
             <div className="flex items-center justify-between gap-4">
-              <span className="text-slate-300">Interval probabil:</span>
+              <span className="text-slate-300">Interval orientativ:</span>
               <span className="font-mono text-slate-200 tabular-nums">
                 {point.forecastLow.toFixed(2)} – {point.forecastHigh.toFixed(2)} lei
               </span>
@@ -114,54 +160,101 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
   offers = [],
   stores = STORES
 }) => {
+  const [intervalDays, setIntervalDays] = useState<PriceHistoryInterval>(90);
   const [forecastWeeks, setForecastWeeks] = useState<number>(4);
   const [showStoreAverage, setShowStoreAverage] = useState<boolean>(true);
+  const [showForecast, setShowForecast] = useState<boolean>(false);
+
+  // Excludem orice observație sintetică / demo / invalidă
+  const realObservations = useMemo(
+    () =>
+      (observations || [])
+        .filter(
+          obs =>
+            obs &&
+            Number.isFinite(Number(obs.price)) &&
+            Number(obs.price) > 0 &&
+            obs.source !== 'demo' &&
+            obs.source !== 'estimated'
+        )
+        .sort((a, b) => a.date.localeCompare(b.date)),
+    [observations]
+  );
+
+  // Verificăm dacă există date suficiente pentru 1 an (minim 2 zile distincte în ultimele 365 zile, cu acoperire > 180 zile sau înregistrări în afara 180 zile)
+  const timelineAll: PriceTimelinePoint[] = useMemo(
+    () =>
+      realObservations.map(obs => ({
+        date: obs.date.slice(0, 10),
+        price: Math.round(Number(obs.price) * 100) / 100,
+        storeId: obs.storeId,
+        storeName: resolveStoreName(obs.storeId, stores),
+        source: formatSourceLabel(obs.source),
+        sourceType: obs.source
+      })),
+    [realObservations, stores]
+  );
+
+  const yearStats = useMemo(
+    () => PriceHistoryService.computeIntervalStats(timelineAll, 365),
+    [timelineAll]
+  );
+
+  const intervalObservations = useMemo(
+    () => PriceHistoryService.filterPointsByDays(realObservations, intervalDays),
+    [realObservations, intervalDays]
+  );
+
+  const activeIntervalStats = useMemo(
+    () => PriceHistoryService.computeIntervalStats(timelineAll, intervalDays),
+    [timelineAll, intervalDays]
+  );
 
   const forecast = useMemo(
     () =>
       computePriceTrendForecast({
-        observations,
-        offers,
+        observations: intervalObservations,
+        offers: showForecast ? offers : [],
         stores,
         forecastWeeks
       }),
-    [observations, offers, stores, forecastWeeks]
+    [intervalObservations, offers, stores, forecastWeeks, showForecast]
   );
 
-  // Date pentru graficul de comparație pe aceeași zi (când există >= 2 observații dar dintr-o singură zi)
+  const chartData = useMemo(
+    () =>
+      showForecast
+        ? forecast.chartData
+        : forecast.chartData.filter(point => point.kind === 'historical'),
+    [forecast.chartData, showForecast]
+  );
+
   const sameDayStoreBars = useMemo(() => {
     if (forecast.status !== 'same_day_only') return [];
-    const storeNameMap = new Map(
-      stores.map(s => [s.id.toLowerCase().replace(/^store-/, ''), s.name])
-    );
-    return observations
-      .filter(o => Number.isFinite(Number(o.price)) && Number(o.price) > 0)
-      .map((o, idx) => {
-        const norm = (o.storeId || '').toLowerCase().replace(/^store-/, '');
-        return {
-          key: `${norm}-${idx}`,
-          storeName: storeNameMap.get(norm) || o.storeId || 'Magazin',
-          price: Math.round(Number(o.price) * 100) / 100,
-          date: o.date
-        };
-      })
+    return intervalObservations
+      .map((o, idx) => ({
+        key: `${normalizeStoreKey(o.storeId)}-${idx}`,
+        storeName: resolveStoreName(o.storeId, stores),
+        price: Math.round(Number(o.price) * 100) / 100,
+        date: o.date.slice(0, 10)
+      }))
       .sort((a, b) => a.price - b.price);
-  }, [forecast.status, observations, stores]);
+  }, [forecast.status, intervalObservations, stores]);
 
   const yDomain = useMemo<[number, number]>(() => {
     const vals: number[] = [];
-    for (const p of forecast.chartData) {
+    for (const p of chartData) {
       if (p.historicalPrice !== undefined) vals.push(p.historicalPrice);
       if (showStoreAverage && p.avgPrice !== undefined) vals.push(p.avgPrice);
-      if (p.forecastLow !== undefined) vals.push(p.forecastLow);
-      if (p.forecastHigh !== undefined) vals.push(p.forecastHigh);
+      if (showForecast && p.forecastLow !== undefined) vals.push(p.forecastLow);
+      if (showForecast && p.forecastHigh !== undefined) vals.push(p.forecastHigh);
     }
     if (vals.length === 0) return [0, 10];
     const minVal = Math.min(...vals);
     const maxVal = Math.max(...vals);
     const pad = Math.max(0.2, (maxVal - minVal) * 0.18);
     return [Math.max(0, Math.floor((minVal - pad) * 10) / 10), Math.ceil((maxVal + pad) * 10) / 10];
-  }, [forecast.chartData, showStoreAverage]);
+  }, [chartData, showStoreAverage, showForecast]);
 
   const lastHistoricalLabel =
     forecast.historicalPoints.length > 0
@@ -183,133 +276,203 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
 
   const directionMeta =
     forecast.direction === 'down'
-      ? { label: 'Scădere estimată', color: 'text-emerald-700 dark:text-emerald-400' }
+      ? { label: 'Scădere', color: 'text-emerald-700 dark:text-emerald-400' }
       : forecast.direction === 'up'
-      ? { label: 'Creștere estimată', color: 'text-rose-700 dark:text-rose-400' }
-      : { label: 'Evoluție stabilă', color: 'text-slate-700 dark:text-slate-300' };
+      ? { label: 'Creștere', color: 'text-rose-700 dark:text-rose-400' }
+      : { label: 'Stabil', color: 'text-slate-700 dark:text-slate-300' };
+
+  const activeIntervalLabel =
+    INTERVAL_OPTIONS.find(o => o.days === intervalDays)?.label || `${intervalDays} zile`;
 
   return (
     <section
-      aria-label={`Trend prețuri pentru ${productName}`}
+      aria-label={`Istoricul prețurilor pentru ${productName}`}
       className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-6 sm:p-8 mb-8"
     >
-      {/* Header & Controale Orizont */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100 dark:border-slate-800 mb-6">
+      {/* Header & Selector Interval 30 / 90 / 180 / 1 an */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-slate-100 dark:border-slate-800 mb-6">
         <div>
           <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100">
-            Trend Prețuri
+            Istoricul prețurilor
           </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-1.5">
-            <span>Istoric din observații reale</span>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-1.5 tabular-nums">
+            <span>Exclusiv observații reale</span>
             <span aria-hidden="true">·</span>
-            <span className="tabular-nums">{forecast.totalObservationsCount} observații</span>
+            <span>{activeIntervalStats.observationsCount} observații în {activeIntervalLabel}</span>
             <span aria-hidden="true">·</span>
-            <span className="tabular-nums">{forecast.distinctDatesCount} zile distincte</span>
+            <span>{activeIntervalStats.distinctDaysCount} zile distincte</span>
           </p>
         </div>
 
-        {forecast.status === 'ready' && (
-          <div className="flex flex-wrap items-center gap-2">
-            {hasAverageDiff && (
-              <button
-                type="button"
-                onClick={() => setShowStoreAverage(v => !v)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  showStoreAverage
-                    ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
-                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
-                }`}
-              >
-                Medie magazine
-              </button>
-            )}
-
-            <div
-              role="group"
-              aria-label="Orizont estimare săptămânală"
-              className="inline-flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl"
-            >
-              {[2, 3, 4].map(weeks => (
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Selector strict 30 | 90 | 180 | 1 an */}
+          <div
+            role="group"
+            aria-label="Interval istoric prețuri"
+            className="inline-flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl"
+          >
+            {INTERVAL_OPTIONS.map(opt => {
+              const isOneYearLimited = opt.days === 365 && !yearStats.hasSufficientHistory;
+              return (
                 <button
-                  key={weeks}
+                  key={opt.days}
                   type="button"
-                  onClick={() => setForecastWeeks(weeks)}
+                  onClick={() => setIntervalDays(opt.days)}
+                  title={
+                    isOneYearLimited
+                      ? 'Datele pe 1 an sunt limitate pentru acest produs'
+                      : `Afișează istoricul pe ${opt.label}`
+                  }
                   className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                    forecastWeeks === weeks
+                    intervalDays === opt.days
                       ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-2xs'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                   }`}
                 >
-                  +{weeks} săpt.
+                  {opt.label}
                 </button>
-              ))}
-            </div>
+              );
+            })}
           </div>
-        )}
+
+          {forecast.status === 'ready' && (
+            <>
+              {hasAverageDiff && (
+                <button
+                  type="button"
+                  onClick={() => setShowStoreAverage(v => !v)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                    showStoreAverage
+                      ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  Medie retaileri
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setShowForecast(v => !v)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                  showForecast
+                    ? 'bg-sky-700 text-white border-sky-700'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
+                }`}
+              >
+                {showForecast ? `Proiecție +${forecastWeeks} săpt.` : 'Arată proiecție'}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Caz 1: Istoric suficient pe mai multe zile -> Grafic Recharts + Estimare */}
-      {forecast.status === 'ready' && metrics ? (
-        <div className="space-y-6">
-          {/* Metrici cheie pe 4 coloane (single-elevation, fără carduri imbricate cu umbre) */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80">
-              <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                Ultimul preț observat
-              </div>
-              <div className="text-xl font-extrabold text-slate-900 dark:text-slate-100 font-mono tabular-nums mt-1">
-                {formatRonValue(metrics.latestObservedPrice)}
-              </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
-                {formatShortRoDate(metrics.latestObservedDate)}
-              </div>
-            </div>
+      {/* 4 Carduri Metrici Cheie pentru intervalul activ */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6 tabular-nums">
+        <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80">
+          <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+            Cel mai mic preț ({activeIntervalLabel})
+          </div>
+          <div className="text-xl font-extrabold text-emerald-700 dark:text-emerald-400 font-mono mt-1">
+            {formatRonValue(activeIntervalStats.minPrice)}
+          </div>
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+            {activeIntervalStats.minPriceStoreName
+              ? `${activeIntervalStats.minPriceStoreName} · ${formatShortRoDate(activeIntervalStats.minPriceDate || '')}`
+              : 'Fără observații în interval'}
+          </div>
+        </div>
 
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80">
-              <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                Minim / Mediu istoric
-              </div>
-              <div className="text-xl font-extrabold text-emerald-700 dark:text-emerald-400 font-mono tabular-nums mt-1">
-                {metrics.minObservedPrice.toFixed(2)} lei
-              </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
-                Medie: {formatRonValue(metrics.averageObservedPrice)}
-              </div>
-            </div>
+        <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80">
+          <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+            Preț mediu ({activeIntervalLabel})
+          </div>
+          <div className="text-xl font-extrabold text-slate-900 dark:text-slate-100 font-mono mt-1">
+            {formatRonValue(activeIntervalStats.avgPrice)}
+          </div>
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+            {activeIntervalStats.observationsCount > 0
+              ? `Din ${activeIntervalStats.observationsCount} observații`
+              : 'Nicio observație'}
+          </div>
+        </div>
 
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80">
-              <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                Estimare +{forecastWeeks} săptămâni
-              </div>
-              <div className="text-xl font-extrabold text-sky-700 dark:text-sky-400 font-mono tabular-nums mt-1">
-                {formatRonValue(metrics.projectedPrice)}
-              </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
-                Interval: {metrics.projectedLow.toFixed(2)} – {metrics.projectedHigh.toFixed(2)} lei
-              </div>
-            </div>
+        <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80">
+          <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+            Ultimul preț observat
+          </div>
+          <div className="text-xl font-extrabold text-slate-900 dark:text-slate-100 font-mono mt-1">
+            {formatRonValue(activeIntervalStats.lastObservation?.price)}
+          </div>
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+            {activeIntervalStats.lastObservation
+              ? `${activeIntervalStats.lastObservation.storeName} · ${activeIntervalStats.lastObservation.date}`
+              : 'Fără dată observată'}
+          </div>
+        </div>
 
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80">
-              <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                Direcție & Încredere
-              </div>
+        <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80">
+          <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+            Variație în {activeIntervalLabel}
+          </div>
+          {forecast.status === 'ready' && metrics ? (
+            <>
               <div className={`text-base font-extrabold flex items-center gap-1.5 mt-1.5 ${directionMeta.color}`}>
                 <DirectionIcon className="w-4 h-4 shrink-0" />
-                <span>{directionMeta.label}</span>
+                <span>
+                  {metrics.changePercent >= 0 ? '+' : ''}
+                  {metrics.changePercent.toFixed(1)}%
+                </span>
               </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 tabular-nums">
-                {metrics.changePercent >= 0 ? '+' : ''}
-                {metrics.changePercent.toFixed(1)}% · Încredere {forecast.confidence}
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                {directionMeta.label} · {activeIntervalStats.distinctDaysCount} zile distincte
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-base font-bold text-slate-600 dark:text-slate-300 mt-1.5">
+                Date insuficiente
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                Minim 2 zile distincte
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Caz 1: Istoric suficient pe mai multe zile -> Grafic evoluție Recharts */}
+      {forecast.status === 'ready' && metrics ? (
+        <div className="space-y-5">
+          {showForecast && (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="text-sky-700 dark:text-sky-400 font-semibold">
+                Proiecție statistică orientativă (+{forecastWeeks} săpt.): {formatRonValue(metrics.projectedPrice)} ({metrics.projectedLow.toFixed(2)} – {metrics.projectedHigh.toFixed(2)} lei)
+              </span>
+              <div className="inline-flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+                {[2, 3, 4].map(weeks => (
+                  <button
+                    key={weeks}
+                    type="button"
+                    onClick={() => setForecastWeeks(weeks)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      forecastWeeks === weeks
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-2xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                    }`}
+                  >
+                    +{weeks} săpt.
+                  </button>
+                ))}
               </div>
             </div>
-          </div>
+          )}
 
-          {/* Grafic Recharts Istoric + Estimare */}
-          <div className="w-full min-w-0 pt-2">
+          <div className="w-full min-w-0">
             <div className="w-full h-72 min-w-0">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart
-                  data={forecast.chartData}
+                  data={chartData}
                   margin={{ top: 12, right: 18, left: 0, bottom: 8 }}
                 >
                   <defs>
@@ -336,7 +499,7 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
                   />
                   <Tooltip content={<TrendChartTooltip />} />
 
-                  {lastHistoricalLabel && (
+                  {showForecast && lastHistoricalLabel && (
                     <ReferenceLine
                       x={lastHistoricalLabel}
                       stroke="#94a3b8"
@@ -350,18 +513,18 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
                     />
                   )}
 
-                  {/* Bandă de incertitudine pentru săptămânile estimate */}
-                  <Area
-                    type="monotone"
-                    dataKey="forecastBand"
-                    name="Interval estimat"
-                    stroke="none"
-                    fill="#0284c7"
-                    fillOpacity={0.14}
-                    isAnimationActive={false}
-                  />
+                  {showForecast && (
+                    <Area
+                      type="monotone"
+                      dataKey="forecastBand"
+                      name="Interval orientativ"
+                      stroke="none"
+                      fill="#0284c7"
+                      fillOpacity={0.14}
+                      isAnimationActive={false}
+                    />
+                  )}
 
-                  {/* Linia istorică reală */}
                   <Area
                     type="monotone"
                     dataKey="historicalPrice"
@@ -375,12 +538,11 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
                     isAnimationActive={false}
                   />
 
-                  {/* Medie retaileri pe zile */}
                   {showStoreAverage && hasAverageDiff && (
                     <Line
                       type="monotone"
                       dataKey="avgPrice"
-                      name="Medie magazine"
+                      name="Medie retaileri"
                       stroke="#94a3b8"
                       strokeWidth={1.5}
                       strokeDasharray="2 3"
@@ -390,56 +552,52 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
                     />
                   )}
 
-                  {/* Linia de estimare săptămânală */}
-                  <Line
-                    type="monotone"
-                    dataKey="forecastPrice"
-                    name="Estimare evoluție"
-                    stroke="#0284c7"
-                    strokeWidth={2.5}
-                    strokeDasharray="6 4"
-                    dot={{ r: 3.5, fill: '#0284c7', stroke: '#ffffff', strokeWidth: 2 }}
-                    activeDot={{ r: 5, fill: '#0284c7', stroke: '#ffffff', strokeWidth: 2 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+                  {showForecast && (
+                    <Line
+                      type="monotone"
+                      dataKey="forecastPrice"
+                      name="Estimare evoluție"
+                      stroke="#0284c7"
+                      strokeWidth={2.5}
+                      strokeDasharray="6 4"
+                      dot={{ r: 3.5, fill: '#0284c7', stroke: '#ffffff', strokeWidth: 2 }}
+                      activeDot={{ r: 5, fill: '#0284c7', stroke: '#ffffff', strokeWidth: 2 }}
+                      connectNulls
+                      isAnimationActive={false}
+                    />
+                  )}
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
 
-            {/* Legendă curată sub grafic */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-600 dark:text-slate-400 mt-3 pt-3 border-t border-slate-100 dark:border-slate-800">
               <span className="inline-flex items-center gap-2">
                 <span className="w-4 h-0.5 bg-emerald-600 inline-block" />
-                <span>Istoric confirmat (minim zilnic)</span>
+                <span>Cel mai mic preț zilnic observat</span>
               </span>
               {showStoreAverage && hasAverageDiff && (
                 <span className="inline-flex items-center gap-2">
                   <span className="w-4 h-0.5 border-t-2 border-dotted border-slate-500 inline-block" />
-                  <span>Medie retaileri</span>
+                  <span>Preț mediu retaileri</span>
                 </span>
               )}
-              <span className="inline-flex items-center gap-2">
-                <span className="w-4 h-0.5 border-t-2 border-dashed border-sky-600 inline-block" />
-                <span>Estimare săptămânală</span>
-              </span>
-              <span className="inline-flex items-center gap-2">
-                <span className="w-3.5 h-2.5 rounded-xs bg-sky-600/20 border border-sky-600/30 inline-block" />
-                <span>Interval probabil</span>
-              </span>
+              {showForecast && (
+                <span className="inline-flex items-center gap-2">
+                  <span className="w-4 h-0.5 border-t-2 border-dashed border-sky-600 inline-block" />
+                  <span>Proiecție statistică orientativă</span>
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Interpretare & Notă metodologică transparentă */}
           <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80 text-xs text-slate-700 dark:text-slate-300 space-y-1">
             <p className="font-semibold text-slate-900 dark:text-slate-100">{forecast.summaryMessage}</p>
             <p className="text-slate-500 dark:text-slate-400">
-              Metodologie: estimare statistică orientativă calculată prin regresie liniară amortizată pe baza celor {forecast.distinctDatesCount} zile de observații reale ({forecast.spanDays} zile acoperite). Nu reprezintă o garanție a prețului de raft viitor.
+              Date reale afișate pentru intervalul {activeIntervalLabel} ({forecast.distinctDatesCount} zile distincte, {forecast.spanDays} zile acoperite). Nu sunt generate puncte sintetice pentru zilele fără observații.
             </p>
           </div>
         </div>
       ) : forecast.status === 'same_day_only' && sameDayStoreBars.length > 0 ? (
-        /* Caz 2: Mai multe observații dar toate din aceeași zi -> Comparație bar chart pe magazine */
         <div className="space-y-5">
           <div className="w-full h-56 min-w-0">
             <ResponsiveContainer width="100%" height="100%">
@@ -486,18 +644,18 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
           </div>
           <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80 text-xs text-slate-600 dark:text-slate-300 flex items-start gap-2.5">
             <Calendar className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0 mt-0.5" />
-            <span>{forecast.summaryMessage}</span>
+            <span>{activeIntervalStats.noticeRo || forecast.summaryMessage}</span>
           </div>
         </div>
       ) : (
-        /* Caz 3: Istoric insuficient (< 2 zile) */
         <div className="py-8 px-4 text-center bg-slate-50/70 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
           <Info className="w-7 h-7 text-slate-400 dark:text-slate-500 mx-auto mb-2" />
           <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-            Istoric insuficient pentru estimarea săptămânală
+            Istoric insuficient pentru intervalul {activeIntervalLabel}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400 max-w-lg mx-auto mt-1 leading-relaxed">
-            {forecast.summaryMessage}
+            {activeIntervalStats.noticeRo ||
+              'Nu există suficiente observații reale în intervalul selectat pentru a afișa evoluția prețului.'}
           </p>
         </div>
       )}

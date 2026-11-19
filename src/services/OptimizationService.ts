@@ -1,165 +1,111 @@
-import { ShoppingListItem, MultiStoreOptimization, Store, ProductOffer, BasketStoreComparison, Product } from '../types.js';
-import { STORES, PRODUCT_OFFERS, PRODUCTS } from '../data/mockData.js';
+// src/services/OptimizationService.ts
+// Fațadă compatibilă cu API-ul existent, delegând calculul determinist către BasketOptimizerService (V1).
+
+import {
+  ShoppingListItem,
+  MultiStoreOptimization,
+  Product,
+  ProductOffer,
+  Store,
+  BasketOptimizationOptions
+} from '../types.js';
 import { PriceComparisonService } from './PriceComparisonService.js';
+import { BasketOptimizerService } from './BasketOptimizerService.js';
 import { StorageService } from './StorageService.js';
 
 export class OptimizationService {
   /**
-   * Optimize shopping basket across multiple stores
-   * @param items List of shopping list items
-   * @param transportCost Extra transport / gas / time cost per additional store in RON (e.g. 6.00 lei)
+   * Calculează planul multi-magazin și îl compară cu cel mai bun magazin unic.
+   * Implicit NU inventează costuri de transport (travelCost = 0), decât dacă apelantul specifică explicit o valoare.
    */
   static optimizeBasket(
     items: ShoppingListItem[],
-    transportCost: number = 6.00,
+    travelCostPerExtraStore = 0,
     customProducts?: Product[],
     customOffers?: ProductOffer[],
-    customStores?: Store[]
+    customStores?: Store[],
+    options?: Omit<BasketOptimizationOptions, 'transportCostPerExtraStore'>
   ): MultiStoreOptimization {
-    if (!items || items.length === 0) {
+    const allProducts = customProducts ?? StorageService.getAllProducts();
+    const allOffers = customOffers ?? StorageService.getProductOffers();
+    const allStores = customStores;
+    const useLoyalty =
+      options?.useLoyaltyCards !== undefined
+        ? options.useLoyaltyCards
+        : StorageService.getUserProfile().useLoyaltyCards ?? true;
+
+    const singleComparisons = PriceComparisonService.compareBasketAcrossStores(
+      items,
+      { useLoyaltyCards: useLoyalty },
+      allProducts,
+      allOffers,
+      allStores
+    );
+    const singleWinner = singleComparisons.length > 0 ? singleComparisons[0] : null;
+
+    const v1 = BasketOptimizerService.optimize({
+      items,
+      products: allProducts,
+      offers: allOffers,
+      stores: allStores,
+      options: {
+        ...options,
+        useLoyaltyCards: useLoyalty,
+        transportCostPerExtraStore: Math.max(0, Number(travelCostPerExtraStore) || 0)
+      }
+    });
+
+    const plan = v1.recommendedMultiStore;
+    if (!plan || plan.stops.length === 0) {
       return {
-        singleStoreWinner: null,
+        singleStoreWinner: singleWinner,
         multiStorePlan: [],
-        multiStoreTotal: 0,
+        multiStoreTotal: singleWinner?.grandTotal || 0,
         grossSavings: 0,
         transportCost: 0,
         netSavings: 0,
         isSplitRecommended: false,
-        explanation: 'Lista este goală. Adaugă produse pentru a calcula optimizarea.'
+        explanation:
+          v1.limitations[0] ||
+          'Nu există suficiente oferte active verificate pentru a împărți coșul în mai multe magazine.'
       };
     }
 
-    const normalizeStoreKey = (val: string) =>
-      (val || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+    const multiStorePlan = plan.stops.map(stop => ({
+      store: stop.store,
+      items: stop.allocations.map(alloc => ({
+        item: alloc.item,
+        offer: alloc.offer,
+        calculatedPrice: alloc.calculatedPrice
+      })),
+      subtotal: stop.subtotal
+    }));
 
-    const allProducts = customProducts ?? StorageService.getAllProducts();
-    const canonicalStoresMap = new Map<string, Store>();
-    for (const st of (customStores ?? STORES)) {
-      if (!st?.id || st.id === 'validation-only-retailer' || st.slug === 'validation-only-retailer') {
-        continue;
-      }
-      const key = normalizeStoreKey(st.slug || st.id) || st.id;
-      const existing = canonicalStoresMap.get(key);
-      if (!existing || (existing.id !== key && st.id === key)) {
-        canonicalStoresMap.set(key, st);
-      }
-    }
-    const allStores = Array.from(canonicalStoresMap.values());
-    const comparisons = PriceComparisonService.compareBasketAcrossStores(
-      items,
-      undefined,
-      allProducts,
-      customOffers,
-      allStores
-    );
-    const singleStoreWinner = comparisons[0] || null;
-    const singleWinnerTotal = singleStoreWinner ? singleStoreWinner.grandTotal : 0;
+    const multiStoreTotal = plan.productsTotal;
+    const extraStoresCount = Math.max(0, multiStorePlan.length - 1);
+    const totalTransportCost = Math.round(extraStoresCount * Math.max(0, travelCostPerExtraStore) * 100) / 100;
 
-    // Map each item to its absolute lowest available price store
-    const itemAssignments: {
-      item: ShoppingListItem;
-      store: Store;
-      offer: ProductOffer;
-      calculatedPrice: number;
-    }[] = [];
-
-    for (const item of items) {
-      const product = PriceComparisonService.findProductForListItem(item, allProducts);
-      if (!product) continue;
-
-      const offers = PriceComparisonService.getOffersForProduct(product.id, false, customOffers);
-      if (offers.length === 0) continue;
-
-      let bestOffer: ProductOffer | null = null;
-      let minCost = Infinity;
-
-      const userProfile = StorageService.getUserProfile();
-      for (const offer of offers) {
-        const { price } = PriceComparisonService.calculateItemCostAtStore(
-          item,
-          product,
-          offer,
-          userProfile.useLoyaltyCards
-        );
-        if (price < minCost) {
-          minCost = price;
-          bestOffer = offer;
-        }
-      }
-
-      if (bestOffer) {
-        const offerStoreKey = normalizeStoreKey(bestOffer.storeId);
-        const store = allStores.find(
-          s =>
-            s.id === bestOffer!.storeId ||
-            normalizeStoreKey(s.id) === offerStoreKey ||
-            normalizeStoreKey(s.slug || '') === offerStoreKey
-        );
-        if (store) {
-          itemAssignments.push({
-            item,
-            store,
-            offer: bestOffer,
-            calculatedPrice: minCost
-          });
-        }
-      }
-    }
-
-    // Group items by assigned store
-    const storeMap = new Map<string, {
-      store: Store;
-      items: { item: ShoppingListItem; offer: ProductOffer; calculatedPrice: number }[];
-      subtotal: number;
-    }>();
-
-    for (const assignment of itemAssignments) {
-      const sId = assignment.store.id;
-      if (!storeMap.has(sId)) {
-        storeMap.set(sId, {
-          store: assignment.store,
-          items: [],
-          subtotal: 0
-        });
-      }
-      const entry = storeMap.get(sId)!;
-      entry.items.push({
-        item: assignment.item,
-        offer: assignment.offer,
-        calculatedPrice: assignment.calculatedPrice
-      });
-      entry.subtotal = Math.round((entry.subtotal + assignment.calculatedPrice) * 100) / 100;
-    }
-
-    // Filter to stores with substantial items (prune stores that only have 1 trivial item if savings are micro)
-    const multiStorePlan = Array.from(storeMap.values()).sort((a, b) => b.subtotal - a.subtotal);
-
-    const multiStoreTotal = Math.round(
-      multiStorePlan.reduce((sum, p) => sum + p.subtotal, 0) * 100
-    ) / 100;
-
-    const numStores = multiStorePlan.length;
-    // Extra transport cost applies to stores beyond the 1st one: (numStores - 1) * transportCost
-    const extraTrips = Math.max(0, numStores - 1);
-    const totalTransportCost = Math.round(extraTrips * transportCost * 100) / 100;
-
-    const grossSavings = Math.max(0, Math.round((singleWinnerTotal - multiStoreTotal) * 100) / 100);
+    const grossSavings =
+      plan.hasValidSavingsBaseline && plan.savingsVsBestSingleStore !== null
+        ? Math.max(0, Math.round((plan.savingsVsBestSingleStore + totalTransportCost) * 100) / 100)
+        : 0;
     const netSavings = Math.round((grossSavings - totalTransportCost) * 100) / 100;
+    const isSplitRecommended = extraStoresCount > 0 && netSavings > 0.01;
 
-    const isSplitRecommended = netSavings > 2.00 && numStores > 1;
-
-    let explanation = '';
-    if (numStores <= 1) {
-      explanation = `Toate cele mai bune prețuri sunt deja concentrate la ${singleStoreWinner?.store.name || 'un singur magazin'}. O deplasare unică este optimă.`;
+    let explanation = plan.explanationRo;
+    if (extraStoresCount === 0) {
+      explanation = `Împărțirea nu este necesară: ${multiStorePlan[0].store.name} oferă cel mai bun preț total pentru produsele disponibile.`;
+    } else if (!plan.hasValidSavingsBaseline) {
+      explanation =
+        'Împărțirea între mai multe magazine acoperă produse indisponibile într-un singur magazin; nu există un reper complet echivalent într-un singur magazin pentru calculul economiilor.';
     } else if (isSplitRecommended) {
-      const storeNames = multiStorePlan.map(p => p.store.name).join(' și ');
-      explanation = `Împărțind lista între ${storeNames}, economisești ${PriceComparisonService.formatRon(grossSavings)}. Chiar scăzând ${PriceComparisonService.formatRon(totalTransportCost)} cost estimat de deplasare, rămâi cu un câștig net de ${PriceComparisonService.formatRon(netSavings)}.`;
+      explanation = `Economie de ${PriceComparisonService.formatRon(netSavings)} la produsele comparabile împărțind coșul în ${multiStorePlan.length} magazine${totalTransportCost === 0 ? ' (fără costuri de transport incluse).' : '.'}`;
     } else {
-      explanation = `Deși împărțirea pe ${numStores} magazine oferă o reducere brută de ${PriceComparisonService.formatRon(grossSavings)}, costul de transport și timpul suplimentar (~${PriceComparisonService.formatRon(totalTransportCost)}) depășesc beneficiul. Recomandăm să faci toate cumpărăturile la ${singleStoreWinner?.store.name}.`;
+      explanation = `Economia estimată (${PriceComparisonService.formatRon(grossSavings)}) nu depășește pragul suplimentar de deplasare. Cumpărăturile la un singur magazin rămân opțiunea mai practică.`;
     }
 
     return {
-      singleStoreWinner,
+      singleStoreWinner: singleWinner,
       multiStorePlan,
       multiStoreTotal,
       grossSavings,

@@ -323,6 +323,8 @@ export interface UserPriceObservation {
   isSgr?: boolean;
 }
 
+export type PriceAlertType = 'below_target' | 'any_drop' | 'interval_low';
+
 export interface PriceAlert {
   id: string;
   productId: string;
@@ -332,6 +334,31 @@ export interface PriceAlert {
   lowestStoreId?: string;
   createdAt: string;
   isActive: boolean;
+  alertType?: PriceAlertType;
+  intervalDays?: 30 | 90 | 180 | 365;
+  sourceListId?: string;
+  lastTriggeredAt?: string;
+  lastTriggeredPrice?: number;
+  lastEvaluatedPrice?: number;
+  lastNotifiedKey?: string;
+}
+
+export interface InAppPriceNotification {
+  id: string;
+  alertId: string;
+  dedupeKey: string;
+  productId: string;
+  productName: string;
+  alertType: PriceAlertType;
+  title: string;
+  message: string;
+  observedPrice: number;
+  previousPrice?: number;
+  targetPrice?: number;
+  storeId?: string;
+  storeName?: string;
+  triggeredAt: string;
+  isRead: boolean;
 }
 
 export interface TrackedProduct {
@@ -725,5 +752,212 @@ export interface PriceAuditRemediationResult {
   previews: PriceAuditBatchPreviewItem[];
   errors: string[];
 }
+
+// =========================================================================
+// V1 Roadmap: Centralized Price Quality Classification
+// =========================================================================
+
+export type PriceDataQualityStatus =
+  | 'VERIFIED_RECENTLY'
+  | 'VERIFIED'
+  | 'STALE'
+  | 'UNVERIFIED'
+  | 'EXPIRED'
+  | 'SUSPICIOUS';
+
+export interface PriceQualityFactor {
+  key: 'age' | 'source' | 'promo_validity' | 'product_validity' | 'unit_consistency' | 'anomaly' | 'confirmations';
+  labelRo: string;
+  score: number; // 0..100
+  weight: number; // fraction summing to 1.0
+  contribution: number;
+  detailRo: string;
+}
+
+export interface PriceQualityClassifierConfig {
+  recentlyVerifiedMaxHours: number;
+  verifiedMaxHours: number;
+  staleMaxHours: number;
+  suspiciousDeviationHighRatio: number;
+  suspiciousDropNoPromoRatio: number;
+  minPlausiblePrice: number;
+  maxPlausiblePrice: number;
+  weights: {
+    age: number;
+    source: number;
+    promoValidity: number;
+    productValidity: number;
+    unitConsistency: number;
+    anomaly: number;
+    confirmations: number;
+  };
+}
+
+export interface PriceDataQualityAssessment {
+  status: PriceDataQualityStatus;
+  labelRo: string;
+  descriptionRo: string;
+  score: number; // 0..100 transparent weighted sum
+  methodologyVersion: string;
+  ageHours: number | null;
+  lastVerifiedAt: string | null;
+  isUsableForComparison: boolean;
+  isReliableForOptimization: boolean;
+  factors: PriceQualityFactor[];
+  reasons: string[];
+}
+
+// =========================================================================
+// V1 Roadmap: Basket Optimizer (1-Store & Multi-Store)
+// =========================================================================
+
+export type BasketMatchConfidence = 'exact_id' | 'exact_ean' | 'exact_name' | 'high_token';
+
+export interface BasketItemAllocation {
+  item: ShoppingListItem;
+  aggregatedQuantity: number;
+  mergedOccurrencesCount: number;
+  product: Product;
+  matchConfidence: BasketMatchConfidence;
+  offer: ProductOffer;
+  qualityAssessment: PriceDataQualityAssessment;
+  store: Store;
+  effectiveUnitPrice: number;
+  calculatedPrice: number;
+  unitPriceDisplay: string;
+  loyaltyApplied: boolean;
+  loyaltyCardName?: string;
+}
+
+export interface BasketUnconfidentMatch {
+  item: ShoppingListItem;
+  reasonRo: string;
+  candidateProducts?: Array<{ id: string; name: string; brand: string }>;
+}
+
+export interface BasketUnitConflict {
+  item: ShoppingListItem;
+  product: Product;
+  reasonRo: string;
+}
+
+export interface BasketMissingPriceItem {
+  item: ShoppingListItem;
+  product?: Product;
+  reasonRo: string;
+}
+
+export interface BasketSingleStorePlan {
+  store: Store;
+  isFavorite: boolean;
+  allocations: BasketItemAllocation[];
+  missingItems: BasketMissingPriceItem[];
+  coveredItemsCount: number;
+  totalComparableItemsCount: number;
+  completenessPercentage: number;
+  isComplete: boolean;
+  isEstimative: boolean;
+  totalPrice: number;
+  loyaltySavings: number;
+  lastVerifiedAt: string | null;
+  oldestVerifiedAt: string | null;
+  savingsVsWorstStore: number | null;
+}
+
+export interface BasketMultiStoreStop {
+  store: Store;
+  isFavorite: boolean;
+  allocations: BasketItemAllocation[];
+  subtotal: number;
+  itemsCount: number;
+  lastVerifiedAt: string | null;
+}
+
+export interface BasketMultiStorePlan {
+  storeCount: number;
+  maxStoresLimit: number;
+  stops: BasketMultiStoreStop[];
+  coveredItemsCount: number;
+  totalComparableItemsCount: number;
+  missingItems: BasketMissingPriceItem[];
+  isComplete: boolean;
+  isEstimative: boolean;
+  productsTotal: number;
+  transportCost: number;
+  includesTransportCost: boolean;
+  totalWithTransport: number;
+  baselineSingleStore: BasketSingleStorePlan | null;
+  comparableItemsCountWithBaseline: number;
+  hasValidSavingsBaseline: boolean;
+  savingsVsBestSingleStore: number | null;
+  savingsPercentVsBestSingleStore: number | null;
+  lastVerifiedAt: string | null;
+  oldestVerifiedAt: string | null;
+  explanationRo: string;
+}
+
+export interface BasketOptimizationOptions {
+  useLoyaltyCards?: boolean;
+  maxStores?: number; // 1, 2, 3, or higher
+  excludedStoreIds?: string[];
+  favoriteStoreIds?: string[];
+  includeStaleOffers?: boolean;
+  transportCostPerExtraStore?: number; // Default 0 - never invent transport costs
+  now?: Date;
+}
+
+export interface BasketOptimizationResult {
+  listId?: string;
+  listName?: string;
+  totalRequestedLines: number;
+  distinctNormalizedItemsCount: number;
+  duplicateLinesMergedCount: number;
+  comparableCatalogItemsCount: number;
+  unconfidentMatches: BasketUnconfidentMatch[];
+  unitConflicts: BasketUnitConflict[];
+  itemsWithoutAnyValidPrice: BasketMissingPriceItem[];
+  singleStoreRankings: BasketSingleStorePlan[];
+  bestSingleStore: BasketSingleStorePlan | null;
+  bestTwoStores: BasketMultiStorePlan | null;
+  bestThreeStores: BasketMultiStorePlan | null;
+  recommendedMultiStore: BasketMultiStorePlan | null;
+  maxStoresApplied: number;
+  excludedStoreIds: string[];
+  favoriteStoreIds: string[];
+  hasValidSavingsBaseline: boolean;
+  isEstimative: boolean;
+  lastPriceVerificationAt: string | null;
+  oldestPriceVerificationAt: string | null;
+  limitations: string[];
+  calculatedAt: string;
+}
+
+// =========================================================================
+// V1 Roadmap: Price History Intervals (30 / 90 / 180 / 365 days)
+// =========================================================================
+
+export type PriceHistoryInterval = 30 | 90 | 180 | 365;
+
+export interface PriceHistoryIntervalStats {
+  intervalDays: PriceHistoryInterval;
+  observationsCount: number;
+  distinctDaysCount: number;
+  minPrice: number | null;
+  minPriceDate: string | null;
+  minPriceStoreId: string | null;
+  minPriceStoreName: string | null;
+  maxPrice: number | null;
+  avgPrice: number | null;
+  lastObservation: {
+    price: number;
+    date: string;
+    storeId: string;
+    storeName: string;
+    source: string;
+  } | null;
+  hasSufficientHistory: boolean;
+  noticeRo?: string;
+}
+
 
 

@@ -9,6 +9,8 @@
 -- - Jurnal gdpr_operation_logs fără PII în clar (exclusiv server-side / service_role)
 -- ============================================================================
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- 1. Extindere public.profiles pentru nume, prenume și restricționarea prelucrării
 ALTER TABLE public.profiles
   ADD COLUMN IF NOT EXISTS first_name TEXT,
@@ -30,6 +32,7 @@ CREATE TABLE IF NOT EXISTS public.user_preferences (
 );
 
 ALTER TABLE public.user_preferences
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   ADD COLUMN IF NOT EXISTS optional_notifications_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS marketing_consent BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS marketing_consent_updated_at TIMESTAMPTZ,
@@ -143,7 +146,10 @@ CREATE POLICY cookie_consents_insert_anon
   WITH CHECK (user_id IS NULL AND length(trim(visitor_session_id)) >= 6);
 
 CREATE OR REPLACE FUNCTION public.prevent_consent_history_mutation()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
 BEGIN
   IF current_user NOT IN ('service_role', 'postgres', 'supabase_admin')
      AND COALESCE(auth.jwt() ->> 'role', '') <> 'service_role' THEN
@@ -154,7 +160,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 DROP TRIGGER IF EXISTS trg_protect_cookie_consents_immutable ON public.cookie_consents;
 CREATE TRIGGER trg_protect_cookie_consents_immutable
@@ -229,6 +235,14 @@ CREATE TABLE IF NOT EXISTS public.gdpr_requests (
   admin_response TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.gdpr_requests
+  ADD COLUMN IF NOT EXISTS details TEXT,
+  ADD COLUMN IF NOT EXISTS requested_format VARCHAR(16),
+  ADD COLUMN IF NOT EXISTS requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS admin_response TEXT,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE INDEX IF NOT EXISTS idx_gdpr_requests_user_date
   ON public.gdpr_requests(user_id, requested_at DESC);
@@ -330,7 +344,11 @@ ALTER TABLE public.gdpr_operation_logs ENABLE ROW LEVEL SECURITY;
 
 -- 7. Actualizare trigger handle_new_user_profile pentru a separa comunicările (opționale dezactivate implicit)
 CREATE OR REPLACE FUNCTION public.handle_new_user_profile()
-RETURNS trigger AS $$
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
   initial_role VARCHAR(16) := 'user';
   initial_username TEXT;
@@ -401,4 +419,4 @@ BEGIN
 
   RETURN new;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;

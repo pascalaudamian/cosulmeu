@@ -296,7 +296,44 @@ function latestCanonicalOffers(offers: ProductOffer[]): ProductOffer[] {
   return Array.from(offersByProductAndStore.values());
 }
 
+// ============================================================================
+// SAFE PUBLIC CATALOG CACHE (60s TTL — STRICTLY PUBLIC READ-ONLY CATALOG DATA)
+// User lists, prices per basket, and preferences are NEVER cached here.
+// ============================================================================
+const CATALOG_OPT_CACHE_TTL_MS = 60_000;
+
+interface PublicCatalogOptCache {
+  products?: { data: Product[]; expiresAt: number };
+  stores?: { data: Store[]; expiresAt: number };
+  offers?: { data: ProductOffer[]; expiresAt: number };
+  version: number;
+}
+
+const publicCatalogOptCache: PublicCatalogOptCache = {
+  version: 1
+};
+
+export function invalidateCatalogOptimizationCache(): void {
+  publicCatalogOptCache.products = undefined;
+  publicCatalogOptCache.stores = undefined;
+  publicCatalogOptCache.offers = undefined;
+  publicCatalogOptCache.version += 1;
+}
+
+export function getCatalogOptimizationCacheStats(): { version: number; hasProducts: boolean; hasOffers: boolean; hasStores: boolean } {
+  const now = Date.now();
+  return {
+    version: publicCatalogOptCache.version,
+    hasProducts: Boolean(publicCatalogOptCache.products && publicCatalogOptCache.products.expiresAt > now),
+    hasOffers: Boolean(publicCatalogOptCache.offers && publicCatalogOptCache.offers.expiresAt > now),
+    hasStores: Boolean(publicCatalogOptCache.stores && publicCatalogOptCache.stores.expiresAt > now)
+  };
+}
+
 export class DatabaseService {
+  static invalidateCatalogCache(): void {
+    invalidateCatalogOptimizationCache();
+  }
   /**
    * Initializes PostgreSQL tables if they don't exist and seeds default catalog if empty.
    */
@@ -681,6 +718,7 @@ export class DatabaseService {
             product.baseReferencePrice || 0
           ]
         );
+        invalidateCatalogOptimizationCache();
         return true;
       } catch (err: any) {
         console.warn('Postgres pool insertProduct failed, falling back to Supabase:', err.message);
@@ -705,6 +743,7 @@ export class DatabaseService {
         updated_at: new Date().toISOString()
       }, { onConflict: 'id' });
 
+      if (!error) invalidateCatalogOptimizationCache();
       return !error;
     } catch (err: any) {
       console.error('Supabase insertProduct failed:', err.message);
@@ -1006,6 +1045,7 @@ export class DatabaseService {
         }
 
         await client.query('COMMIT');
+        invalidateCatalogOptimizationCache();
         return { added, updated, persisted: true };
       } catch (err) {
         await client.query('ROLLBACK');
@@ -1046,6 +1086,7 @@ export class DatabaseService {
         console.error('Supabase upsertOffers error:', error);
         return { added: 0, updated: 0, persisted: false };
       }
+      if (!error) invalidateCatalogOptimizationCache();
       return { added: offers.length, updated: 0, persisted: true };
     } catch (e: any) {
       console.error('Supabase upsertOffers exception:', e.message);
@@ -2414,6 +2455,7 @@ export class DatabaseService {
       );
 
       await client.query('COMMIT');
+      invalidateCatalogOptimizationCache();
       return { stats, success: true };
     } catch (err: any) {
       await client.query('ROLLBACK');
@@ -3235,7 +3277,7 @@ export class DatabaseService {
   SELECT * FROM price_observations
   WHERE product_id = $1 OR product_id IN (SELECT id FROM products WHERE canonical_product_id = $1)
   ORDER BY date DESC, created_at DESC
-  LIMIT 50
+  LIMIT 500
   `, [canonicalProductId]);
 
   const retailerMappingRes = await pool.query(`
@@ -3362,7 +3404,7 @@ export class DatabaseService {
         .select('*')
         .in('product_id', linkedProductIds)
         .order('date', { ascending: false })
-        .limit(50);
+        .limit(500);
 
       const offers: ProductOffer[] = latestCanonicalOffers(offersData.map(r => ({
         id: r.id,
@@ -5035,6 +5077,190 @@ export class DatabaseService {
       failedCount: offerIds.length,
       failedItems: [],
       message: 'Baza de date PostgreSQL nu este disponibilă.'
+    };
+  }
+
+  /**
+   * Încarcă setul minim necesar pentru optimizarea coșului folosind exclusiv
+   * interogări batch (zero N+1) și cache sigur pe datele publice de catalog.
+   */
+  static async getOptimizationDataset(
+    items: Array<{ productId?: string; barcode?: string; name?: string }>
+  ): Promise<{
+    products: Product[];
+    offers: ProductOffer[];
+    stores: Store[];
+    cacheHit: boolean;
+    batchQueryMode: 'targeted_batch' | 'cached_catalog' | 'isolated_memory';
+  }> {
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      return {
+        products: StorageService.getAllProducts(),
+        offers: StorageService.getProductOffers().filter(
+          o =>
+            o.price > 0 &&
+            !o.isFlaggedAnomaly &&
+            !['demo', 'isolated', 'rejected'].includes(o.verificationStatus || 'verified')
+        ),
+        stores: STORES,
+        cacheHit: false,
+        batchQueryMode: 'isolated_memory'
+      };
+    }
+
+    const now = Date.now();
+    const getCachedStores = async (): Promise<{ stores: Store[]; hit: boolean }> => {
+      if (publicCatalogOptCache.stores && publicCatalogOptCache.stores.expiresAt > now) {
+        return { stores: publicCatalogOptCache.stores.data, hit: true };
+      }
+      const stores = await this.getStores();
+      publicCatalogOptCache.stores = { data: stores, expiresAt: now + CATALOG_OPT_CACHE_TTL_MS };
+      return { stores, hit: false };
+    };
+
+    const activeIdentifiers = (items || []).filter(i => (i.productId && i.productId.trim()) || (i.barcode && i.barcode.trim()));
+    const allHaveDirectIdsOrEan = (items || []).length > 0 && activeIdentifiers.length === items.length;
+    const pool = getPool();
+
+    // Fast path: 100% of items carry productId or barcode AND Postgres pool is available -> 2 targeted batch SQL queries (Zero N+1)
+    if (allHaveDirectIdsOrEan && pool) {
+      try {
+        const productIds = Array.from(new Set(items.map(i => i.productId?.trim()).filter((v): v is string => Boolean(v))));
+        const barcodes = Array.from(new Set(items.map(i => i.barcode?.trim()).filter((v): v is string => Boolean(v))));
+
+        const [storesRes, prodRes] = await Promise.all([
+          getCachedStores(),
+          pool.query(
+            `SELECT * FROM products
+             WHERE ($1::text[] IS NOT NULL AND (id = ANY($1::text[]) OR canonical_product_id = ANY($1::text[])))
+                OR ($2::text[] IS NOT NULL AND barcode = ANY($2::text[]))`,
+            [productIds.length > 0 ? productIds : null, barcodes.length > 0 ? barcodes : null]
+          )
+        ]);
+
+        if (prodRes.rows.length > 0) {
+          const matchedCanonicalIds = Array.from(
+            new Set(
+              prodRes.rows.flatMap(r => [r.id, r.canonical_product_id].filter(Boolean))
+            )
+          ) as string[];
+
+          // Ensure canonical parent products are loaded if matched via alias
+          const missingCanonicalIds = matchedCanonicalIds.filter(
+            cid => !prodRes.rows.some(r => r.id === cid)
+          );
+          let extraCanonicalRows: any[] = [];
+          if (missingCanonicalIds.length > 0) {
+            const extraRes = await pool.query('SELECT * FROM products WHERE id = ANY($1::text[])', [missingCanonicalIds]);
+            extraCanonicalRows = extraRes.rows;
+          }
+
+          const allProdRows = [...prodRes.rows, ...extraCanonicalRows];
+          const canonicalProducts: Product[] = [];
+          const seenProdIds = new Set<string>();
+          for (const r of allProdRows) {
+            if (r.canonical_product_id || seenProdIds.has(r.id)) continue;
+            seenProdIds.add(r.id);
+            canonicalProducts.push({
+              id: r.id,
+              name: r.name,
+              brand: r.brand,
+              category: r.category,
+              defaultUnit: r.default_unit || 'buc',
+              packageWeightOrVolume: parseFloat(r.package_weight_or_volume) || 1,
+              packageUnit: r.package_unit || 'buc',
+              normalizedUnit: r.normalized_unit || 'buc',
+              barcode: r.barcode || undefined,
+              imageUrl: r.image_url || undefined,
+              isBio: Boolean(r.is_bio),
+              isRomanianProduct: Boolean(r.is_romanian_product),
+              baseReferencePrice: parseFloat(r.base_reference_price) || 0
+            });
+          }
+
+          const allTargetProductIds = Array.from(new Set(allProdRows.map(r => r.id)));
+          const offersRes = await pool.query(
+            `SELECT po.*, COALESCE(p.canonical_product_id, p.id) AS canonical_product_id
+             FROM product_offers po
+             JOIN products p ON p.id = po.product_id
+             WHERE (po.product_id = ANY($1::text[]) OR p.canonical_product_id = ANY($1::text[]))
+               AND po.source != 'demo'
+               AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+               AND COALESCE(po.is_flagged_anomaly, false) = false
+               AND po.price > 0
+             ORDER BY po.observation_date ASC, po.last_checked ASC`,
+            [allTargetProductIds]
+          );
+
+          const mappedOffers: ProductOffer[] = offersRes.rows.map(r => ({
+            id: r.id,
+            productId: r.canonical_product_id || r.product_id,
+            storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+            sourceId: r.source_id || undefined,
+            price: parseFloat(r.price),
+            originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+            normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
+            promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+            loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
+            unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
+            unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+            isPromo: Boolean(r.is_promo),
+            promoDetails: r.promo_details || undefined,
+            loyaltyCardRequired: Boolean(r.loyalty_card_required),
+            loyaltyCardName: r.loyalty_card_name || undefined,
+            validUntil: r.valid_until ? (r.valid_until.toISOString?.().split('T')[0] || String(r.valid_until).slice(0, 10)) : undefined,
+            observationDate: r.observation_date ? (r.observation_date.toISOString?.().split('T')[0] || String(r.observation_date).slice(0, 10)) : new Date().toISOString().split('T')[0],
+            source: r.source,
+            confidenceLevel: r.confidence_level || 'high',
+            verificationStatus: r.verification_status || 'verified',
+            lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+            isSponsored: Boolean(r.is_sponsored),
+            isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
+            anomalyReason: r.anomaly_reason || undefined
+          }));
+
+          return {
+            products: canonicalProducts,
+            offers: latestCanonicalOffers(mappedOffers),
+            stores: storesRes.stores,
+            cacheHit: storesRes.hit,
+            batchQueryMode: 'targeted_batch'
+          };
+        }
+      } catch (err: any) {
+        console.warn('Targeted batch getOptimizationDataset failed, falling back to cached catalog:', err.message);
+      }
+    }
+
+    // Safe public catalog cache path (batch fetch once per TTL window, no N+1)
+    let hit = true;
+    let products: Product[];
+    if (publicCatalogOptCache.products && publicCatalogOptCache.products.expiresAt > now) {
+      products = publicCatalogOptCache.products.data;
+    } else {
+      hit = false;
+      products = await this.getProducts();
+      publicCatalogOptCache.products = { data: products, expiresAt: now + CATALOG_OPT_CACHE_TTL_MS };
+    }
+
+    let offers: ProductOffer[];
+    if (publicCatalogOptCache.offers && publicCatalogOptCache.offers.expiresAt > now) {
+      offers = publicCatalogOptCache.offers.data;
+    } else {
+      hit = false;
+      offers = await this.getOffers();
+      publicCatalogOptCache.offers = { data: offers, expiresAt: now + CATALOG_OPT_CACHE_TTL_MS };
+    }
+
+    const storesRes = await getCachedStores();
+
+    return {
+      products,
+      offers,
+      stores: storesRes.stores,
+      cacheHit: hit && storesRes.hit,
+      batchQueryMode: 'cached_catalog'
     };
   }
 }

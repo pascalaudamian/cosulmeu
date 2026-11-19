@@ -4,6 +4,8 @@
 -- observații personale de preț izolate per utilizator, bucket privat și RLS strict.
 -- ============================================================================
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- 1. Extindere tabel existent public.receipts (păstrând compatibilitatea)
 ALTER TABLE public.receipts
   ADD COLUMN IF NOT EXISTS receipt_number VARCHAR(80),
@@ -174,6 +176,7 @@ CREATE OR REPLACE FUNCTION public.save_receipt_v2(
 RETURNS UUID
 LANGUAGE plpgsql
 SECURITY INVOKER
+SET search_path = public
 AS $$
 DECLARE
   v_uid UUID := auth.uid();

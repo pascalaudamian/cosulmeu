@@ -1,6 +1,9 @@
 import type {
   ConfidenceLevel,
+  InAppPriceNotification,
   PriceAlert,
+  PriceAlertType,
+  PriceHistoryInterval,
   Product,
   ProductOffer,
   Receipt,
@@ -23,6 +26,7 @@ export interface DashboardData {
   receipts: Receipt[];
   shoppingLists: ShoppingList[];
   priceAlerts: PriceAlert[];
+  alertNotifications: InAppPriceNotification[];
   trackedProductIds: string[];
   products: Product[];
   productOffers: ProductOffer[];
@@ -486,18 +490,76 @@ export function countLocalDashboardData(snapshot: LocalDashboardSnapshot): Local
   return { ...counts, total: counts.receipts + counts.lists + counts.alerts + counts.trackedProducts };
 }
 
+async function selectUserPriceAlerts(userId: string) {
+  const extended = await supabase
+    .from('price_alerts')
+    .select(
+      'id,user_id,product_id,target_price,is_active,created_at,alert_type,interval_days,source_list_id,last_triggered_at,last_triggered_price,last_evaluated_price,last_notified_key'
+    )
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (!extended.error) return extended;
+
+  // Fallback dacă migrarea 012 nu a fost încă aplicată în Supabase
+  return supabase
+    .from('price_alerts')
+    .select('id,user_id,product_id,target_price,is_active,created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+}
+
+async function selectUserAlertNotifications(userId: string): Promise<InAppPriceNotification[]> {
+  try {
+    const { data, error } = await supabase
+      .from('price_alert_notifications')
+      .select(
+        'id,alert_id,dedupe_key,product_id,product_name,alert_type,title,message,observed_price,previous_price,target_price,store_id,store_name,triggered_at,is_read'
+      )
+      .eq('user_id', userId)
+      .order('triggered_at', { ascending: false })
+      .limit(100);
+
+    if (error || !Array.isArray(data)) return [];
+    return data.map(row => {
+      const rawType = stringValue(row.alert_type);
+      const alertType: PriceAlertType = ['below_target', 'any_drop', 'interval_low'].includes(rawType)
+        ? (rawType as PriceAlertType)
+        : 'below_target';
+      return {
+        id: stringValue(row.id),
+        alertId: stringValue(row.alert_id),
+        dedupeKey: stringValue(row.dedupe_key),
+        productId: stringValue(row.product_id),
+        productName: stringValue(row.product_name, 'Produs'),
+        alertType,
+        title: stringValue(row.title, 'Alertă de preț'),
+        message: stringValue(row.message),
+        observedPrice: numberValue(row.observed_price),
+        previousPrice: row.previous_price != null ? numberValue(row.previous_price) : undefined,
+        targetPrice: row.target_price != null ? numberValue(row.target_price) : undefined,
+        storeId: stringValue(row.store_id) || 'store',
+        storeName: stringValue(row.store_name) || 'Magazin',
+        triggeredAt: stringValue(row.triggered_at, new Date().toISOString()),
+        isRead: Boolean(row.is_read)
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 export async function loadDashboardData(userId: string): Promise<DashboardData> {
-  const [receiptsResult, listsResult, alertsResult, profileResult] = await Promise.all([
+  const [receiptsResult, listsResult, alertsResult, profileResult, alertNotifications] = await Promise.all([
     supabase.from('receipts').select(
       'id,store_id,image_path,merchant_name,purchased_at,total_amount,currency,extracted_data,status,created_at'
     ).eq('user_id', userId).neq('status', 'failed').order('purchased_at', { ascending: false, nullsFirst: false }),
     supabase.from('shopping_lists').select(
       'id,user_id,name,description,is_archived,created_at,updated_at'
     ).eq('user_id', userId).order('updated_at', { ascending: false }),
-    supabase.from('price_alerts').select(
-      'id,user_id,product_id,target_price,is_active,created_at'
-    ).eq('user_id', userId).order('created_at', { ascending: false }),
-    supabase.from('profiles').select('preferences').eq('id', userId).maybeSingle()
+    selectUserPriceAlerts(userId),
+    supabase.from('profiles').select('preferences').eq('id', userId).maybeSingle(),
+    selectUserAlertNotifications(userId)
   ]);
 
   throwIfError(receiptsResult.error, 'Nu am putut prelua bonurile contului');
@@ -549,22 +611,52 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
     offersByProduct.set(offer.productId, productOffers);
   }
 
+  const alertMetaById = recordValue(preferences.priceAlertMeta);
   const priceAlerts: PriceAlert[] = (alertsResult.data || []).map(row => {
+    const rawRow = row as Record<string, unknown>;
+    const id = stringValue(row.id);
     const productId = stringValue(row.product_id);
     const currentOffer = (offersByProduct.get(productId) || []).reduce<ProductOffer | null>(
       (best, offer) => !best || offer.price < best.price ? offer : best,
       null
     );
     const product = productsById.get(productId);
+    const meta = recordValue(alertMetaById[id]);
+    const rawAlertType = stringValue(rawRow.alert_type ?? meta.alertType);
+    const alertType = ['below_target', 'any_drop', 'interval_low'].includes(rawAlertType)
+      ? (rawAlertType as PriceAlert['alertType'])
+      : 'below_target';
+    const rawInterval = Number(rawRow.interval_days ?? meta.intervalDays);
+    const intervalDays = [30, 90, 180, 365].includes(rawInterval)
+      ? (rawInterval as PriceAlert['intervalDays'])
+      : undefined;
+
     return {
-      id: stringValue(row.id),
+      id,
       productId,
       productName: product ? `${product.name}${product.brand ? ` (${product.brand})` : ''}` : productId,
       targetPrice: numberValue(row.target_price),
       currentLowestPrice: currentOffer?.price || 0,
       lowestStoreId: currentOffer?.storeId,
       createdAt: stringValue(row.created_at).slice(0, 10),
-      isActive: Boolean(row.is_active)
+      isActive: Boolean(row.is_active),
+      alertType,
+      intervalDays,
+      sourceListId: stringValue(rawRow.source_list_id ?? meta.sourceListId) || undefined,
+      lastTriggeredAt: stringValue(rawRow.last_triggered_at ?? meta.lastTriggeredAt) || undefined,
+      lastTriggeredPrice:
+        rawRow.last_triggered_price != null
+          ? numberValue(rawRow.last_triggered_price)
+          : meta.lastTriggeredPrice != null
+            ? numberValue(meta.lastTriggeredPrice)
+            : undefined,
+      lastEvaluatedPrice:
+        rawRow.last_evaluated_price != null
+          ? numberValue(rawRow.last_evaluated_price)
+          : meta.lastEvaluatedPrice != null
+            ? numberValue(meta.lastEvaluatedPrice)
+            : undefined,
+      lastNotifiedKey: stringValue(rawRow.last_notified_key ?? meta.lastNotifiedKey) || undefined
     };
   });
 
@@ -575,6 +667,7 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
     receipts,
     shoppingLists,
     priceAlerts,
+    alertNotifications,
     trackedProductIds,
     ...catalog,
     localDataImportedAt: stringValue(preferences.localHistoryImportedAt) || null
@@ -925,7 +1018,23 @@ export async function savePriceAlertsForUser(
     throw new Error('Unul dintre produsele alertei nu există în catalogul Supabase.');
   }
 
-  const rows = normalized.map(alert => ({
+  const extendedRows = normalized.map(alert => ({
+    id: alert.id,
+    user_id: userId,
+    product_id: alert.productId,
+    target_price: alert.targetPrice,
+    is_active: alert.isActive,
+    created_at: alert.createdAt,
+    alert_type: alert.alertType || 'below_target',
+    interval_days: alert.alertType === 'interval_low' ? (alert.intervalDays || 90) : null,
+    source_list_id: alert.sourceListId && isUuid(alert.sourceListId) ? alert.sourceListId : null,
+    last_triggered_at: alert.lastTriggeredAt || null,
+    last_triggered_price: alert.lastTriggeredPrice ?? null,
+    last_evaluated_price: alert.lastEvaluatedPrice ?? null,
+    last_notified_key: alert.lastNotifiedKey || null
+  }));
+
+  const baseRows = normalized.map(alert => ({
     id: alert.id,
     user_id: userId,
     product_id: alert.productId,
@@ -933,10 +1042,36 @@ export async function savePriceAlertsForUser(
     is_active: alert.isActive,
     created_at: alert.createdAt
   }));
-  for (const batch of chunks(rows)) {
+
+  let useBaseFallback = false;
+  for (const batch of chunks(extendedRows)) {
     const { error } = await supabase.from('price_alerts').upsert(batch, { onConflict: 'id' });
-    throwIfError(error, 'Nu am putut salva alertele de preț');
+    if (error) {
+      useBaseFallback = true;
+      break;
+    }
   }
+
+  if (useBaseFallback) {
+    for (const batch of chunks(baseRows)) {
+      const { error } = await supabase.from('price_alerts').upsert(batch, { onConflict: 'id' });
+      throwIfError(error, 'Nu am putut salva alertele de preț');
+    }
+  }
+
+  const nextMeta: Record<string, unknown> = {};
+  for (const alert of normalized) {
+    nextMeta[alert.id] = {
+      alertType: alert.alertType || 'below_target',
+      intervalDays: alert.intervalDays || null,
+      sourceListId: alert.sourceListId || null,
+      lastTriggeredAt: alert.lastTriggeredAt || null,
+      lastTriggeredPrice: alert.lastTriggeredPrice ?? null,
+      lastEvaluatedPrice: alert.lastEvaluatedPrice ?? null,
+      lastNotifiedKey: alert.lastNotifiedKey || null
+    };
+  }
+  await updateProfilePreferences(userId, { priceAlertMeta: nextMeta });
 
   const nextIds = new Set(normalized.map(alert => alert.id));
   const removedIds = currentAlerts.map(alert => alert.id).filter(id => isUuid(id) && !nextIds.has(id));
@@ -945,6 +1080,83 @@ export async function savePriceAlertsForUser(
     throwIfError(error, 'Nu am putut șterge alertele eliminate');
   }
   return normalized;
+}
+
+export async function saveAlertNotificationsForUser(
+  userId: string,
+  notifications: InAppPriceNotification[],
+  persistedAlerts: PriceAlert[]
+): Promise<InAppPriceNotification[]> {
+  if (!notifications.length) return [];
+  const alertUuidByProductAndType = new Map<string, string>();
+  for (const a of persistedAlerts) {
+    if (isUuid(a.id)) {
+      alertUuidByProductAndType.set(a.id, a.id);
+      alertUuidByProductAndType.set(`${a.productId}:${a.alertType || 'below_target'}`, a.id);
+    }
+  }
+
+  const rows: Array<Record<string, unknown>> = [];
+  const saved: InAppPriceNotification[] = [];
+  for (const notif of notifications) {
+    const resolvedAlertId =
+      (isUuid(notif.alertId) ? notif.alertId : undefined) ||
+      alertUuidByProductAndType.get(notif.alertId) ||
+      alertUuidByProductAndType.get(`${notif.productId}:${notif.alertType}`);
+    if (!resolvedAlertId) continue;
+
+    const id = isUuid(notif.id) ? notif.id : await stableUuid(userId, 'alert-notif', notif.dedupeKey);
+    rows.push({
+      id,
+      user_id: userId,
+      alert_id: resolvedAlertId,
+      dedupe_key: notif.dedupeKey,
+      product_id: notif.productId,
+      product_name: notif.productName,
+      alert_type: notif.alertType,
+      title: notif.title,
+      message: notif.message,
+      observed_price: notif.observedPrice,
+      previous_price: notif.previousPrice ?? null,
+      target_price: notif.targetPrice ?? null,
+      store_id: notif.storeId || null,
+      store_name: notif.storeName || null,
+      triggered_at: notif.triggeredAt,
+      is_read: Boolean(notif.isRead)
+    });
+    saved.push({ ...notif, id, alertId: resolvedAlertId });
+  }
+
+  if (rows.length === 0) return [];
+  try {
+    for (const batch of chunks(rows)) {
+      await supabase.from('price_alert_notifications').upsert(batch, {
+        onConflict: 'user_id,dedupe_key',
+        ignoreDuplicates: true
+      });
+    }
+  } catch {
+    // Non-blocking fallback when 012 migration hasn't been applied yet
+  }
+  return saved;
+}
+
+export async function markAlertNotificationsReadForUser(
+  userId: string,
+  notificationId?: string
+): Promise<void> {
+  try {
+    let query = supabase
+      .from('price_alert_notifications')
+      .update({ is_read: true })
+      .eq('user_id', userId);
+    if (notificationId && isUuid(notificationId)) {
+      query = query.eq('id', notificationId);
+    }
+    await query;
+  } catch {
+    // Non-blocking fallback
+  }
 }
 
 export async function saveTrackedProductsForUser(userId: string, productIds: string[]): Promise<string[]> {

@@ -4,22 +4,39 @@ import {
   TrendingUp,
   LineChart,
   Bell,
+  BellOff,
   Eye,
   Search,
-  Plus,
   Trash2,
-  Calendar,
+  Edit2,
   Check,
-  Store,
-  ArrowRight,
-  Filter,
-  CheckCircle2
+  CheckCircle2,
+  ListPlus,
+  Pause,
+  Play,
+  Info,
+  Clock
 } from 'lucide-react';
-import { Product, PriceAlert } from '../types.js';
+import {
+  InAppPriceNotification,
+  PriceAlert,
+  PriceAlertType,
+  PriceHistoryInterval,
+  PriceHistoryIntervalStats,
+  Product,
+  ProductOffer,
+  ShoppingList,
+  Store
+} from '../types.js';
 import { StorageService } from '../services/StorageService.js';
-import { PriceHistoryService, ProductPriceStats } from '../services/PriceHistoryService.js';
+import {
+  PriceHistoryService,
+  PriceTimelinePoint,
+  ProductPriceStats
+} from '../services/PriceHistoryService.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
-import { PRODUCTS, STORES } from '../data/mockData.js';
+import { PriceAlertService } from '../services/PriceAlertService.js';
+import { STORES } from '../data/mockData.js';
 
 interface PriceHistoryViewProps {
   alerts: PriceAlert[];
@@ -27,27 +44,146 @@ interface PriceHistoryViewProps {
   onUpdateAlerts: (alerts: PriceAlert[]) => void;
   onUpdateTrackedProductIds: (productIds: string[]) => void;
   onSelectProductForDetails?: (product: Product) => void;
+  catalogProducts?: Product[];
+  catalogOffers?: ProductOffer[];
+  catalogStores?: Store[];
+  activeList?: ShoppingList;
+  notifications?: InAppPriceNotification[];
+  onMarkNotificationRead?: (notificationId: string) => void;
+  onMarkAllNotificationsRead?: () => void;
+  onCreateAlertsFromList?: (list: ShoppingList) => { createdCount: number; skippedCount: number } | void;
 }
+
+const INTERVAL_OPTIONS: Array<{ days: PriceHistoryInterval; label: string }> = [
+  { days: 30, label: '30 zile' },
+  { days: 90, label: '90 zile' },
+  { days: 180, label: '180 zile' },
+  { days: 365, label: '1 an' }
+];
 
 export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
   alerts,
   trackedProductIds,
   onUpdateAlerts,
   onUpdateTrackedProductIds,
-  onSelectProductForDetails
+  onSelectProductForDetails,
+  catalogProducts,
+  catalogOffers,
+  catalogStores,
+  activeList,
+  notifications = [],
+  onMarkNotificationRead,
+  onMarkAllNotificationsRead,
+  onCreateAlertsFromList
 }) => {
-  const [selectedProductId, setSelectedProductId] = useState<string>('prod-lapte-1');
-  const [timeframeDays, setTimeframeDays] = useState<number>(90); // 30, 90, 365
+  const allProducts = useMemo(
+    () => (catalogProducts && catalogProducts.length > 0 ? catalogProducts : StorageService.getAllProducts()),
+    [catalogProducts]
+  );
+  const allOffers = useMemo(
+    () => (catalogOffers && catalogOffers.length > 0 ? catalogOffers : StorageService.getProductOffers()),
+    [catalogOffers]
+  );
+  const allStores = useMemo(
+    () => (catalogStores && catalogStores.length > 0 ? catalogStores : STORES),
+    [catalogStores]
+  );
+
+  const [selectedProductId, setSelectedProductId] = useState<string>(() => allProducts[0]?.id || 'prod-lapte-1');
+  const [timeframeDays, setTimeframeDays] = useState<PriceHistoryInterval>(90);
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Alert creation / edit modal state
   const [showAddAlertModal, setShowAddAlertModal] = useState<boolean>(false);
-  const [targetAlertPrice, setTargetAlertPrice] = useState<number>(6.00);
+  const [editingAlertId, setEditingAlertId] = useState<string | null>(null);
+  const [alertTypeInput, setAlertTypeInput] = useState<PriceAlertType>('below_target');
+  const [alertIntervalInput, setAlertIntervalInput] = useState<PriceHistoryInterval>(90);
+  const [targetAlertPrice, setTargetAlertPrice] = useState<number>(6.0);
+  const [bulkFeedback, setBulkFeedback] = useState<string | null>(null);
 
-  const allProducts = useMemo(() => StorageService.getAllProducts(), []);
+  // Remote DB history sync
+  const [remoteHistory, setRemoteHistory] = useState<{
+    productId: string;
+    days: PriceHistoryInterval;
+    points: PriceTimelinePoint[];
+    intervalStats?: PriceHistoryIntervalStats;
+    currentLowestPrice?: number;
+  } | null>(null);
+  const [historyLoading, setHistoryLoading] = useState<boolean>(false);
+
   const [trackedList, setTrackedList] = useState<string[]>(trackedProductIds);
-
   useEffect(() => {
     setTrackedList(trackedProductIds);
   }, [trackedProductIds]);
+
+  const selectedProduct = useMemo(
+    () => allProducts.find(p => p.id === selectedProductId) || allProducts[0],
+    [allProducts, selectedProductId]
+  );
+
+  // Ensure selectedProductId stays valid when catalog loads
+  useEffect(() => {
+    if (allProducts.length > 0 && !allProducts.some(p => p.id === selectedProductId)) {
+      setSelectedProductId(allProducts[0].id);
+    }
+  }, [allProducts, selectedProductId]);
+
+  // Fetch real history from backend API
+  useEffect(() => {
+    if (!selectedProduct?.id) return;
+    let cancelled = false;
+    setHistoryLoading(true);
+    fetch(`/api/catalog/history/${encodeURIComponent(selectedProduct.id)}?days=${timeframeDays}`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(payload => {
+        if (cancelled || !payload?.success) return;
+        const pts: PriceTimelinePoint[] = Array.isArray(payload.observations)
+          ? payload.observations.map((obs: any) => {
+              const normStoreKey = String(obs.storeId || '')
+                .toLowerCase()
+                .replace(/^store-/, '')
+                .replace(/-chain$/, '')
+                .trim();
+              const matchedStore = allStores.find(
+                s =>
+                  s.id === obs.storeId ||
+                  s.id.toLowerCase().replace(/^store-/, '') === normStoreKey ||
+                  (s.slug || '').toLowerCase() === normStoreKey
+              );
+              return {
+                date: String(obs.date || '').slice(0, 10),
+                price: Number(obs.price) || 0,
+                storeId: obs.storeId || '',
+                storeName: obs.storeName || matchedStore?.name || obs.storeId || 'Magazin',
+                source:
+                  obs.source === 'verified'
+                    ? 'Bon fiscal confirmat'
+                    : obs.source === 'official_feed'
+                    ? 'Catalog / feed oficial'
+                    : obs.source || 'Observație catalog',
+                sourceType: obs.source || 'official_feed'
+              };
+            })
+          : [];
+        setRemoteHistory({
+          productId: selectedProduct.id,
+          days: timeframeDays,
+          points: pts,
+          intervalStats: payload.intervalStats,
+          currentLowestPrice:
+            typeof payload.currentLowestPrice === 'number' ? payload.currentLowestPrice : undefined
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteHistory(null);
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProduct?.id, timeframeDays, allStores]);
 
   // Filter products by search
   const filteredProducts = useMemo(() => {
@@ -59,18 +195,47 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
     );
   }, [allProducts, searchQuery]);
 
-  // Selected product and stats
-  const selectedProduct = allProducts.find(p => p.id === selectedProductId) || allProducts[0];
-  const stats: ProductPriceStats = useMemo(() => {
-    return PriceHistoryService.getProductPriceStats(selectedProduct.id);
-  }, [selectedProduct.id]);
+  // Compute local baseline stats from real offers & observations
+  const localStats: ProductPriceStats | null = useMemo(() => {
+    if (!selectedProduct) return null;
+    return PriceHistoryService.getProductPriceStats(selectedProduct.id, {
+      offers: allOffers,
+      stores: allStores
+    });
+  }, [selectedProduct, allOffers, allStores]);
 
-  // Timeline points filtered by timeframe
-  const filteredTimeline = useMemo(() => {
-    return PriceHistoryService.filterPointsByDays(stats.historyPoints, timeframeDays);
-  }, [stats.historyPoints, timeframeDays]);
+  const useRemoteForSelection = Boolean(
+    remoteHistory &&
+      remoteHistory.productId === selectedProduct?.id &&
+      remoteHistory.days === timeframeDays &&
+      (remoteHistory.points.length > 0 || (localStats?.historyPoints.length ?? 0) === 0)
+  );
 
-  // Handle toggle tracked product
+  const filteredTimeline: PriceTimelinePoint[] = useMemo(() => {
+    if (useRemoteForSelection && remoteHistory) {
+      return remoteHistory.points;
+    }
+    if (!localStats) return [];
+    return PriceHistoryService.filterPointsByDays(localStats.historyPoints, timeframeDays);
+  }, [useRemoteForSelection, remoteHistory, localStats, timeframeDays]);
+
+  const activeIntervalStats: PriceHistoryIntervalStats = useMemo(() => {
+    if (useRemoteForSelection && remoteHistory?.intervalStats) {
+      return remoteHistory.intervalStats;
+    }
+    if (localStats) {
+      return localStats.intervalStats[timeframeDays];
+    }
+    return PriceHistoryService.computeIntervalStats(filteredTimeline, timeframeDays);
+  }, [useRemoteForSelection, remoteHistory, localStats, timeframeDays, filteredTimeline]);
+
+  const currentLowestPrice =
+    useRemoteForSelection && typeof remoteHistory?.currentLowestPrice === 'number' && remoteHistory.currentLowestPrice > 0
+      ? remoteHistory.currentLowestPrice
+      : localStats?.currentLowestPrice || 0;
+
+  const currentLowestStoreName = localStats?.currentLowestStoreName || '-';
+
   const handleToggleTracked = (productId: string) => {
     const nextTrackedList = trackedList.includes(productId)
       ? trackedList.filter(id => id !== productId)
@@ -79,40 +244,132 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
     onUpdateTrackedProductIds(nextTrackedList);
   };
 
-  // Handle add price alert
+  const openNewAlertModal = () => {
+    if (!selectedProduct) return;
+    setEditingAlertId(null);
+    setAlertTypeInput('below_target');
+    setAlertIntervalInput(timeframeDays);
+    const suggested =
+      currentLowestPrice > 0
+        ? Math.round(currentLowestPrice * 0.9 * 100) / 100
+        : Math.round((selectedProduct.baseReferencePrice || 5) * 0.9 * 100) / 100;
+    setTargetAlertPrice(suggested > 0 ? suggested : 5);
+    setShowAddAlertModal(true);
+  };
+
+  const openEditAlertModal = (alert: PriceAlert) => {
+    setEditingAlertId(alert.id);
+    setAlertTypeInput(alert.alertType || 'below_target');
+    setAlertIntervalInput(alert.intervalDays || 90);
+    setTargetAlertPrice(alert.targetPrice > 0 ? alert.targetPrice : 5);
+    setShowAddAlertModal(true);
+  };
+
   const handleSaveAlert = (e: React.FormEvent) => {
     e.preventDefault();
-    if (targetAlertPrice <= 0) return;
+    if (!selectedProduct) return;
 
+    if (editingAlertId) {
+      const updated = alerts.map(a =>
+        a.id === editingAlertId
+          ? {
+              ...a,
+              alertType: alertTypeInput,
+              intervalDays: alertTypeInput === 'interval_low' ? alertIntervalInput : undefined,
+              targetPrice: alertTypeInput === 'below_target' ? targetAlertPrice : a.targetPrice || currentLowestPrice || 1
+            }
+          : a
+      );
+      onUpdateAlerts(updated);
+      setShowAddAlertModal(false);
+      setEditingAlertId(null);
+      return;
+    }
+
+    if (alertTypeInput === 'below_target' && targetAlertPrice <= 0) return;
+
+    const alreadyDuplicate = alerts.some(
+      a =>
+        a.productId === selectedProduct.id &&
+        (a.alertType || 'below_target') === alertTypeInput &&
+        (alertTypeInput !== 'interval_low' || (a.intervalDays || 90) === alertIntervalInput)
+    );
+    if (alreadyDuplicate) {
+      setBulkFeedback(`Există deja o alertă similară pentru „${selectedProduct.name}”.`);
+      setShowAddAlertModal(false);
+      window.setTimeout(() => setBulkFeedback(null), 4000);
+      return;
+    }
+
+    const baselinePrice = currentLowestPrice > 0 ? currentLowestPrice : selectedProduct.baseReferencePrice || 0;
     const newAlert: PriceAlert = {
-      id: crypto.randomUUID(),
+      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `alert-${Date.now()}`,
       productId: selectedProduct.id,
-      productName: `${selectedProduct.name} (${selectedProduct.brand})`,
-      targetPrice: targetAlertPrice,
-      currentLowestPrice: stats.currentLowestPrice,
-      lowestStoreId: stats.currentLowestStoreName,
+      productName: `${selectedProduct.name}${selectedProduct.brand ? ` (${selectedProduct.brand})` : ''}`,
+      targetPrice: alertTypeInput === 'below_target' ? targetAlertPrice : Math.max(0.01, baselinePrice),
+      currentLowestPrice,
+      lowestStoreId: localStats?.currentLowestStoreId,
       createdAt: new Date().toISOString().split('T')[0],
-      isActive: true
+      isActive: true,
+      alertType: alertTypeInput,
+      intervalDays: alertTypeInput === 'interval_low' ? alertIntervalInput : undefined,
+      lastEvaluatedPrice: currentLowestPrice > 0 ? currentLowestPrice : undefined
     };
 
-    const updated = [newAlert, ...alerts];
-    onUpdateAlerts(updated);
+    onUpdateAlerts([newAlert, ...alerts]);
     setShowAddAlertModal(false);
   };
 
-  const handleDeleteAlert = (alertId: string) => {
-    const updated = alerts.filter(a => a.id !== alertId);
-    onUpdateAlerts(updated);
+  const handleToggleAlertActive = (alertId: string) => {
+    onUpdateAlerts(alerts.map(a => (a.id === alertId ? { ...a, isActive: !a.isActive } : a)));
   };
 
-  // SVG Chart Calculation
+  const handleDeleteAlert = (alertId: string) => {
+    onUpdateAlerts(alerts.filter(a => a.id !== alertId));
+  };
+
+  const handleBulkCreateFromActiveList = () => {
+    if (!activeList || activeList.items.length === 0) return;
+    if (onCreateAlertsFromList) {
+      const res = onCreateAlertsFromList(activeList);
+      if (res && typeof res === 'object') {
+        setBulkFeedback(
+          res.createdCount > 0
+            ? `Au fost create ${res.createdCount} alerte noi din lista „${activeList.name}”${res.skippedCount > 0 ? ` (${res.skippedCount} deja existente)` : ''}.`
+            : `Toate produsele potrivite din „${activeList.name}” au deja alerte active.`
+        );
+      } else {
+        setBulkFeedback(`Alertele din lista „${activeList.name}” au fost procesate.`);
+      }
+      window.setTimeout(() => setBulkFeedback(null), 4000);
+      return;
+    }
+
+    const { createdAlerts, skippedExistingCount } = PriceAlertService.createAlertsFromShoppingList(
+      activeList,
+      alerts,
+      allProducts,
+      allOffers
+    );
+    if (createdAlerts.length > 0) {
+      onUpdateAlerts([...createdAlerts, ...alerts]);
+    }
+    setBulkFeedback(
+      createdAlerts.length > 0
+        ? `Au fost create ${createdAlerts.length} alerte noi din lista „${activeList.name}”${skippedExistingCount > 0 ? ` (${skippedExistingCount} ignorate ca duplicate)` : ''}.`
+        : `Nu au fost adăugate alerte noi (${skippedExistingCount} există deja).`
+    );
+    window.setTimeout(() => setBulkFeedback(null), 4000);
+  };
+
+  // Safe SVG chart calculation (only evaluated when filteredTimeline.length >= 2)
   const chartWidth = 600;
   const chartHeight = 220;
   const padding = { top: 25, right: 30, bottom: 35, left: 55 };
 
-  const prices = filteredTimeline.map(p => p.price);
-  const minPrice = Math.min(...prices, stats.minRecordedPrice) * 0.95;
-  const maxPrice = Math.max(...prices, stats.maxRecordedPrice) * 1.05;
+  const prices = filteredTimeline.map(p => p.price).filter(p => p > 0);
+  const chartMinPrice = prices.length > 0 ? Math.min(...prices) * 0.95 : 0;
+  const chartMaxPrice = prices.length > 0 ? Math.max(...prices) * 1.05 : 10;
 
   const getX = (index: number) => {
     if (filteredTimeline.length <= 1) return chartWidth / 2;
@@ -123,8 +380,8 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
   };
 
   const getY = (price: number) => {
-    if (maxPrice === minPrice) return chartHeight / 2;
-    const ratio = (price - minPrice) / (maxPrice - minPrice);
+    if (chartMaxPrice === chartMinPrice) return chartHeight / 2;
+    const ratio = (price - chartMinPrice) / (chartMaxPrice - chartMinPrice);
     return chartHeight - padding.bottom - ratio * (chartHeight - padding.top - padding.bottom);
   };
 
@@ -132,34 +389,53 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
     .map((p, i) => `${getX(i)},${getY(p.price)}`)
     .join(' ');
 
+  const unreadNotificationsCount = notifications.filter(n => !n.isRead).length;
+
   return (
     <div className="space-y-6 pb-16">
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-slate-50 tracking-tight">
-            Istoricul & Evoluția Prețurilor 📈
+          <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-50 tracking-tight">
+            Istoricul Prețurilor &amp; Alerte
           </h1>
           <p className="text-slate-600 dark:text-slate-400 text-sm mt-0.5">
-            Monitorizează fluctuațiile de preț în supermarketuri și setează alerte automate la reduceri.
+            Monitorizează evoluția reală a prețurilor pe 30, 90, 180 sau 365 de zile și configurează alerte fără duplicate.
           </p>
         </div>
 
-        <button
-          onClick={() => {
-            setTargetAlertPrice(Math.round((stats.currentLowestPrice * 0.9) * 10) / 10);
-            setShowAddAlertModal(true);
-          }}
-          className="self-start sm:self-auto px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition-all"
-        >
-          <Bell className="w-4 h-4" />
-          Setează alertă de preț
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          {activeList && activeList.items.length > 0 && (
+            <button
+              type="button"
+              onClick={handleBulkCreateFromActiveList}
+              className="px-3.5 py-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/70 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <ListPlus className="w-4 h-4" />
+              <span>Creează alerte din lista activă</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={openNewAlertModal}
+            className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <Bell className="w-4 h-4" />
+            <span>Setează alertă de preț</span>
+          </button>
+        </div>
       </div>
 
+      {bulkFeedback && (
+        <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/70 text-xs font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{bulkFeedback}</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Product Selector List (4 cols) */}
-        <div className="lg:col-span-4 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-4 sm:p-5 shadow-xs flex flex-col h-[600px]">
+        {/* Left Column: Product Selector List */}
+        <div className="lg:col-span-4 surface-card p-4 sm:p-5 flex flex-col h-[600px]">
           <div className="mb-3">
             <h3 className="font-bold text-sm text-slate-900 dark:text-slate-50 mb-2">Alege un produs</h3>
             <div className="relative">
@@ -169,14 +445,14 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Caută în catalog..."
-                className="w-full pl-9 pr-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
+                className="w-full pl-9 pr-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-hidden focus:border-emerald-500"
               />
             </div>
           </div>
 
           <div className="divide-y divide-slate-100 dark:divide-slate-800 overflow-y-auto flex-1 pr-1">
             {filteredProducts.map(p => {
-              const isSelected = p.id === selectedProduct.id;
+              const isSelected = selectedProduct?.id === p.id;
               const isTracked = trackedList.includes(p.id);
 
               return (
@@ -192,17 +468,18 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                   <div className="min-w-0 pr-2">
                     <span className="text-xs sm:text-sm block truncate">{p.name}</span>
                     <span className="text-[11px] text-slate-400 dark:text-slate-500 block truncate">
-                      {p.brand} • {p.category}
+                      {p.brand} · {p.category}
                     </span>
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
+                      type="button"
                       onClick={e => {
                         e.stopPropagation();
                         handleToggleTracked(p.id);
                       }}
-                      className={`p-1.5 rounded-lg text-xs ${
+                      className={`p-1.5 rounded-lg text-xs cursor-pointer ${
                         isTracked
                           ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-100/60 dark:bg-emerald-900/50'
                           : 'text-slate-300 dark:text-slate-600 hover:text-slate-600 dark:hover:text-slate-300'
@@ -218,227 +495,351 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
           </div>
         </div>
 
-        {/* Right Column: Interactive Price Chart & Statistics (8 cols) */}
+        {/* Right Column: Interactive Price Chart, Observations & Alerts */}
         <div className="lg:col-span-8 space-y-6">
-          {/* Product Header & Overview Card */}
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-5 sm:p-7 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
-              <div>
-                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider block mb-1">
-                  {selectedProduct.category}
-                </span>
-                <h2 className="text-lg sm:text-2xl font-extrabold text-slate-900 dark:text-slate-50 tracking-tight">
-                  {selectedProduct.name}
-                </h2>
-                <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  <span className="font-semibold text-slate-700 dark:text-slate-300">{selectedProduct.brand}</span>
-                  <span>• Unitate de referință: 1 {selectedProduct.normalizedUnit}</span>
-                  {selectedProduct.barcode && <span>• EAN: {selectedProduct.barcode}</span>}
+          {selectedProduct && (
+            <div className="surface-card p-5 sm:p-7">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div>
+                  <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider block mb-1">
+                    {selectedProduct.category}
+                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="font-display text-lg sm:text-2xl font-bold text-slate-900 dark:text-slate-50 tracking-tight">
+                      {selectedProduct.name}
+                    </h2>
+                    {onSelectProductForDetails && (
+                      <button
+                        type="button"
+                        onClick={() => onSelectProductForDetails(selectedProduct)}
+                        className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                      >
+                        Vezi detalii produs
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">{selectedProduct.brand}</span>
+                    <span>· Unitate de referință: 1 {selectedProduct.normalizedUnit}</span>
+                    {selectedProduct.barcode && <span>· EAN: {selectedProduct.barcode}</span>}
+                  </div>
+                </div>
+
+                {/* Strict Timeframe Selector (30 | 90 | 180 | 365 zile) */}
+                <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl self-start sm:self-auto">
+                  {INTERVAL_OPTIONS.map(opt => (
+                    <button
+                      key={opt.days}
+                      type="button"
+                      onClick={() => setTimeframeDays(opt.days)}
+                      className={`px-2.5 sm:px-3 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                        timeframeDays === opt.days
+                          ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-50 shadow-xs'
+                          : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Timeframe Selector */}
-              <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl self-start sm:self-auto">
-                <button
-                  onClick={() => setTimeframeDays(30)}
-                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
-                    timeframeDays === 30
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-50 shadow-xs'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
-                  }`}
-                >
-                  30 zile
-                </button>
-                <button
-                  onClick={() => setTimeframeDays(90)}
-                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
-                    timeframeDays === 90
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-50 shadow-xs'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
-                  }`}
-                >
-                  90 zile
-                </button>
-                <button
-                  onClick={() => setTimeframeDays(365)}
-                  className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
-                    timeframeDays === 365
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-50 shadow-xs'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
-                  }`}
-                >
-                  1 an
-                </button>
-              </div>
-            </div>
-
-            {/* Metrics Row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-5">
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">Preț minim curent</span>
-                <span className="text-lg sm:text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5 block">
-                  {PriceComparisonService.formatRon(stats.currentLowestPrice)}
-                </span>
-                <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate block">la {stats.currentLowestStoreName}</span>
-              </div>
-
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">Preț mediu</span>
-                <span className="text-lg sm:text-xl font-black text-slate-900 dark:text-slate-50 mt-0.5 block">
-                  {PriceComparisonService.formatRon(stats.averagePrice)}
-                </span>
-                <span className="text-[10px] text-slate-400 dark:text-slate-500 block">în ultimele luni</span>
-              </div>
-
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">Maxim înregistrat</span>
-                <span className="text-lg sm:text-xl font-black text-slate-900 dark:text-slate-50 mt-0.5 block">
-                  {PriceComparisonService.formatRon(stats.maxRecordedPrice)}
-                </span>
-                <span className="text-[10px] text-slate-400 dark:text-slate-500 block">vârf istoric</span>
-              </div>
-
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">Ultimul preț plătit</span>
-                <span className="text-lg sm:text-xl font-black text-slate-900 dark:text-slate-50 mt-0.5 block">
-                  {stats.lastPaidPrice ? PriceComparisonService.formatRon(stats.lastPaidPrice) : 'N/A'}
-                </span>
-                <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate block">
-                  {stats.lastPaidStoreName ? `pe bon la ${stats.lastPaidStoreName}` : 'nescanat încă'}
-                </span>
-              </div>
-            </div>
-
-            {/* Interactive SVG Chart */}
-            <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-                  <LineChart className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  Grafic evoluție preț (RON)
-                </span>
-                {stats.trendPercentage !== 0 && (
-                  <span
-                    className={`text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
-                      stats.trendPercentage < 0
-                        ? 'bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300'
-                        : 'bg-rose-100 dark:bg-rose-950/70 text-rose-800 dark:text-rose-300'
-                    }`}
-                  >
-                    {stats.trendPercentage < 0 ? (
-                      <TrendingDown className="w-3.5 h-3.5" />
-                    ) : (
-                      <TrendingUp className="w-3.5 h-3.5" />
-                    )}
-                    {stats.trendPercentage > 0 ? `+${stats.trendPercentage}%` : `${stats.trendPercentage}%`}
+              {/* Metrics Row (strictly reflecting interval stats, null-safe) */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mt-5 tabular-nums">
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">
+                    Minim ({timeframeDays} zile)
                   </span>
+                  <span className="font-display text-lg sm:text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5 block">
+                    {activeIntervalStats.minPrice !== null
+                      ? PriceComparisonService.formatRon(activeIntervalStats.minPrice)
+                      : 'Indisponibil'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate block">
+                    {activeIntervalStats.minPriceStoreName
+                      ? `${activeIntervalStats.minPriceStoreName} (${activeIntervalStats.minPriceDate})`
+                      : 'fără observații'}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">
+                    Medie ({timeframeDays} zile)
+                  </span>
+                  <span className="font-display text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-50 mt-0.5 block">
+                    {activeIntervalStats.avgPrice !== null
+                      ? PriceComparisonService.formatRon(activeIntervalStats.avgPrice)
+                      : 'Indisponibil'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 block">
+                    {activeIntervalStats.observationsCount} observații reale
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">
+                    Maxim ({timeframeDays} zile)
+                  </span>
+                  <span className="font-display text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-50 mt-0.5 block">
+                    {activeIntervalStats.maxPrice !== null
+                      ? PriceComparisonService.formatRon(activeIntervalStats.maxPrice)
+                      : 'Indisponibil'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 block">
+                    {activeIntervalStats.distinctDaysCount} zile distincte
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700/70">
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium block">
+                    Ultima observație / ofertă
+                  </span>
+                  <span className="font-display text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-50 mt-0.5 block">
+                    {activeIntervalStats.lastObservation
+                      ? PriceComparisonService.formatRon(activeIntervalStats.lastObservation.price)
+                      : currentLowestPrice > 0
+                      ? PriceComparisonService.formatRon(currentLowestPrice)
+                      : 'Indisponibil'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate block">
+                    {activeIntervalStats.lastObservation
+                      ? `${activeIntervalStats.lastObservation.storeName} · ${activeIntervalStats.lastObservation.date}`
+                      : currentLowestPrice > 0
+                      ? `ofertă activă la ${currentLowestStoreName}`
+                      : 'fără date'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Interactive SVG Chart or Honest Empty / Single-Observation State */}
+              <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                    <LineChart className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span>Evoluție preț (ultimele {timeframeDays} zile)</span>
+                    {historyLoading && <span className="text-slate-400 font-normal">· Se încarcă...</span>}
+                  </span>
+                  {activeIntervalStats.hasSufficientHistory && localStats && localStats.trendPercentage !== 0 && (
+                    <span
+                      className={`text-xs font-bold px-2 py-0.5 rounded-md flex items-center gap-1 tabular-nums ${
+                        localStats.trendPercentage < 0
+                          ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400'
+                          : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400'
+                      }`}
+                    >
+                      {localStats.trendPercentage < 0 ? (
+                        <TrendingDown className="w-3.5 h-3.5" />
+                      ) : (
+                        <TrendingUp className="w-3.5 h-3.5" />
+                      )}
+                      {localStats.trendPercentage > 0 ? `+${localStats.trendPercentage}%` : `${localStats.trendPercentage}%`}
+                    </span>
+                  )}
+                </div>
+
+                {!activeIntervalStats.hasSufficientHistory || filteredTimeline.length < 2 ? (
+                  <div className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-dashed border-slate-200 dark:border-slate-700 text-center space-y-2">
+                    <Info className="w-6 h-6 text-slate-400 mx-auto" />
+                    <p className="text-xs font-medium text-slate-600 dark:text-slate-300 max-w-lg mx-auto">
+                      {activeIntervalStats.noticeRo ||
+                        `Nu există suficiente observații distincte în ultimele ${timeframeDays} zile pentru a trasa un grafic.`}
+                    </p>
+                    {filteredTimeline.length === 1 && (
+                      <div className="inline-flex items-center gap-3 px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs tabular-nums">
+                        <span className="font-semibold text-slate-800 dark:text-slate-100">{filteredTimeline[0].date}</span>
+                        <span className="text-slate-500 dark:text-slate-400">{filteredTimeline[0].storeName}</span>
+                        <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                          {PriceComparisonService.formatRon(filteredTimeline[0].price)}
+                        </span>
+                        <span className="text-slate-400">({filteredTimeline[0].source})</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="relative overflow-x-auto">
+                    <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="w-full h-56 overflow-visible">
+                      {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => {
+                        const priceVal = chartMinPrice + (chartMaxPrice - chartMinPrice) * (1 - pct);
+                        const y = padding.top + pct * (chartHeight - padding.top - padding.bottom);
+                        return (
+                          <g key={i}>
+                            <line
+                              x1={padding.left}
+                              y1={y}
+                              x2={chartWidth - padding.right}
+                              y2={y}
+                              className="stroke-slate-200 dark:stroke-slate-700/80"
+                              strokeDasharray="4 4"
+                            />
+                            <text
+                              x={padding.left - 8}
+                              y={y + 3}
+                              textAnchor="end"
+                              fontSize="10"
+                              className="fill-slate-400 dark:fill-slate-400"
+                              fontWeight="500"
+                            >
+                              {priceVal.toFixed(2)}
+                            </text>
+                          </g>
+                        );
+                      })}
+
+                      <defs>
+                        <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#10b981" stopOpacity="0.25" />
+                          <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                        </linearGradient>
+                      </defs>
+
+                      <polygon
+                        points={`${getX(0)},${chartHeight - padding.bottom} ${polylinePoints} ${getX(
+                          filteredTimeline.length - 1
+                        )},${chartHeight - padding.bottom}`}
+                        fill="url(#chartGradient)"
+                      />
+
+                      <polyline
+                        fill="none"
+                        stroke="#10b981"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        points={polylinePoints}
+                      />
+
+                      {filteredTimeline.map((p, i) => {
+                        const cx = getX(i);
+                        const cy = getY(p.price);
+                        return (
+                          <g key={i} className="group cursor-pointer">
+                            <title>{`${p.date} · ${p.storeName}: ${p.price.toFixed(2)} lei (${p.source})`}</title>
+                            <circle
+                              cx={cx}
+                              cy={cy}
+                              r="5"
+                              className="fill-white dark:fill-slate-900 stroke-emerald-600 dark:stroke-emerald-400 stroke-2"
+                            />
+                            <text
+                              x={cx}
+                              y={chartHeight - 12}
+                              textAnchor="middle"
+                              fontSize="9"
+                              className="fill-slate-500 dark:fill-slate-400"
+                            >
+                              {p.date.split('-').slice(1).join('/')}
+                            </text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                )}
+
+                {/* Real Observations Table */}
+                {filteredTimeline.length > 0 && (
+                  <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200 dark:border-slate-800">
+                        <tr>
+                          <th className="px-3.5 py-2">Dată</th>
+                          <th className="px-3.5 py-2">Magazin</th>
+                          <th className="px-3.5 py-2">Preț observat</th>
+                          <th className="px-3.5 py-2">Sursă</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {[...filteredTimeline].reverse().slice(0, 10).map((pt, idx) => (
+                          <tr key={`${pt.date}-${pt.storeId}-${idx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                            <td className="px-3.5 py-2 tabular-nums text-slate-700 dark:text-slate-300">{pt.date}</td>
+                            <td className="px-3.5 py-2 font-semibold text-slate-900 dark:text-slate-100">{pt.storeName}</td>
+                            <td className="px-3.5 py-2 font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                              {PriceComparisonService.formatRon(pt.price)}
+                            </td>
+                            <td className="px-3.5 py-2 text-slate-500 dark:text-slate-400">{pt.source}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* In-App Price Alert Notifications */}
+          {notifications.length > 0 && (
+            <div className="surface-card p-5 sm:p-7">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                  <h3 className="font-bold text-slate-900 dark:text-slate-50 text-base">
+                    Notificări în aplicație ({unreadNotificationsCount} necitite)
+                  </h3>
+                </div>
+                {unreadNotificationsCount > 0 && onMarkAllNotificationsRead && (
+                  <button
+                    type="button"
+                    onClick={onMarkAllNotificationsRead}
+                    className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                  >
+                    Marchează toate citite
+                  </button>
                 )}
               </div>
 
-              {filteredTimeline.length < 2 ? (
-                <div className="h-48 flex items-center justify-center text-xs text-slate-400 dark:text-slate-500 text-center">
-                  Nu există încă suficiente observații istorice pentru un grafic pe această perioadă. Scanează mai multe bonuri!
-                </div>
-              ) : (
-                <div className="relative overflow-x-auto">
-                  <svg
-                    viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-                    className="w-full h-56 overflow-visible"
+              <div className="space-y-2.5">
+                {notifications.slice(0, 12).map(notif => (
+                  <div
+                    key={notif.id}
+                    className={`p-3.5 rounded-2xl border flex items-start justify-between gap-3 ${
+                      notif.isRead
+                        ? 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 opacity-80'
+                        : 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/60 dark:bg-emerald-950/40'
+                    }`}
                   >
-                    {/* Horizontal grid lines */}
-                    {[0, 0.25, 0.5, 0.75, 1].map((pct, i) => {
-                      const priceVal = minPrice + (maxPrice - minPrice) * (1 - pct);
-                      const y = padding.top + pct * (chartHeight - padding.top - padding.bottom);
-                      return (
-                        <g key={i}>
-                          <line
-                            x1={padding.left}
-                            y1={y}
-                            x2={chartWidth - padding.right}
-                            y2={y}
-                            className="stroke-slate-200 dark:stroke-slate-700/80"
-                            strokeDasharray="4 4"
-                          />
-                          <text
-                            x={padding.left - 8}
-                            y={y + 3}
-                            textAnchor="end"
-                            fontSize="10"
-                            className="fill-slate-400 dark:fill-slate-400"
-                            fontWeight="500"
-                          >
-                            {priceVal.toFixed(2)}
-                          </text>
-                        </g>
-                      );
-                    })}
-
-                    {/* Gradient Fill under line */}
-                    <defs>
-                      <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#10b981" stopOpacity="0.25" />
-                        <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-                      </linearGradient>
-                    </defs>
-
-                    {/* Area under line */}
-                    <polygon
-                      points={`${getX(0)},${chartHeight - padding.bottom} ${polylinePoints} ${getX(
-                        filteredTimeline.length - 1
-                      )},${chartHeight - padding.bottom}`}
-                      fill="url(#chartGradient)"
-                    />
-
-                    {/* Main Trend Line */}
-                    <polyline
-                      fill="none"
-                      stroke="#10b981"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      points={polylinePoints}
-                    />
-
-                    {/* Data Points */}
-                    {filteredTimeline.map((p, i) => {
-                      const cx = getX(i);
-                      const cy = getY(p.price);
-                      return (
-                        <g key={i} className="group cursor-pointer">
-                          <circle
-                            cx={cx}
-                            cy={cy}
-                            r="5"
-                            className="fill-white dark:fill-slate-900 stroke-emerald-600 dark:stroke-emerald-400 stroke-2 hover:r-7 transition-all"
-                          />
-                          {/* Point label */}
-                          <text
-                            x={cx}
-                            y={chartHeight - 12}
-                            textAnchor="middle"
-                            fontSize="9"
-                            className="fill-slate-500 dark:fill-slate-400"
-                          >
-                            {p.date.split('-').slice(1).join('/')}
-                          </text>
-                        </g>
-                      );
-                    })}
-                  </svg>
-                </div>
-              )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        {!notif.isRead && <span className="w-2 h-2 rounded-full bg-emerald-600 shrink-0" />}
+                        <span className="font-bold text-xs text-slate-900 dark:text-slate-100 truncate">
+                          {notif.title}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">{notif.message}</p>
+                      <span className="text-[11px] text-slate-400 dark:text-slate-500 flex items-center gap-1 mt-1 tabular-nums">
+                        <Clock className="w-3 h-3" />
+                        {new Date(notif.triggeredAt).toLocaleString('ro-RO')} · {notif.storeName}
+                      </span>
+                    </div>
+                    {!notif.isRead && onMarkNotificationRead && (
+                      <button
+                        type="button"
+                        onClick={() => onMarkNotificationRead(notif.id)}
+                        className="p-1.5 rounded-lg text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 shrink-0 cursor-pointer"
+                        title="Marchează ca citită"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Active Price Alerts for this or other products */}
-          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-5 sm:p-7 shadow-xs">
+          {/* Price Alerts Management */}
+          <div className="surface-card p-5 sm:p-7">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
               <div className="flex items-center gap-2">
                 <Bell className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                <h3 className="font-bold text-slate-900 dark:text-slate-50 text-base">Alerte de preț active ({alerts.length})</h3>
+                <h3 className="font-bold text-slate-900 dark:text-slate-50 text-base">
+                  Alerte de preț configurate ({alerts.filter(a => a.isActive).length} active / {alerts.length} total)
+                </h3>
               </div>
               <button
-                onClick={() => setShowAddAlertModal(true)}
-                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline"
+                type="button"
+                onClick={openNewAlertModal}
+                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
               >
                 + Adaugă alertă
               </button>
@@ -446,31 +847,71 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
             {alerts.length === 0 ? (
               <p className="text-xs text-slate-400 dark:text-slate-500 py-4 text-center">
-                Nu ai nicio alertă configurată. Setează o alertă pentru a fi anunțat când un produs scade sub prețul dorit.
+                Nu ai nicio alertă configurată. Poți crea alerte pentru preț sub prag, orice reducere sau minim istoric (30/90/180/365 zile).
               </p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {alerts.map(alert => (
                   <div
                     key={alert.id}
-                    className="p-3.5 rounded-2xl border border-emerald-100 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/30 flex items-center justify-between"
+                    className={`p-3.5 rounded-2xl border flex items-start justify-between gap-2 transition-colors ${
+                      alert.isActive
+                        ? 'border-emerald-200/80 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/30'
+                        : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 opacity-75'
+                    }`}
                   >
-                    <div>
-                      <span className="font-bold text-xs text-slate-800 dark:text-slate-100 block line-clamp-1">
-                        {alert.productName}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-slate-800 dark:text-slate-100 truncate">
+                          {alert.productName}
+                        </span>
+                        {!alert.isActive && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 shrink-0">
+                            Oprită
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 block mt-0.5">
+                        {PriceAlertService.getAlertTypeLabel(alert.alertType, alert.intervalDays)}
                       </span>
-                      <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 flex items-center gap-2">
-                        <span>Preț țintă: <strong className="text-emerald-700 dark:text-emerald-400">{PriceComparisonService.formatRon(alert.targetPrice)}</strong></span>
-                        <span>• Acum: {PriceComparisonService.formatRon(alert.currentLowestPrice)}</span>
+                      <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-2 tabular-nums">
+                        {(alert.alertType || 'below_target') === 'below_target' && (
+                          <span>
+                            Prag: <strong className="text-slate-900 dark:text-slate-100">{PriceComparisonService.formatRon(alert.targetPrice)}</strong>
+                          </span>
+                        )}
+                        <span>
+                          Minim curent: {alert.currentLowestPrice > 0 ? PriceComparisonService.formatRon(alert.currentLowestPrice) : 'Indisponibil'}
+                        </span>
                       </div>
                     </div>
-                    <button
-                      onClick={() => handleDeleteAlert(alert.id)}
-                      className="p-1 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-md"
-                      title="Șterge alerta"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAlertActive(alert.id)}
+                        className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400 rounded-lg hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
+                        title={alert.isActive ? 'Oprește temporar alerta' : 'Reactivează alerta'}
+                      >
+                        {alert.isActive ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openEditAlertModal(alert)}
+                        className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 rounded-lg hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
+                        title="Editează alerta"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteAlert(alert.id)}
+                        className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50 cursor-pointer"
+                        title="Șterge alerta"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -479,52 +920,108 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
         </div>
       </div>
 
-      {/* Add Alert Modal */}
-      {showAddAlertModal && (
+      {/* Add / Edit Alert Modal */}
+      {showAddAlertModal && selectedProduct && (
         <div className="fixed inset-0 z-50 bg-black/50 dark:bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 dark:border dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl animate-in fade-in zoom-in-95">
+          <div className="bg-white dark:bg-slate-900 dark:border dark:border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in-95">
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-50">
-              Setează o alertă de preț
+              {editingAlertId ? 'Editează alerta de preț' : 'Setează o alertă de preț'}
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Pentru: <strong className="text-slate-800 dark:text-slate-200">{selectedProduct.name}</strong>
-            </p>
+            {!editingAlertId && (
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Pentru: <strong className="text-slate-800 dark:text-slate-200">{selectedProduct.name}</strong>
+              </p>
+            )}
 
             <form onSubmit={handleSaveAlert} className="mt-4 space-y-4">
               <div>
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                  Preț țintă dorit (lei)
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1.5">
+                  Tip alertă
                 </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    required
-                    value={targetAlertPrice}
-                    onChange={e => setTargetAlertPrice(parseFloat(e.target.value) || 0)}
-                    className="w-full px-3 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100 focus:outline-none focus:border-emerald-500"
-                  />
-                  <span className="absolute right-3 top-3 text-xs text-slate-400 dark:text-slate-500 font-bold">RON</span>
+                <div className="grid grid-cols-1 gap-2">
+                  {[
+                    { type: 'below_target' as PriceAlertType, label: 'Preț sub prag țintă (RON)' },
+                    { type: 'any_drop' as PriceAlertType, label: 'Orice reducere față de ultimul preț verificat' },
+                    { type: 'interval_low' as PriceAlertType, label: 'Când atinge minimul istoric din interval' }
+                  ].map(item => (
+                    <label
+                      key={item.type}
+                      className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs cursor-pointer ${
+                        alertTypeInput === item.type
+                          ? 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 font-semibold text-emerald-900 dark:text-emerald-200'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="alertType"
+                        checked={alertTypeInput === item.type}
+                        onChange={() => setAlertTypeInput(item.type)}
+                      />
+                      <span>{item.label}</span>
+                    </label>
+                  ))}
                 </div>
-                <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
-                  Prețul minim actual este de {PriceComparisonService.formatRon(stats.currentLowestPrice)}.
-                </span>
               </div>
+
+              {alertTypeInput === 'below_target' && (
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                    Preț țintă dorit (lei)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="0.1"
+                      required
+                      value={targetAlertPrice}
+                      onChange={e => setTargetAlertPrice(parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-emerald-500 tabular-nums"
+                    />
+                    <span className="absolute right-3 top-3 text-xs text-slate-400 dark:text-slate-500 font-bold">RON</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block tabular-nums">
+                    Prețul minim actual: {currentLowestPrice > 0 ? PriceComparisonService.formatRon(currentLowestPrice) : 'Indisponibil'}
+                  </span>
+                </div>
+              )}
+
+              {alertTypeInput === 'interval_low' && (
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                    Interval istoric de referință
+                  </label>
+                  <select
+                    value={alertIntervalInput}
+                    onChange={e => setAlertIntervalInput(Number(e.target.value) as PriceHistoryInterval)}
+                    className="w-full px-3 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100"
+                  >
+                    {INTERVAL_OPTIONS.map(opt => (
+                      <option key={opt.days} value={opt.days}>
+                        Ultimele {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setShowAddAlertModal(false)}
-                  className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-medium"
+                  onClick={() => {
+                    setShowAddAlertModal(false);
+                    setEditingAlertId(null);
+                  }}
+                  className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-medium cursor-pointer"
                 >
                   Anulează
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold shadow-xs"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold shadow-xs cursor-pointer"
                 >
-                  Salvează alerta
+                  {editingAlertId ? 'Actualizează alerta' : 'Salvează alerta'}
                 </button>
               </div>
             </form>

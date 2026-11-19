@@ -405,4 +405,93 @@ export const gdprDeleteAccountSchema = z.object({
   reason: z.string().trim().max(500).optional().nullable()
 });
 
+// =========================================================================
+// V1 Roadmap: Basket Optimizer & Price History Validation
+// =========================================================================
 
+export const basketItemInputSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  productId: z.string().trim().max(120).optional(),
+  customName: z.string().trim().max(255).optional(),
+  name: z.string().trim().min(1, 'Denumirea produsului este obligatorie.').max(255),
+  brand: z.string().trim().max(120).optional(),
+  category: z.string().trim().max(80).default('Alte produse'),
+  quantity: z.coerce.number().positive('Cantitatea trebuie să fie > 0.').max(10000),
+  unit: z.enum(['buc', 'kg', 'g', 'l', 'ml', 'pachet']).default('buc'),
+  checked: z.boolean().default(false),
+  notes: z.string().trim().max(400).optional(),
+  barcode: z.string().trim().max(64).optional(),
+  preferredBrand: z.string().trim().max(120).optional(),
+  referencePrice: z.coerce.number().min(0).max(50000).optional(),
+  estimatedPrice: z.coerce.number().min(0).max(50000).optional()
+});
+
+export const basketOptimizeOptionsSchema = z.object({
+  useLoyaltyCards: z.boolean().optional(),
+  maxStores: z.coerce.number().int().min(1).max(8).optional(),
+  excludedStoreIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+  favoriteStoreIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+  includeStaleOffers: z.boolean().optional(),
+  transportCostPerExtraStore: z.coerce.number().min(0).max(500).optional()
+});
+
+export const basketOptimizeRequestSchema = z.object({
+  listId: z.string().trim().max(120).optional(),
+  listName: z.string().trim().max(160).optional(),
+  items: z.array(basketItemInputSchema).max(200).default([]),
+  options: basketOptimizeOptionsSchema.optional()
+});
+
+export const priceHistoryIntervalSchema = z
+  .coerce
+  .number()
+  .int()
+  .refine((v): v is 30 | 90 | 180 | 365 => [30, 90, 180, 365].includes(v), {
+    message: 'Intervalul de istoric trebuie să fie 30, 90, 180 sau 365 zile.'
+  });
+
+export const priceHistoryQuerySchema = z.object({
+  days: priceHistoryIntervalSchema.default(90)
+});
+
+export const priceAlertTypeSchema = z.enum(['below_target', 'any_drop', 'interval_low']);
+
+export const priceAlertCreateSchema = z
+  .object({
+    productId: z.string().trim().min(1, 'ID-ul produsului este obligatoriu.').max(64),
+    alertType: priceAlertTypeSchema.default('below_target'),
+    targetPrice: z.coerce.number().min(0.01, 'Prețul țintă trebuie să fie > 0.').max(50000).optional(),
+    intervalDays: priceHistoryIntervalSchema.optional(),
+    sourceListId: z.string().trim().uuid('ID-ul listei sursă este invalid.').optional()
+  })
+  .superRefine((val, ctx) => {
+    if (val.alertType === 'below_target' && (val.targetPrice === undefined || val.targetPrice <= 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['targetPrice'],
+        message: 'Pentru alerta cu prag de preț este necesar targetPrice > 0.'
+      });
+    }
+  });
+
+export const priceAlertUpdateSchema = z
+  .object({
+    alertType: priceAlertTypeSchema.optional(),
+    targetPrice: z.coerce.number().min(0.01, 'Prețul țintă trebuie să fie > 0.').max(50000).optional(),
+    intervalDays: priceHistoryIntervalSchema.nullable().optional(),
+    isActive: z.boolean().optional()
+  })
+  .refine(
+    val =>
+      val.alertType !== undefined ||
+      val.targetPrice !== undefined ||
+      val.intervalDays !== undefined ||
+      val.isActive !== undefined,
+    { message: 'Trebuie furnizat cel puțin un câmp pentru actualizare.' }
+  );
+
+export const priceAlertsFromListSchema = z.object({
+  alertType: priceAlertTypeSchema.default('below_target'),
+  intervalDays: priceHistoryIntervalSchema.optional(),
+  discountPercentForTarget: z.coerce.number().min(1).max(80).default(10)
+});

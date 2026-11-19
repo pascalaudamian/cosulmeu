@@ -16,11 +16,14 @@ import {
   CheckCircle2,
   Tag,
   AlertTriangle,
-  RotateCcw
+  RotateCcw,
+  Bell,
+  Split
 } from 'lucide-react';
-import { ShoppingList, ShoppingListItem, ProductCategory, UnitType, Product } from '../types.js';
+import { ShoppingList, ShoppingListItem, ProductCategory, UnitType, Product, ProductOffer, Store } from '../types.js';
 import { StorageService } from '../services/StorageService.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { BasketOptimizerPanel } from './BasketOptimizerPanel.js';
 
 interface ShoppingListViewProps {
   lists: ShoppingList[];
@@ -29,6 +32,12 @@ interface ShoppingListViewProps {
   onSelectActiveList: (listId: string) => void;
   onCompare: () => void;
   catalogProducts?: Product[];
+  catalogOffers?: ProductOffer[];
+  catalogStores?: Store[];
+  onCreateAlertsFromList?: (
+    list: ShoppingList,
+    options?: { alertType?: 'below_target' | 'any_drop' | 'interval_low'; intervalDays?: 30 | 90 | 180 | 365 }
+  ) => void;
 }
 
 const CATEGORIES: ProductCategory[] = [
@@ -52,7 +61,10 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   onUpdateLists,
   onSelectActiveList,
   onCompare,
-  catalogProducts
+  catalogProducts,
+  catalogOffers,
+  catalogStores,
+  onCreateAlertsFromList
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Toate');
@@ -62,6 +74,9 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   const [showNewListModal, setShowNewListModal] = useState(false);
   const [newListName, setNewListName] = useState('');
   const [copiedFeedback, setCopiedFeedback] = useState(false);
+  const [showOptimizer, setShowOptimizer] = useState(false);
+  const [showListAlertsMenu, setShowListAlertsMenu] = useState(false);
+  const optimizerSectionRef = React.useRef<HTMLDivElement>(null);
 
   // Custom product add modal state
   const [showCustomModal, setShowCustomModal] = useState(false);
@@ -345,8 +360,76 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             </button>
           </div>
 
-          {/* List actions: Duplicate, Copy, Print, Clear */}
+          {/* List actions: Optimize, Alerts, Duplicate, Copy, Print, Clear */}
           <div className="flex items-center gap-1.5 self-end sm:self-auto no-print">
+            {activeList.items.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowOptimizer(prev => !prev)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                  showOptimizer
+                    ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-600'
+                }`}
+                title="Optimizează coșul pe 1, 2 sau 3 magazine"
+              >
+                <Split className="w-3.5 h-3.5" />
+                <span>{showOptimizer ? 'Vezi lista' : 'Optimizează coșul'}</span>
+              </button>
+            )}
+
+            {onCreateAlertsFromList && activeList.items.length > 0 && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowListAlertsMenu(prev => !prev)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200/70 dark:border-emerald-800/70 transition-colors cursor-pointer"
+                  title="Creează alerte de preț pentru produsele din această listă"
+                  aria-expanded={showListAlertsMenu}
+                >
+                  <Bell className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Creează alerte</span>
+                </button>
+                {showListAlertsMenu && (
+                  <div className="absolute right-0 top-full mt-1.5 w-60 bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-1.5 z-40">
+                    <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      Tip alertă pentru listă
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCreateAlertsFromList(activeList, { alertType: 'below_target' });
+                        setShowListAlertsMenu(false);
+                      }}
+                      className="w-full text-left px-2.5 py-2 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 cursor-pointer"
+                    >
+                      Preț maxim dorit (-10% față de minim)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCreateAlertsFromList(activeList, { alertType: 'any_drop' });
+                        setShowListAlertsMenu(false);
+                      }}
+                      className="w-full text-left px-2.5 py-2 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 cursor-pointer"
+                    >
+                      Alertă la orice reducere de preț
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCreateAlertsFromList(activeList, { alertType: 'interval_low', intervalDays: 90 });
+                        setShowListAlertsMenu(false);
+                      }}
+                      className="w-full text-left px-2.5 py-2 rounded-xl text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 cursor-pointer"
+                    >
+                      Minim istoric (90 zile)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <button
               onClick={handleDuplicateList}
               className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
@@ -469,164 +552,192 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
         </div>
       </div>
 
-      {/* Main List Items Section */}
-      <div className="surface-card overflow-hidden">
-        {/* Printable Header */}
-        <div className="hidden print-only p-4 border-b">
-          <h1 className="font-display text-xl font-bold">Coșul Meu - {activeList.name}</h1>
-          <p className="text-xs text-gray-500 tabular-nums">
-            Generat la {new Date().toLocaleDateString('ro-RO')} · Total estimat: {PriceComparisonService.formatRon(totalEstimatedCost)}
-          </p>
+      {showOptimizer && activeList.items.length > 0 ? (
+        <div ref={optimizerSectionRef} className="no-print scroll-mt-24">
+          <BasketOptimizerPanel
+            lists={lists}
+            activeList={activeList}
+            onSelectActiveList={onSelectActiveList}
+            onBackToList={() => setShowOptimizer(false)}
+            products={catalogProducts}
+            offers={catalogOffers}
+            stores={catalogStores}
+            initialTransportCost={0}
+          />
         </div>
-
-        <div className="p-4 sm:p-5 flex items-center justify-between border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
-          <div className="flex items-center gap-2.5 tabular-nums">
-            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              Produse ({filteredItems.length})
-            </span>
-            {checkedCount > 0 && (
-              <span className="text-xs text-emerald-700 dark:text-emerald-400 font-semibold">
-                · {checkedCount} bifate
-              </span>
-            )}
-          </div>
-          <div className="text-right tabular-nums">
-            <span className="text-xs text-slate-500 dark:text-slate-400">Total estimativ:</span>
-            <span className="font-display font-bold text-slate-900 dark:text-slate-100 text-sm sm:text-base ml-1.5">
-              {PriceComparisonService.formatRon(totalEstimatedCost)}
-            </span>
-          </div>
-        </div>
-
-        {/* Empty State */}
-        {filteredItems.length === 0 ? (
-          <div className="p-12 text-center">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-3 border border-transparent dark:border-emerald-800/60">
-              <Plus className="w-6 h-6" />
+      ) : (
+        <>
+          {/* Main List Items Section */}
+          <div className="surface-card overflow-hidden">
+            {/* Printable Header */}
+            <div className="hidden print-only p-4 border-b">
+              <h1 className="font-display text-xl font-bold">Coșul Meu - {activeList.name}</h1>
+              <p className="text-xs text-gray-500 tabular-nums">
+                Generat la {new Date().toLocaleDateString('ro-RO')} · Total estimat: {PriceComparisonService.formatRon(totalEstimatedCost)}
+              </p>
             </div>
-            <h3 className="font-display text-sm font-bold text-slate-800 dark:text-slate-100">Niciun produs în această listă</h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mx-auto">
-              Folosește bara de căutare de mai sus pentru a adăuga produse din catalog sau creează un produs propriu.
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-100 dark:divide-slate-800">
-            {filteredItems.map(item => (
-              <div
-                key={item.id}
-                className={`p-3.5 sm:p-4 flex items-center justify-between gap-3 transition-colors ${
-                  item.checked
-                    ? 'bg-slate-50/80 dark:bg-slate-800/40 text-slate-400 dark:text-slate-500'
-                    : 'hover:bg-slate-50/40 dark:hover:bg-slate-800/40 text-slate-900 dark:text-slate-100'
-                }`}
-              >
-                {/* Left: Checkbox & Name */}
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <button
-                    onClick={() => handleToggleCheck(item.id)}
-                    className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
+
+            <div className="p-4 sm:p-5 flex items-center justify-between border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
+              <div className="flex items-center gap-2.5 tabular-nums">
+                <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                  Produse ({filteredItems.length})
+                </span>
+                {checkedCount > 0 && (
+                  <span className="text-xs text-emerald-700 dark:text-emerald-400 font-semibold">
+                    · {checkedCount} bifate
+                  </span>
+                )}
+              </div>
+              <div className="text-right tabular-nums">
+                <span className="text-xs text-slate-500 dark:text-slate-400">Total estimativ:</span>
+                <span className="font-display font-bold text-slate-900 dark:text-slate-100 text-sm sm:text-base ml-1.5">
+                  {PriceComparisonService.formatRon(totalEstimatedCost)}
+                </span>
+              </div>
+            </div>
+
+            {/* Empty State */}
+            {filteredItems.length === 0 ? (
+              <div className="p-12 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-3 border border-transparent dark:border-emerald-800/60">
+                  <Plus className="w-6 h-6" />
+                </div>
+                <h3 className="font-display text-sm font-bold text-slate-800 dark:text-slate-100">Niciun produs în această listă</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mx-auto">
+                  Folosește bara de căutare de mai sus pentru a adăuga produse din catalog sau creează un produs propriu.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredItems.map(item => (
+                  <div
+                    key={item.id}
+                    className={`p-3.5 sm:p-4 flex items-center justify-between gap-3 transition-colors ${
                       item.checked
-                        ? 'bg-emerald-600 border-emerald-600 text-white'
-                        : 'border-slate-300 dark:border-slate-600 hover:border-emerald-500 bg-white dark:bg-slate-800'
+                        ? 'bg-slate-50/80 dark:bg-slate-800/40 text-slate-400 dark:text-slate-500'
+                        : 'hover:bg-slate-50/40 dark:hover:bg-slate-800/40 text-slate-900 dark:text-slate-100'
                     }`}
                   >
-                    {item.checked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                  </button>
+                    {/* Left: Checkbox & Name */}
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <button
+                        onClick={() => handleToggleCheck(item.id)}
+                        className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
+                          item.checked
+                            ? 'bg-emerald-600 border-emerald-600 text-white'
+                            : 'border-slate-300 dark:border-slate-600 hover:border-emerald-500 bg-white dark:bg-slate-800'
+                        }`}
+                      >
+                        {item.checked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                      </button>
 
-                  <div className="min-w-0">
-                    <span
-                      className={`text-sm font-semibold block truncate ${
-                        item.checked ? 'line-through text-slate-400 dark:text-slate-500' : 'text-slate-800 dark:text-slate-100'
-                      }`}
-                    >
-                      {item.name}
-                    </span>
-                    <div className="flex items-center gap-1.5 mt-0.5 text-xs text-slate-500 dark:text-slate-400 tabular-nums truncate">
-                      {item.brand && (
-                        <>
-                          <span className="font-medium text-slate-700 dark:text-slate-300">{item.brand}</span>
-                          <span>·</span>
-                        </>
-                      )}
-                      <span>{item.category}</span>
-                      {item.estimatedPrice && (
-                        <span>· ~{PriceComparisonService.formatRon(item.estimatedPrice * item.quantity)}</span>
-                      )}
+                      <div className="min-w-0">
+                        <span
+                          className={`text-sm font-semibold block truncate ${
+                            item.checked ? 'line-through text-slate-400 dark:text-slate-500' : 'text-slate-800 dark:text-slate-100'
+                          }`}
+                        >
+                          {item.name}
+                        </span>
+                        <div className="flex items-center gap-1.5 mt-0.5 text-xs text-slate-500 dark:text-slate-400 tabular-nums truncate">
+                          {item.brand && (
+                            <>
+                              <span className="font-medium text-slate-700 dark:text-slate-300">{item.brand}</span>
+                              <span>·</span>
+                            </>
+                          )}
+                          <span>{item.category}</span>
+                          {item.estimatedPrice && (
+                            <span>· ~{PriceComparisonService.formatRon(item.estimatedPrice * item.quantity)}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right: Quantity Stepper & Unit Selector & Remove */}
+                    <div className="flex items-center gap-2 sm:gap-3 shrink-0 no-print">
+                      {/* Quantity Stepper */}
+                      <div className="flex items-center border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 overflow-hidden">
+                        <button
+                          onClick={() => handleUpdateQuantity(item.id, item.unit === 'kg' ? -0.5 : -1)}
+                          className="px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-sm font-bold cursor-pointer"
+                          title="Scade cantitatea"
+                        >
+                          -
+                        </button>
+                        <span className="px-2 text-xs font-bold text-slate-800 dark:text-slate-100 min-w-[28px] text-center tabular-nums">
+                          {item.quantity}
+                        </span>
+                        <button
+                          onClick={() => handleUpdateQuantity(item.id, item.unit === 'kg' ? 0.5 : 1)}
+                          className="px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-sm font-bold cursor-pointer"
+                          title="Crește cantitatea"
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      {/* Unit Selector */}
+                      <select
+                        value={item.unit}
+                        onChange={e => handleUpdateUnit(item.id, e.target.value as UnitType)}
+                        className="text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-1 px-1.5 focus:outline-hidden cursor-pointer"
+                      >
+                        {UNITS.map(u => (
+                          <option key={u} value={u}>
+                            {u}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Delete Button */}
+                      <button
+                        onClick={() => handleRemoveItem(item.id)}
+                        className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
+                        title="Șterge produsul"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Primary Compare & Optimize CTA Bar */}
+          {activeList.items.length > 0 && (
+            <div className="sticky bottom-16 md:bottom-6 z-30 pt-2 no-print">
+              <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md p-3 sm:p-4 rounded-2xl border border-emerald-200/90 dark:border-emerald-800/70 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="tabular-nums">
+                  <span className="text-xs text-slate-500 dark:text-slate-400 block">Total estimat · {activeList.name}</span>
+                  <span className="font-display text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100">
+                    {PriceComparisonService.formatRon(totalEstimatedCost)}
+                  </span>
                 </div>
-
-                {/* Right: Quantity Stepper & Unit Selector & Remove */}
-                <div className="flex items-center gap-2 sm:gap-3 shrink-0 no-print">
-                  {/* Quantity Stepper */}
-                  <div className="flex items-center border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 overflow-hidden">
-                    <button
-                      onClick={() => handleUpdateQuantity(item.id, item.unit === 'kg' ? -0.5 : -1)}
-                      className="px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-sm font-bold cursor-pointer"
-                      title="Scade cantitatea"
-                    >
-                      -
-                    </button>
-                    <span className="px-2 text-xs font-bold text-slate-800 dark:text-slate-100 min-w-[28px] text-center tabular-nums">
-                      {item.quantity}
-                    </span>
-                    <button
-                      onClick={() => handleUpdateQuantity(item.id, item.unit === 'kg' ? 0.5 : 1)}
-                      className="px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-sm font-bold cursor-pointer"
-                      title="Crește cantitatea"
-                    >
-                      +
-                    </button>
-                  </div>
-
-                  {/* Unit Selector */}
-                  <select
-                    value={item.unit}
-                    onChange={e => handleUpdateUnit(item.id, e.target.value as UnitType)}
-                    className="text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-1 px-1.5 focus:outline-hidden cursor-pointer"
-                  >
-                    {UNITS.map(u => (
-                      <option key={u} value={u}>
-                        {u}
-                      </option>
-                    ))}
-                  </select>
-
-                  {/* Delete Button */}
+                <div className="flex items-center gap-2 self-end sm:self-auto">
                   <button
-                    onClick={() => handleRemoveItem(item.id)}
-                    className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
-                    title="Șterge produsul"
+                    type="button"
+                    onClick={() => setShowOptimizer(true)}
+                    className="py-2.5 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/70 transition-colors cursor-pointer"
                   >
-                    <Trash2 className="w-4 h-4" />
+                    <Split className="w-4 h-4" />
+                    <span>Optimizează coșul</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onCompare}
+                    className="py-2.5 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4 fill-white" />
+                    <span>Compară prețurile</span>
+                    <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Primary Compare CTA Button */}
-      {activeList.items.length > 0 && (
-        <div className="sticky bottom-16 md:bottom-6 z-30 pt-2 no-print">
-          <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md p-3 sm:p-4 rounded-2xl border border-emerald-200/90 dark:border-emerald-800/70 shadow-lg flex items-center justify-between gap-4">
-            <div className="tabular-nums">
-              <span className="text-xs text-slate-500 dark:text-slate-400 block">Total estimat · {activeList.name}</span>
-              <span className="font-display text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100">
-                {PriceComparisonService.formatRon(totalEstimatedCost)}
-              </span>
             </div>
-            <button
-              onClick={onCompare}
-              className="py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm flex items-center gap-2 transition-colors cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 fill-white" />
-              <span>Compară prețurile în magazine</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+          )}
+        </>
       )}
 
       {/* Modal: Adaugă Produs Nou Personalizat */}

@@ -1,6 +1,8 @@
 import { ShoppingListItem, Store, ProductOffer, BasketStoreComparison, Product } from '../types.js';
 import { STORES } from '../data/mockData.js';
 import { StorageService } from './StorageService.js';
+import { BasketOptimizerService } from './BasketOptimizerService.js';
+import { PriceQualityClassifier } from './PriceQualityClassifier.js';
 
 export class PriceComparisonService {
   /**
@@ -29,34 +31,27 @@ export class PriceComparisonService {
   }
 
   /**
-   * Match a shopping list item with a catalog product
+   * Match a shopping list item with a catalog product using strict confidence rules
    */
   static findProductForListItem(item: ShoppingListItem, allProducts: Product[]): Product | undefined {
-    if (item.productId) {
-      const match = allProducts.find(p => p.id === item.productId);
-      if (match) return match;
-    }
-    if (item.barcode) {
-      const barcodeMatch = allProducts.find(p => p.barcode && p.barcode === item.barcode);
-      if (barcodeMatch) return barcodeMatch;
-    }
-    const cleanItemName = item.name.toLowerCase().trim();
-    return allProducts.find(p => {
-      const pName = p.name.toLowerCase();
-      return pName.includes(cleanItemName) || cleanItemName.includes(pName);
-    });
+    const res = BasketOptimizerService.matchItemToProduct(item, allProducts);
+    return res.status === 'matched' ? res.product : undefined;
   }
 
   /**
-   * Check if an offer is currently valid (non-expired)
+   * Check if an offer is currently valid (non-expired, non-anomalous, non-demo, non-estimated)
    */
-  static isOfferValid(offer: ProductOffer): boolean {
+  static isOfferValid(offer: ProductOffer, product?: Product): boolean {
     if (!offer || !Number.isFinite(offer.price) || offer.price <= 0) return false;
     if (['expired', 'isolated', 'rejected', 'demo'].includes(offer.verificationStatus)) return false;
+    if (offer.source === 'demo' || offer.source === 'estimated') return false;
     if (offer.isFlaggedAnomaly) return false;
     if (offer.validUntil) {
       const todayStr = new Date().toISOString().split('T')[0];
       if (offer.validUntil < todayStr) return false;
+    }
+    if (product) {
+      return PriceQualityClassifier.classifyOffer(offer, { product }).isUsableForComparison;
     }
     return true;
   }
@@ -186,16 +181,13 @@ export class PriceComparisonService {
 
       for (const { item, product } of itemsWithProduct) {
         if (!product) {
-          // Custom unlinked item: estimate using item.referencePrice or item.estimatedPrice
-          const estPrice = (item.estimatedPrice || item.referencePrice || 10) * item.quantity;
           missingItems.push(item);
-          estimatedMissingTotal += estPrice;
           continue;
         }
 
         // Look for valid, non-expired offer from this store
         const candidateOffers = allOffers.filter(o => {
-          if (o.productId !== product.id || !this.isOfferValid(o)) return false;
+          if (o.productId !== product.id || !this.isOfferValid(o, product)) return false;
           const offStoreKey = normalizeStoreKey(o.storeId);
           return (
             o.storeId === store.id ||
@@ -233,10 +225,8 @@ export class PriceComparisonService {
           });
           availableTotal += price;
         } else {
-          // Missing in this store: calculate transparent estimate without treating as 0
-          const estPrice = (product.baseReferencePrice || item.referencePrice || item.estimatedPrice || 10) * item.quantity;
+          // Nu inventăm prețuri fictive (fără fallback 10 RON)
           missingItems.push(item);
-          estimatedMissingTotal += estPrice;
         }
       }
 
@@ -244,21 +234,28 @@ export class PriceComparisonService {
       const completenessPercentage =
         totalItemsCount > 0 ? Math.round((availableItems.length / totalItemsCount) * 100) : 0;
 
-      const grandTotal = Math.round((availableTotal + estimatedMissingTotal) * 100) / 100;
+      const grandTotal = Math.round(availableTotal * 100) / 100;
+      const offerDates = availableItems
+        .map(ai => ai.offer.lastVerifiedAt || ai.offer.observationDate || ai.offer.lastChecked.slice(0, 10))
+        .filter(Boolean)
+        .sort();
+      const latestObsDate = offerDates.length > 0 ? offerDates[offerDates.length - 1].slice(0, 10) : null;
 
       return {
         store,
         availableItems,
         missingItems,
         availableTotal: Math.round(availableTotal * 100) / 100,
-        estimatedMissingTotal: Math.round(estimatedMissingTotal * 100) / 100,
+        estimatedMissingTotal: 0,
         grandTotal,
         savingsVsWorst: 0,
         isWinner: false,
         completenessPercentage,
         confidenceLevel:
           completenessPercentage >= 80 ? 'high' : completenessPercentage >= 50 ? 'medium' : 'low',
-        lastUpdated: 'Astăzi, ' + new Date().toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' }),
+        lastUpdated: latestObsDate
+          ? new Date(latestObsDate).toLocaleDateString('ro-RO', { day: 'numeric', month: 'short', year: 'numeric' })
+          : 'Fără oferte verificate',
         hasLoyaltyDiscount,
         loyaltySavings: Math.round(loyaltySavings * 100) / 100
       };
@@ -287,19 +284,28 @@ export class PriceComparisonService {
       }
     }
 
-    // Sort stores by grandTotal ascending, favoring higher completeness if totals are close
+    // Rank stores by highest coverage first, then lowest real product total
     comparisons.sort((a, b) => {
-      if (Math.abs(a.completenessPercentage - b.completenessPercentage) > 30) {
-        return b.completenessPercentage - a.completenessPercentage;
+      if (b.availableItems.length !== a.availableItems.length) {
+        return b.availableItems.length - a.availableItems.length;
       }
       return a.grandTotal - b.grandTotal;
     });
 
-    // Calculate potential savings vs worst comparable store
-    const highestTotal = Math.max(...comparisons.map(c => c.grandTotal));
+    // Calculate potential savings vs worst comparable store (only with equal or valid coverage)
+    const winner = comparisons[0];
+    const comparableStores = winner
+      ? comparisons.filter(c => c.availableItems.length === winner.availableItems.length)
+      : [];
+    const highestTotal = comparableStores.length > 0
+      ? Math.max(...comparableStores.map(c => c.grandTotal))
+      : 0;
     comparisons.forEach((comp, idx) => {
       if (idx === 0) comp.isWinner = true;
-      comp.savingsVsWorst = Math.max(0, Math.round((highestTotal - comp.grandTotal) * 100) / 100);
+      comp.savingsVsWorst =
+        comp.availableItems.length === winner?.availableItems.length && highestTotal > comp.grandTotal
+          ? Math.max(0, Math.round((highestTotal - comp.grandTotal) * 100) / 100)
+          : 0;
     });
 
     return comparisons;
@@ -518,35 +524,24 @@ export class PriceComparisonService {
         sampleAddress: 'România'
       };
 
+      const quality = PriceQualityClassifier.classifyOffer(offer, { product });
       const obsDate = offer.observationDate || offer.lastChecked.slice(0, 10);
       if (!latestVerifiedDate || obsDate > latestVerifiedDate) {
         latestVerifiedDate = obsDate;
       }
 
-      // Calcul prospețime
-      const now = new Date();
-      const obsTime = new Date(obsDate).getTime();
-      const ageHours = Math.max(0, (now.getTime() - obsTime) / (3600 * 1000));
-      let freshness: 'very_recent' | 'recent' | 'stale' | 'expired' = 'very_recent';
-      let freshnessLabel = 'Foarte recent';
+      const mappedFreshness: 'very_recent' | 'recent' | 'stale' | 'expired' =
+        quality.status === 'VERIFIED_RECENTLY'
+          ? 'very_recent'
+          : quality.status === 'VERIFIED'
+            ? 'recent'
+            : quality.status === 'STALE'
+              ? 'stale'
+              : 'expired';
 
-      if (ageHours <= 24) {
-        freshness = 'very_recent';
-        freshnessLabel = 'Foarte recent';
-      } else if (ageHours <= 48) {
-        freshness = 'recent';
-        freshnessLabel = 'Recent';
-      } else if (ageHours <= 72) {
-        freshness = 'stale';
-        freshnessLabel = 'Vechi';
-      } else {
-        freshness = 'expired';
-        freshnessLabel = 'Neverificat / expirat';
-      }
-
-      if (freshness === 'very_recent') overallFreshness = 'very_recent';
-      else if (freshness === 'recent' && overallFreshness !== 'very_recent') overallFreshness = 'recent';
-      else if (freshness === 'stale' && overallFreshness === 'expired') overallFreshness = 'stale';
+      if (mappedFreshness === 'very_recent') overallFreshness = 'very_recent';
+      else if (mappedFreshness === 'recent' && overallFreshness !== 'very_recent') overallFreshness = 'recent';
+      else if (mappedFreshness === 'stale' && overallFreshness === 'expired') overallFreshness = 'stale';
 
       return {
         store,
@@ -561,9 +556,10 @@ export class PriceComparisonService {
         unitPrice: offer.unitPrice,
         unitPriceMeasure: offer.unitPriceMeasure,
         lastVerifiedAt: obsDate,
-        freshnessStatus: freshness,
-        freshnessLabelRo: freshnessLabel,
-        qualityScore: offer.qualityScore || 85,
+        freshnessStatus: mappedFreshness,
+        freshnessLabelRo: quality.labelRo,
+        qualityScore: quality.score,
+        qualityAssessment: quality,
         directUrl: undefined,
         isLowestPrice: offer.price === minPrice
       };

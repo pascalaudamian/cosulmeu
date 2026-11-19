@@ -152,8 +152,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
   }
 
   const winner = comparisons[0];
-  const mostExpensive = comparisons[comparisons.length - 1];
-  const maxSavings = winner && mostExpensive ? Math.max(0, mostExpensive.grandTotal - winner.grandTotal) : 0;
+  const maxSavings = winner?.savingsVsWorst ?? 0;
 
   return (
     <div className="space-y-6 pb-16">
@@ -186,7 +185,9 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                 {PriceComparisonService.formatRon(maxSavings)}
               </span>
               <span className="text-[11px] text-slate-400 block mt-0.5">
-                față de cel mai scump coș
+                {maxSavings > 0
+                  ? 'față de cel mai scump coș comparabil'
+                  : 'fără economie comparabilă cu acoperire egală'}
               </span>
             </div>
             <button
@@ -290,7 +291,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
                         <span className="flex items-center gap-1 font-medium text-slate-700 dark:text-slate-300">
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                           {comp.availableItems.length}/{activeList.items.length} găsite ({comp.completenessPercentage}%)
@@ -298,7 +299,12 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                         {comp.missingItems.length > 0 && (
                           <span className="text-amber-700 dark:text-amber-400 flex items-center gap-1 font-medium">
                             <AlertTriangle className="w-3.5 h-3.5" />
-                            {comp.missingItems.length} estimate
+                            {comp.missingItems.length} fără preț
+                          </span>
+                        )}
+                        {comp.lastUpdated && (
+                          <span className="text-slate-400 dark:text-slate-500">
+                            · Verificat: {comp.lastUpdated}
                           </span>
                         )}
                       </div>
@@ -308,17 +314,26 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                   {/* Right: Cost & Expand button */}
                   <div className="flex items-center justify-between sm:justify-end gap-5">
                     <div className="text-right tabular-nums">
-                      <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Cost estimat coș</div>
+                      <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 flex items-center justify-end gap-1">
+                        <span>Total oferte găsite</span>
+                        {comp.missingItems.length > 0 && (
+                          <span className="text-amber-700 dark:text-amber-400 font-bold">*estimativ*</span>
+                        )}
+                      </div>
                       <div className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
                         {PriceComparisonService.formatRon(comp.grandTotal)}
                       </div>
                       {comp.isWinner ? (
                         <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 block">
-                          Cel mai mic preț total
+                          Cel mai bun coș (acoperire &amp; preț)
                         </span>
-                      ) : (
+                      ) : comp.availableItems.length === winner?.availableItems.length ? (
                         <span className="text-xs font-medium text-rose-600 dark:text-rose-400 block">
                           +{PriceComparisonService.formatRon(diffFromWinner)} față de lider
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium text-amber-700 dark:text-amber-400 block">
+                          Acoperire mai mică ({comp.availableItems.length}/{winner?.availableItems.length || activeList.items.length})
                         </span>
                       )}
                     </div>
@@ -379,22 +394,24 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
                       ))}
                     </div>
 
-                    {/* Missing items clearly stated */}
+                    {/* Missing items clearly stated (without synthetic fallback pricing) */}
                     {comp.missingItems.length > 0 && (
                       <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-200">
                         <span className="font-bold block mb-1.5">
-                          Produse fără ofertă specifică în {comp.store.name} ({comp.missingItems.length}):
+                          Produse fără ofertă activă în {comp.store.name} ({comp.missingItems.length}):
                         </span>
                         <div className="space-y-1 text-amber-800 dark:text-amber-300 tabular-nums">
                           {comp.missingItems.map(item => (
                             <div key={item.id} className="flex items-center justify-between gap-2">
                               <span>{item.name} ({item.quantity} {item.unit})</span>
-                              <span className="font-medium">~{PriceComparisonService.formatRon((item.estimatedPrice || item.referencePrice || 10) * item.quantity)}</span>
+                              <span className="font-medium text-amber-700 dark:text-amber-400">
+                                Preț indisponibil (exclus din total)
+                              </span>
                             </div>
                           ))}
                         </div>
                         <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
-                          Estimate la prețul de referință pentru o comparație corectă între magazine.
+                          Produsele fără preț verificat nu sunt calculate ca 0 lei și nu primesc prețuri inventate. Totalul afișat este *estimativ* pentru articolele găsite.
                         </p>
                       </div>
                     )}
@@ -480,6 +497,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
       {showOptimizationModal && (
         <MultiStoreOptimizationModal
           items={activeList.items}
+          listName={activeList.name}
           onClose={() => setShowOptimizationModal(false)}
           products={products}
           offers={offers}

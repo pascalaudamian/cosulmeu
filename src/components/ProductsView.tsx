@@ -35,6 +35,7 @@ import { Product, Store as StoreType, ShoppingList } from '../types.js';
 import { CATEGORIES_TAXONOMY, CategoryDefinition } from '../data/categories.js';
 import { getSafeProductImageSrc } from '../utils/urlSecurity.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { PriceQualityClassifier } from '../services/PriceQualityClassifier.js';
 import { StorageService } from '../services/StorageService.js';
 import { STORES } from '../data/mockData.js';
 
@@ -183,6 +184,9 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           ).sort((a, b) => a.price - b.price);
 
           const minOffer = validOffers[0];
+          const quality = minOffer
+            ? PriceQualityClassifier.classifyOffer(minOffer, { product: p })
+            : null;
           return {
             ...p,
             minPrice: minOffer ? minOffer.price : null,
@@ -193,7 +197,9 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
             loyaltyCardName: minOffer?.loyaltyCardName,
             lastVerifiedAt: minOffer?.observationDate || null,
             freshnessStatus: minOffer?.freshnessStatus || (minOffer ? 'recent' : 'expired'),
-            qualityScore: minOffer?.qualityScore || 80
+            qualityScore: quality?.score ?? 0,
+            qualityStatus: quality?.status ?? 'UNVERIFIED',
+            qualityLabelRo: quality?.labelRo ?? 'Neverificat'
           };
         });
 
@@ -738,6 +744,23 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                           <>
                             <span aria-hidden="true">·</span>
                             <span className="text-amber-700 dark:text-amber-400 font-medium">Card</span>
+                          </>
+                        )}
+                        {product.qualityLabelRo && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span
+                              title={product.qualityScore ? `Scor calitate: ${product.qualityScore}/100` : undefined}
+                              className={
+                                product.qualityStatus === 'VERIFIED_RECENTLY' || product.qualityStatus === 'VERIFIED'
+                                  ? 'text-emerald-700 dark:text-emerald-400 font-medium'
+                                  : product.qualityStatus === 'STALE'
+                                  ? 'text-amber-700 dark:text-amber-400 font-medium'
+                                  : 'text-slate-500 dark:text-slate-400'
+                              }
+                            >
+                              {product.qualityLabelRo}
+                            </span>
                           </>
                         )}
                       </div>

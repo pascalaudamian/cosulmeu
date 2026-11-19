@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 
-import { DatabaseService, checkDbHealth, isPostgresConfigured, getPool } from './src/db/index.ts';
+import { DatabaseService, checkDbHealth, isPostgresConfigured, getPool, invalidateCatalogOptimizationCache } from './src/db/index.ts';
 import { FileImportAdapter } from './src/sources/FileImportAdapter.ts';
 import { StorageService } from './src/services/StorageService.ts';
 import { PriceComparisonService } from './src/services/PriceComparisonService.ts';
@@ -24,7 +24,7 @@ import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
-import { Product, Receipt, Store } from './src/types.ts';
+import { Product, Receipt, Store, PriceAlert, InAppPriceNotification } from './src/types.ts';
 import { createHash } from 'node:crypto';
 import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 import { validatePublicHttpUrl } from './src/utils/urlSecurity.ts';
@@ -38,6 +38,7 @@ import {
   validateReceiptMath
 } from './src/services/ReceiptParserEngine.ts';
 import {
+  basketOptimizeRequestSchema,
   gdprAdminRequestUpdateSchema,
   gdprConsentRecordSchema,
   gdprDeleteAccountSchema,
@@ -45,12 +46,20 @@ import {
   gdprRequestCreateSchema,
   gdprWithdrawConsentSchema,
   parseReceiptTextRequestSchema,
+  priceAlertCreateSchema,
+  priceAlertsFromListSchema,
+  priceAlertUpdateSchema,
   priceAuditQuerySchema,
   priceAuditRemediationRequestSchema,
+  priceHistoryQuerySchema,
   saveReceiptRequestSchema,
   scanReceiptRequestSchema,
   validateReceiptImageBuffer
 } from './src/server/validation.ts';
+import { BasketOptimizerService } from './src/services/BasketOptimizerService.ts';
+import { PriceHistoryService } from './src/services/PriceHistoryService.ts';
+import { PriceAlertService } from './src/services/PriceAlertService.ts';
+import { PriceQualityClassifier } from './src/services/PriceQualityClassifier.ts';
 import {
   MARKETING_CONSENT_TEXT_VERSION,
   PRIVACY_POLICY_VERSION
@@ -86,6 +95,57 @@ const PORT = process.env.PORT || 3000;
 const isProd = process.env.NODE_ENV === 'production';
 
 app.use(express.json({ limit: '25mb' }));
+
+// Lightweight in-memory sliding-window rate limiter for public write/compute routes
+function createRateLimiter(options: { windowMs: number; maxRequests: number; messageRo: string }) {
+  const hits = new Map<string, number[]>();
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (process.env.NODE_ENV === 'test' && req.headers['x-enforce-rate-limit'] !== 'true') {
+      return next();
+    }
+    const now = Date.now();
+    const ipHeader = req.headers['x-forwarded-for'];
+    const clientIp =
+      (Array.isArray(ipHeader) ? ipHeader[0] : typeof ipHeader === 'string' ? ipHeader.split(',')[0] : '') ||
+      req.ip ||
+      'unknown';
+    const key = `${clientIp.trim()}:${req.path}`;
+    const windowStart = now - options.windowMs;
+    const recent = (hits.get(key) || []).filter(ts => ts > windowStart);
+
+    if (hits.size > 2000) {
+      // Bound map growth deterministically
+      hits.clear();
+    }
+
+    if (recent.length >= options.maxRequests) {
+      res.setHeader('Retry-After', String(Math.ceil(options.windowMs / 1000)));
+      return res.status(429).json({
+        success: false,
+        code: 'RATE_LIMIT_EXCEEDED',
+        error: options.messageRo
+      });
+    }
+
+    recent.push(now);
+    hits.set(key, recent);
+    res.setHeader('X-RateLimit-Limit', String(options.maxRequests));
+    res.setHeader('X-RateLimit-Remaining', String(Math.max(0, options.maxRequests - recent.length)));
+    next();
+  };
+}
+
+const publicComputeLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 90,
+  messageRo: 'Prea multe cereri într-un timp scurt. Reîncearcă peste câteva secunde.'
+});
+
+const publicReportLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 25,
+  messageRo: 'Ai trimis prea multe raportări consecutive. Te rugăm să aștepți un minut.'
+});
 
 // Lazy non-blocking database initialization if configured
 if (isPostgresConfigured() && process.env.NODE_ENV !== 'test') {
@@ -182,7 +242,7 @@ async function loadCatalogProductsForReceipts(): Promise<Product[]> {
 }
 
 // Receipt OCR & Structured Extraction 2.0 endpoint
-app.post('/api/scan-receipt', async (req, res) => {
+app.post('/api/scan-receipt', publicComputeLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   try {
     const parsedReq = scanReceiptRequestSchema.safeParse(req.body);
@@ -1279,7 +1339,7 @@ async function executeGdprAccountDeletion(params: {
 }
 
 // 1. Cookie Consent Proof Endpoint (public or authenticated)
-app.post('/api/gdpr/consent', async (req, res) => {
+app.post('/api/gdpr/consent', publicReportLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   const parsed = gdprConsentRecordSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -2190,27 +2250,948 @@ app.get('/api/catalog/offers', async (req, res) => {
   }
 });
 
-// Price History per Product endpoint
+// Price History per Product endpoint (strict 30 / 90 / 180 / 365 day interval filtering)
 app.get('/api/catalog/history/:productId', async (req, res) => {
   try {
-    const observations = await DatabaseService.getPriceObservations(req.params.productId);
-    res.json({ success: true, productId: req.params.productId, count: observations.length, observations });
+    const queryCheck = priceHistoryQuerySchema.safeParse(req.query);
+    if (!queryCheck.success) {
+      return res.status(400).json({
+        success: false,
+        error: queryCheck.error.issues[0]?.message || 'Interval invalid. Acceptat: 30, 90, 180 sau 365.'
+      });
+    }
+    const intervalDays = queryCheck.data.days;
+    const [observations, offers, stores] = isPostgresConfigured()
+      ? await Promise.all([
+          DatabaseService.getPriceObservations(req.params.productId),
+          DatabaseService.getOffers(),
+          DatabaseService.getStores()
+        ])
+      : [
+          StorageService.getPriceObservations().filter(o => o.productId === req.params.productId),
+          StorageService.getProductOffers(),
+          STORES
+        ];
+
+    const normalizedStoresMap = new Map<string, string>();
+    for (const s of stores) {
+      const k = (s.id || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+      if (k) normalizedStoresMap.set(k, s.name);
+      if (s.slug) normalizedStoresMap.set(s.slug.toLowerCase(), s.name);
+    }
+
+    const fullStats = PriceHistoryService.getProductPriceStats(req.params.productId, {
+      observations,
+      offers,
+      stores
+    });
+    const filteredPoints = PriceHistoryService.filterPointsByDays(fullStats.historyPoints, intervalDays);
+    const activeIntervalStats = fullStats.intervalStats[intervalDays];
+    const cutoffMs = Date.now() - intervalDays * 24 * 60 * 60 * 1000;
+    const realFilteredObservations = observations
+      .filter(o => {
+        if (!o || !Number.isFinite(o.price) || o.price <= 0) return false;
+        if (o.source === 'demo' || o.source === 'estimated') return false;
+        const ts = new Date(o.date.length === 10 ? `${o.date}T12:00:00Z` : o.date).getTime();
+        return Number.isFinite(ts) && ts >= cutoffMs && ts <= Date.now() + 24 * 60 * 60 * 1000;
+      })
+      .map(o => {
+        const key = (o.storeId || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+        return {
+          ...o,
+          storeName: normalizedStoresMap.get(key) || o.storeId
+        };
+      });
+
+    res.json({
+      success: true,
+      productId: req.params.productId,
+      intervalDays,
+      count: filteredPoints.length,
+      totalObservationsCount: fullStats.observationsCount,
+      currentLowestPrice: fullStats.currentLowestPrice,
+      currentLowestStoreName: fullStats.currentLowestStoreName,
+      hasSufficientHistory: activeIntervalStats.hasSufficientHistory,
+      intervalStats: activeIntervalStats,
+      allIntervalStats: fullStats.intervalStats,
+      points: filteredPoints,
+      observations: realFilteredObservations
+    });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la preluarea istoricului de preț.' });
   }
 });
 
 // Server-side Basket Comparison endpoint
-app.post('/api/catalog/compare', async (req, res) => {
+app.post('/api/catalog/compare', publicComputeLimiter, async (req, res) => {
   try {
     const { items = [], options = {} } = req.body;
-    const [allProducts, allOffers] = isPostgresConfigured()
-      ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers()])
-      : [StorageService.getAllProducts(), StorageService.getProductOffers()];
-    const comparisons = PriceComparisonService.compareBasketAcrossStores(items, options, allProducts, allOffers);
+    const [allProducts, allOffers, allStores] = isPostgresConfigured()
+      ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers(), DatabaseService.getStores()])
+      : [StorageService.getAllProducts(), StorageService.getProductOffers(), STORES];
+    const comparisons = PriceComparisonService.compareBasketAcrossStores(items, options, allProducts, allOffers, allStores);
     res.json({ success: true, comparisons });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la calculul comparativ al coșului.' });
+  }
+});
+
+const UUID_STRICT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Helper intern: încarcă articolele unei liste salvate verificând strict ownership-ul și RLS
+async function loadOwnedShoppingListItemsForOptimization(params: {
+  auth: { user: { id: string }; userClient: SupabaseClient };
+  listId: string;
+}): Promise<{ ok: true; listName: string; items: any[] } | { ok: false; status: number; error: string }> {
+  const { auth, listId } = params;
+  const { data: ownedList, error: listErr } = await auth.userClient
+    .from('shopping_lists')
+    .select('id, name, user_id')
+    .eq('id', listId)
+    .eq('user_id', auth.user.id)
+    .maybeSingle();
+
+  if (listErr) {
+    return { ok: false, status: 500, error: 'Eroare la verificarea proprietății listei de cumpărături.' };
+  }
+  if (!ownedList) {
+    // Verificare suplimentară cu service role (doar pentru a distinge 403 vs 404 fără a expune date)
+    const adminClient = getSupabaseAdminClient();
+    if (adminClient) {
+      const { data: existingList } = await adminClient
+        .from('shopping_lists')
+        .select('id, user_id')
+        .eq('id', listId)
+        .maybeSingle();
+      if (existingList && existingList.user_id !== auth.user.id) {
+        return { ok: false, status: 403, error: 'Acces interzis: această listă aparține altui utilizator.' };
+      }
+    }
+    return { ok: false, status: 404, error: 'Lista de cumpărături nu a fost găsită.' };
+  }
+
+  const { data: itemRows, error: itemsErr } = await auth.userClient
+    .from('shopping_list_items')
+    .select('id, list_id, product_id, product_name, quantity, unit, notes, is_checked')
+    .eq('list_id', listId)
+    .order('created_at', { ascending: false });
+
+  if (itemsErr) {
+    return { ok: false, status: 500, error: 'Eroare la preluarea produselor din lista de cumpărături.' };
+  }
+
+  const mappedItems = (itemRows || []).map((r: any) => ({
+    id: r.id,
+    productId: r.product_id || undefined,
+    name: r.product_name || 'Produs',
+    category: 'Alte produse',
+    quantity: Number(r.quantity) || 1,
+    unit: r.unit || 'buc',
+    checked: Boolean(r.is_checked),
+    notes: r.notes || undefined
+  }));
+
+  return { ok: true, listName: ownedList.name || 'Coșul meu', items: mappedItems };
+}
+
+// Server-side Basket Optimizer V1 endpoint (batch queries, safe catalog cache, ownership & RLS aware)
+app.post('/api/basket/optimize', publicComputeLimiter, async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const parsed = basketOptimizeRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_BASKET_REQUEST',
+        error: parsed.error.issues[0]?.message || 'Datele coșului pentru optimizare sunt invalide.'
+      });
+    }
+
+    const { listId, listName, items, options } = parsed.data;
+    let resolvedListName = listName;
+    let resolvedItems: any[] = Array.isArray(items) ? items : [];
+
+    const hasBearerHeader = Boolean(req.headers.authorization && req.headers.authorization.startsWith('Bearer '));
+    const auth = hasBearerHeader ? await getAuthenticatedSupabaseUser(req) : null;
+    if (hasBearerHeader && !auth) {
+      return res.status(401).json({
+        success: false,
+        error: 'Sesiune invalidă sau expirată pentru optimizarea listei.'
+      });
+    }
+
+    if (listId && UUID_STRICT_RE.test(listId)) {
+      if (resolvedItems.length === 0) {
+        if (!auth) {
+          return res.status(401).json({
+            success: false,
+            error: 'Autentificarea este obligatorie pentru a optimiza o listă salvată în cont.'
+          });
+        }
+        const ownedResult = await loadOwnedShoppingListItemsForOptimization({ auth, listId });
+        if (ownedResult.ok === false) {
+          return res.status(ownedResult.status).json({ success: false, error: ownedResult.error });
+        }
+        resolvedListName = resolvedListName || ownedResult.listName;
+        resolvedItems = ownedResult.items;
+      } else if (auth) {
+        // Previne folosirea unui listId străin chiar și când sunt transmise articole inline
+        const adminClient = getSupabaseAdminClient();
+        if (adminClient) {
+          const { data: existingList } = await adminClient
+            .from('shopping_lists')
+            .select('id, user_id')
+            .eq('id', listId)
+            .maybeSingle();
+          if (existingList && existingList.user_id !== auth.user.id) {
+            return res.status(403).json({
+              success: false,
+              error: 'Acces interzis: nu poți accesa lista altui utilizator.'
+            });
+          }
+        }
+      }
+    }
+
+    const dataset = isPostgresConfigured()
+      ? await DatabaseService.getOptimizationDataset(resolvedItems)
+      : {
+          products: StorageService.getAllProducts(),
+          offers: StorageService.getProductOffers(),
+          stores: STORES,
+          cacheHit: false,
+          batchQueryMode: 'isolated_memory' as const
+        };
+
+    const optimization = BasketOptimizerService.optimize({
+      list: listId || resolvedListName ? { id: listId || 'custom', name: resolvedListName || 'Coșul meu' } : undefined,
+      items: resolvedItems,
+      options,
+      products: dataset.products,
+      offers: dataset.offers,
+      stores: dataset.stores
+    });
+
+    return res.json({
+      success: true,
+      optimization,
+      meta: {
+        batchQueryMode: dataset.batchQueryMode,
+        catalogCacheHit: dataset.cacheHit
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Eroare la optimizarea coșului de cumpărături.'
+    });
+  }
+});
+
+// Authenticated owner-scoped GET endpoint pentru optimizarea directă a unei liste din Supabase (RLS enforced)
+app.get('/api/basket/optimize/:listId', publicComputeLimiter, async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+
+    const { listId } = req.params;
+    if (!listId || !UUID_STRICT_RE.test(listId)) {
+      return res.status(400).json({ success: false, error: 'Identificator listă invalid.' });
+    }
+
+    const ownedResult = await loadOwnedShoppingListItemsForOptimization({ auth, listId });
+    if (ownedResult.ok === false) {
+      return res.status(ownedResult.status).json({ success: false, error: ownedResult.error });
+    }
+
+    const maxStores = Math.max(1, Math.min(8, Number(req.query.maxStores) || 3));
+    const useLoyaltyCards = req.query.useLoyaltyCards !== 'false';
+    const excludedStoreIds =
+      typeof req.query.excludedStoreIds === 'string'
+        ? req.query.excludedStoreIds.split(',').map(s => s.trim()).filter(Boolean)
+        : undefined;
+    const favoriteStoreIds =
+      typeof req.query.favoriteStoreIds === 'string'
+        ? req.query.favoriteStoreIds.split(',').map(s => s.trim()).filter(Boolean)
+        : undefined;
+
+    const dataset = isPostgresConfigured()
+      ? await DatabaseService.getOptimizationDataset(ownedResult.items)
+      : {
+          products: StorageService.getAllProducts(),
+          offers: StorageService.getProductOffers(),
+          stores: STORES,
+          cacheHit: false,
+          batchQueryMode: 'isolated_memory' as const
+        };
+
+    const optimization = BasketOptimizerService.optimize({
+      list: { id: listId, name: ownedResult.listName },
+      items: ownedResult.items,
+      options: { maxStores, useLoyaltyCards, excludedStoreIds, favoriteStoreIds, transportCostPerExtraStore: 0 },
+      products: dataset.products,
+      offers: dataset.offers,
+      stores: dataset.stores
+    });
+
+    return res.json({
+      success: true,
+      optimization,
+      meta: {
+        batchQueryMode: dataset.batchQueryMode,
+        catalogCacheHit: dataset.cacheHit
+      }
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la optimizarea listei salvate.' });
+  }
+});
+
+// =========================================================================
+// Authenticated, RLS-enforced Price Alerts & In-App Notifications API
+// =========================================================================
+
+function mapDbAlertRow(
+  row: Record<string, any>,
+  productById: Map<string, Product>,
+  lowestOfferByProductId: Map<string, { price: number; storeId: string }>,
+  metaById: Record<string, any>
+): PriceAlert {
+  const id = String(row.id || '');
+  const productId = String(row.product_id || '');
+  const product = productById.get(productId);
+  const meta = (metaById[id] && typeof metaById[id] === 'object' ? metaById[id] : {}) as Record<string, any>;
+  const rawType = String(row.alert_type ?? meta.alertType ?? 'below_target');
+  const alertType: PriceAlert['alertType'] =
+    rawType === 'any_drop' || rawType === 'interval_low' ? rawType : 'below_target';
+  const rawInterval = Number(row.interval_days ?? meta.intervalDays);
+  const intervalDays =
+    alertType === 'interval_low' && [30, 90, 180, 365].includes(rawInterval)
+      ? (rawInterval as PriceAlert['intervalDays'])
+      : undefined;
+  const offerInfo = lowestOfferByProductId.get(productId);
+
+  return {
+    id,
+    productId,
+    productName: product ? `${product.name}${product.brand ? ` (${product.brand})` : ''}` : productId,
+    targetPrice: Number(row.target_price || 0),
+    currentLowestPrice: offerInfo?.price ?? 0,
+    lowestStoreId: offerInfo?.storeId,
+    createdAt: String(row.created_at || new Date().toISOString()).slice(0, 10),
+    isActive: Boolean(row.is_active),
+    alertType,
+    intervalDays,
+    sourceListId: (row.source_list_id || meta.sourceListId || undefined) as string | undefined,
+    lastTriggeredAt: (row.last_triggered_at || meta.lastTriggeredAt || undefined) as string | undefined,
+    lastTriggeredPrice:
+      row.last_triggered_price != null
+        ? Number(row.last_triggered_price)
+        : meta.lastTriggeredPrice != null
+          ? Number(meta.lastTriggeredPrice)
+          : undefined,
+    lastEvaluatedPrice:
+      row.last_evaluated_price != null
+        ? Number(row.last_evaluated_price)
+        : meta.lastEvaluatedPrice != null
+          ? Number(meta.lastEvaluatedPrice)
+          : undefined,
+    lastNotifiedKey: (row.last_notified_key || meta.lastNotifiedKey || undefined) as string | undefined
+  };
+}
+
+async function fetchUserAlertsRls(userClient: SupabaseClient, userId: string) {
+  const extended = await userClient
+    .from('price_alerts')
+    .select(
+      'id,user_id,product_id,target_price,is_active,created_at,alert_type,interval_days,source_list_id,last_triggered_at,last_triggered_price,last_evaluated_price,last_notified_key'
+    )
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (!extended.error) return extended;
+  return userClient
+    .from('price_alerts')
+    .select('id,user_id,product_id,target_price,is_active,created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+}
+
+async function fetchUserNotificationsRls(userClient: SupabaseClient, userId: string): Promise<InAppPriceNotification[]> {
+  try {
+    const { data, error } = await userClient
+      .from('price_alert_notifications')
+      .select(
+        'id,alert_id,dedupe_key,product_id,product_name,alert_type,title,message,observed_price,previous_price,target_price,store_id,store_name,triggered_at,is_read'
+      )
+      .eq('user_id', userId)
+      .order('triggered_at', { ascending: false })
+      .limit(100);
+    if (error || !Array.isArray(data)) return [];
+    return data.map(row => ({
+      id: String(row.id),
+      alertId: String(row.alert_id),
+      dedupeKey: String(row.dedupe_key),
+      productId: String(row.product_id),
+      productName: String(row.product_name || 'Produs'),
+      alertType: (row.alert_type === 'any_drop' || row.alert_type === 'interval_low'
+        ? row.alert_type
+        : 'below_target') as PriceAlert['alertType'] & string,
+      title: String(row.title || 'Alertă de preț'),
+      message: String(row.message || ''),
+      observedPrice: Number(row.observed_price || 0),
+      previousPrice: row.previous_price != null ? Number(row.previous_price) : undefined,
+      targetPrice: row.target_price != null ? Number(row.target_price) : undefined,
+      storeId: String(row.store_id || 'store'),
+      storeName: String(row.store_name || 'Magazin'),
+      triggeredAt: String(row.triggered_at || new Date().toISOString()),
+      isRead: Boolean(row.is_read)
+    }));
+  } catch {
+    return [];
+  }
+}
+
+app.get('/api/alerts', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară pentru alertele de preț.' });
+    }
+
+    const [alertsRes, notifications, profileRes, products, offers] = await Promise.all([
+      fetchUserAlertsRls(auth.userClient, auth.user.id),
+      fetchUserNotificationsRls(auth.userClient, auth.user.id),
+      auth.userClient.from('profiles').select('preferences').eq('id', auth.user.id).maybeSingle(),
+      isPostgresConfigured() ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
+      isPostgresConfigured() ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers())
+    ]);
+
+    if (alertsRes.error) {
+      return res.status(500).json({ success: false, error: 'Nu am putut prelua alertele utilizatorului.' });
+    }
+
+    const productById = new Map(products.map(p => [p.id, p]));
+    const lowestOfferByProductId = new Map<string, { price: number; storeId: string }>();
+    for (const offer of offers) {
+      const prod = productById.get(offer.productId);
+      if (!PriceComparisonService.isOfferValid(offer, prod)) continue;
+      const prev = lowestOfferByProductId.get(offer.productId);
+      if (!prev || offer.price < prev.price) {
+        lowestOfferByProductId.set(offer.productId, { price: offer.price, storeId: offer.storeId });
+      }
+    }
+
+    const metaById =
+      profileRes.data?.preferences &&
+      typeof profileRes.data.preferences === 'object' &&
+      profileRes.data.preferences.priceAlertMeta &&
+      typeof profileRes.data.preferences.priceAlertMeta === 'object'
+        ? (profileRes.data.preferences.priceAlertMeta as Record<string, any>)
+        : {};
+
+    const alerts = (alertsRes.data || []).map(row =>
+      mapDbAlertRow(row, productById, lowestOfferByProductId, metaById)
+    );
+
+    return res.json({ success: true, alerts, notifications });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare internă la preluarea alertelor.' });
+  }
+});
+
+app.post('/api/alerts', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+
+    const parsed = priceAlertCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Date invalide pentru alertă.'
+      });
+    }
+
+    const { productId, alertType, targetPrice, intervalDays, sourceListId } = parsed.data;
+    const [products, offers, existingRes] = await Promise.all([
+      isPostgresConfigured() ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
+      isPostgresConfigured() ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
+      fetchUserAlertsRls(auth.userClient, auth.user.id)
+    ]);
+
+    const product = products.find(p => p.id === productId);
+    if (!product) {
+      return res.status(404).json({ success: false, error: 'Produsul selectat nu există în catalog.' });
+    }
+
+    const existingAlerts = existingRes.data || [];
+    const normalizedInterval = alertType === 'interval_low' ? (intervalDays || 90) : null;
+    const isDuplicate = existingAlerts.some(row => {
+      const rowType = String((row as any).alert_type || 'below_target');
+      const rowInterval = (row as any).interval_days != null ? Number((row as any).interval_days) : null;
+      return row.product_id === productId && rowType === alertType && (alertType !== 'interval_low' || rowInterval === normalizedInterval);
+    });
+    if (isDuplicate) {
+      return res.status(409).json({
+        success: false,
+        error: 'Există deja o alertă similară configurată pentru acest produs.'
+      });
+    }
+
+    const validOffers = offers
+      .filter(o => o.productId === productId && PriceComparisonService.isOfferValid(o, product))
+      .sort((a, b) => a.price - b.price);
+    const bestOffer = validOffers[0];
+    const effectiveTarget =
+      alertType === 'below_target'
+        ? Number(targetPrice)
+        : Math.max(0.01, bestOffer?.price ?? product.baseReferencePrice ?? 1);
+
+    const newId = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
+    const extendedInsert = {
+      id: newId,
+      user_id: auth.user.id,
+      product_id: productId,
+      target_price: effectiveTarget,
+      is_active: true,
+      created_at: nowIso,
+      alert_type: alertType,
+      interval_days: normalizedInterval,
+      source_list_id: sourceListId || null,
+      last_evaluated_price: bestOffer?.price ?? null
+    };
+
+    let insertRes = await auth.userClient.from('price_alerts').insert(extendedInsert).select().single();
+    if (insertRes.error) {
+      insertRes = await auth.userClient
+        .from('price_alerts')
+        .insert({
+          id: newId,
+          user_id: auth.user.id,
+          product_id: productId,
+          target_price: effectiveTarget,
+          is_active: true,
+          created_at: nowIso
+        })
+        .select()
+        .single();
+    }
+
+    if (insertRes.error) {
+      return res.status(500).json({ success: false, error: 'Nu am putut crea alerta de preț.' });
+    }
+
+    const alert: PriceAlert = {
+      id: newId,
+      productId,
+      productName: `${product.name}${product.brand ? ` (${product.brand})` : ''}`,
+      targetPrice: effectiveTarget,
+      currentLowestPrice: bestOffer?.price ?? 0,
+      lowestStoreId: bestOffer?.storeId,
+      createdAt: nowIso.slice(0, 10),
+      isActive: true,
+      alertType,
+      intervalDays: normalizedInterval as PriceAlert['intervalDays'],
+      sourceListId,
+      lastEvaluatedPrice: bestOffer?.price
+    };
+
+    return res.status(201).json({ success: true, alert });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare internă la crearea alertei.' });
+  }
+});
+
+app.post('/api/alerts/from-list/:listId', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+
+    const { listId } = req.params;
+    if (!listId || !UUID_STRICT_RE.test(listId)) {
+      return res.status(400).json({ success: false, error: 'Identificator listă invalid.' });
+    }
+
+    const bodyCheck = priceAlertsFromListSchema.safeParse(req.body || {});
+    if (!bodyCheck.success) {
+      return res.status(400).json({
+        success: false,
+        error: bodyCheck.error.issues[0]?.message || 'Opțiuni invalide.'
+      });
+    }
+
+    const ownedResult = await loadOwnedShoppingListItemsForOptimization({ auth, listId });
+    if (ownedResult.ok === false) {
+      return res.status(ownedResult.status).json({ success: false, error: ownedResult.error });
+    }
+
+    const [products, offers, existingAlertsRes] = await Promise.all([
+      isPostgresConfigured() ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
+      isPostgresConfigured() ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
+      fetchUserAlertsRls(auth.userClient, auth.user.id)
+    ]);
+
+    const productById = new Map(products.map(p => [p.id, p]));
+    const existingAlerts = (existingAlertsRes.data || []).map(row =>
+      mapDbAlertRow(row, productById, new Map(), {})
+    );
+
+    const { createdAlerts, skippedExistingCount, unmatchedItemNames } =
+      PriceAlertService.createAlertsFromShoppingList(
+        {
+          id: listId,
+          name: ownedResult.listName,
+          items: ownedResult.items,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        },
+        existingAlerts,
+        products,
+        offers,
+        bodyCheck.data
+      );
+
+    const persistedAlerts: PriceAlert[] = [];
+    for (const candidate of createdAlerts) {
+      const uuid = crypto.randomUUID();
+      const nowIso = new Date().toISOString();
+      let ins = await auth.userClient
+        .from('price_alerts')
+        .insert({
+          id: uuid,
+          user_id: auth.user.id,
+          product_id: candidate.productId,
+          target_price: candidate.targetPrice,
+          is_active: true,
+          created_at: nowIso,
+          alert_type: candidate.alertType || 'below_target',
+          interval_days: candidate.intervalDays ?? null,
+          source_list_id: listId,
+          last_evaluated_price: candidate.lastEvaluatedPrice ?? null
+        })
+        .select()
+        .single();
+
+      if (ins.error) {
+        ins = await auth.userClient
+          .from('price_alerts')
+          .insert({
+            id: uuid,
+            user_id: auth.user.id,
+            product_id: candidate.productId,
+            target_price: candidate.targetPrice,
+            is_active: true,
+            created_at: nowIso
+          })
+          .select()
+          .single();
+      }
+      if (!ins.error) {
+        persistedAlerts.push({ ...candidate, id: uuid });
+      }
+    }
+
+    return res.status(201).json({
+      success: true,
+      createdCount: persistedAlerts.length,
+      skippedExistingCount,
+      unmatchedItemNames,
+      createdAlerts: persistedAlerts
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la generarea alertelor din listă.' });
+  }
+});
+
+app.patch('/api/alerts/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+
+    const { id } = req.params;
+    if (!id || !UUID_STRICT_RE.test(id)) {
+      return res.status(400).json({ success: false, error: 'Identificator alertă invalid.' });
+    }
+
+    const parsed = priceAlertUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Date invalide pentru actualizare.'
+      });
+    }
+
+    const { data: ownedRow, error: ownErr } = await auth.userClient
+      .from('price_alerts')
+      .select('id, user_id')
+      .eq('id', id)
+      .eq('user_id', auth.user.id)
+      .maybeSingle();
+
+    if (ownErr) {
+      return res.status(500).json({ success: false, error: 'Eroare la verificarea alertei.' });
+    }
+    if (!ownedRow) {
+      const adminClient = getSupabaseAdminClient();
+      if (adminClient) {
+        const { data: existsElsewhere } = await adminClient
+          .from('price_alerts')
+          .select('id, user_id')
+          .eq('id', id)
+          .maybeSingle();
+        if (existsElsewhere && existsElsewhere.user_id !== auth.user.id) {
+          return res.status(403).json({ success: false, error: 'Acces interzis la alerta altui utilizator.' });
+        }
+      }
+      return res.status(404).json({ success: false, error: 'Alerta nu a fost găsită.' });
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (parsed.data.isActive !== undefined) patch.is_active = parsed.data.isActive;
+    if (parsed.data.targetPrice !== undefined) patch.target_price = parsed.data.targetPrice;
+    if (parsed.data.alertType !== undefined) patch.alert_type = parsed.data.alertType;
+    if (parsed.data.intervalDays !== undefined) patch.interval_days = parsed.data.intervalDays;
+
+    let upd = await auth.userClient
+      .from('price_alerts')
+      .update(patch)
+      .eq('id', id)
+      .eq('user_id', auth.user.id)
+      .select()
+      .single();
+
+    if (upd.error && (patch.target_price !== undefined || patch.is_active !== undefined)) {
+      const basePatch: Record<string, unknown> = {};
+      if (patch.target_price !== undefined) basePatch.target_price = patch.target_price;
+      if (patch.is_active !== undefined) basePatch.is_active = patch.is_active;
+      upd = await auth.userClient
+        .from('price_alerts')
+        .update(basePatch)
+        .eq('id', id)
+        .eq('user_id', auth.user.id)
+        .select()
+        .single();
+    }
+
+    if (upd.error) {
+      return res.status(500).json({ success: false, error: 'Nu am putut actualiza alerta.' });
+    }
+
+    return res.json({ success: true, alert: upd.data });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare internă la actualizarea alertei.' });
+  }
+});
+
+app.delete('/api/alerts/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+
+    const { id } = req.params;
+    if (!id || !UUID_STRICT_RE.test(id)) {
+      return res.status(400).json({ success: false, error: 'Identificator alertă invalid.' });
+    }
+
+    const { data: ownedRow, error: ownErr } = await auth.userClient
+      .from('price_alerts')
+      .select('id, user_id')
+      .eq('id', id)
+      .eq('user_id', auth.user.id)
+      .maybeSingle();
+
+    if (ownErr) {
+      return res.status(500).json({ success: false, error: 'Eroare la verificarea alertei.' });
+    }
+    if (!ownedRow) {
+      const adminClient = getSupabaseAdminClient();
+      if (adminClient) {
+        const { data: existsElsewhere } = await adminClient
+          .from('price_alerts')
+          .select('id, user_id')
+          .eq('id', id)
+          .maybeSingle();
+        if (existsElsewhere && existsElsewhere.user_id !== auth.user.id) {
+          return res.status(403).json({ success: false, error: 'Acces interzis la ștergerea alertei altui utilizator.' });
+        }
+      }
+      return res.status(404).json({ success: false, error: 'Alerta nu a fost găsită.' });
+    }
+
+    const { error: delErr } = await auth.userClient
+      .from('price_alerts')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', auth.user.id);
+
+    if (delErr) {
+      return res.status(500).json({ success: false, error: 'Nu am putut șterge alerta.' });
+    }
+
+    return res.json({ success: true, deletedId: id });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare internă la ștergerea alertei.' });
+  }
+});
+
+app.post('/api/alerts/evaluate', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+
+    const [alertsRes, existingNotifs, products, offers, stores] = await Promise.all([
+      fetchUserAlertsRls(auth.userClient, auth.user.id),
+      fetchUserNotificationsRls(auth.userClient, auth.user.id),
+      isPostgresConfigured() ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
+      isPostgresConfigured() ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
+      isPostgresConfigured() ? DatabaseService.getStores() : Promise.resolve(STORES)
+    ]);
+
+    if (alertsRes.error) {
+      return res.status(500).json({ success: false, error: 'Nu am putut evalua alertele.' });
+    }
+
+    const productById = new Map(products.map(p => [p.id, p]));
+    const currentAlerts = (alertsRes.data || []).map(row => mapDbAlertRow(row, productById, new Map(), {}));
+    const observationsByProduct = await Promise.all(
+      Array.from(new Set(currentAlerts.filter(a => a.alertType === 'interval_low').map(a => a.productId))).map(pid =>
+        isPostgresConfigured()
+          ? DatabaseService.getPriceObservations(pid)
+          : Promise.resolve(StorageService.getPriceObservations().filter(o => o.productId === pid))
+      )
+    );
+    const observations = observationsByProduct.flat();
+
+    const { updatedAlerts, newNotifications } = PriceAlertService.evaluateAlerts({
+      alerts: currentAlerts,
+      offers,
+      products,
+      observations,
+      stores,
+      existingNotifications: existingNotifs
+    });
+
+    for (const notif of newNotifications) {
+      const notifId = crypto.randomUUID();
+      await auth.userClient.from('price_alert_notifications').upsert(
+        {
+          id: notifId,
+          user_id: auth.user.id,
+          alert_id: notif.alertId,
+          dedupe_key: notif.dedupeKey,
+          product_id: notif.productId,
+          product_name: notif.productName,
+          alert_type: notif.alertType,
+          title: notif.title,
+          message: notif.message,
+          observed_price: notif.observedPrice,
+          previous_price: notif.previousPrice ?? null,
+          target_price: notif.targetPrice ?? null,
+          store_id: notif.storeId,
+          store_name: notif.storeName,
+          triggered_at: notif.triggeredAt,
+          is_read: false
+        },
+        { onConflict: 'user_id,dedupe_key', ignoreDuplicates: true }
+      );
+    }
+
+    for (const nextAlert of updatedAlerts) {
+      await auth.userClient
+        .from('price_alerts')
+        .update({
+          last_triggered_at: nextAlert.lastTriggeredAt || null,
+          last_triggered_price: nextAlert.lastTriggeredPrice ?? null,
+          last_evaluated_price: nextAlert.lastEvaluatedPrice ?? null,
+          last_notified_key: nextAlert.lastNotifiedKey || null
+        })
+        .eq('id', nextAlert.id)
+        .eq('user_id', auth.user.id);
+    }
+
+    return res.json({
+      success: true,
+      evaluatedCount: updatedAlerts.length,
+      newNotificationsCount: newNotifications.length,
+      newNotifications
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare internă la evaluarea alertelor.' });
+  }
+});
+
+app.patch('/api/alerts/notifications/:id/read', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+    const { id } = req.params;
+    if (!id || !UUID_STRICT_RE.test(id)) {
+      return res.status(400).json({ success: false, error: 'Identificator notificare invalid.' });
+    }
+    const { data, error } = await auth.userClient
+      .from('price_alert_notifications')
+      .update({ is_read: true })
+      .eq('id', id)
+      .eq('user_id', auth.user.id)
+      .select('id')
+      .maybeSingle();
+
+    if (error) {
+      return res.status(500).json({ success: false, error: 'Nu am putut actualiza notificarea.' });
+    }
+    if (!data) {
+      return res.status(404).json({ success: false, error: 'Notificarea nu a fost găsită.' });
+    }
+    return res.json({ success: true, id });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la marcarea notificării.' });
+  }
+});
+
+app.post('/api/alerts/notifications/read-all', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+    const { error } = await auth.userClient
+      .from('price_alert_notifications')
+      .update({ is_read: true })
+      .eq('user_id', auth.user.id)
+      .eq('is_read', false);
+    if (error) {
+      return res.status(500).json({ success: false, error: 'Nu am putut marca notificările.' });
+    }
+    return res.json({ success: true });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la actualizarea notificărilor.' });
   }
 });
 
@@ -2275,7 +3256,7 @@ app.get('/api/products', async (req, res) => {
       }
     }
 
-    // Calcul metadate agregate per produs
+    // Calcul metadate agregate per produs + clasificare transparentă a calității datelor
     const enrichedProducts = allProducts.map(p => {
       const offers = productOffersMap.get(p.id) || [];
       const sortedOffers = [...offers].sort((a, b) => a.price - b.price);
@@ -2284,9 +3265,13 @@ app.get('/api/products', async (req, res) => {
       const hasPromo = sortedOffers.some(o => o.isPromo);
       const requiresLoyalty = minOffer?.loyaltyCardRequired || false;
       const latestVerifiedAt = sortedOffers.reduce((latest, o) => {
-        const d = o.observationDate || o.lastChecked.slice(0, 10);
+        const d = o.lastVerifiedAt || o.observationDate || o.lastChecked.slice(0, 10);
         return !latest || d > latest ? d : latest;
       }, '');
+
+      const qualityAssessment = minOffer
+        ? PriceQualityClassifier.classifyOffer(minOffer, { product: p, confirmationsCount: sortedOffers.length })
+        : null;
 
       return {
         ...p,
@@ -2298,9 +3283,11 @@ app.get('/api/products', async (req, res) => {
         isPromo: hasPromo,
         loyaltyCardRequired: requiresLoyalty,
         loyaltyCardName: minOffer?.loyaltyCardName,
-        lastVerifiedAt: latestVerifiedAt || null,
+        lastVerifiedAt: latestVerifiedAt ? latestVerifiedAt.slice(0, 10) : null,
         freshnessStatus: minOffer?.freshnessStatus || (latestVerifiedAt ? 'recent' : 'expired'),
-        qualityScore: minOffer?.qualityScore || (sortedOffers.length > 0 ? 80 : 50)
+        qualityScore: qualityAssessment ? qualityAssessment.score : null,
+        qualityStatus: qualityAssessment ? qualityAssessment.status : 'UNVERIFIED',
+        qualityLabelRo: qualityAssessment ? qualityAssessment.labelRo : 'Fără oferte active'
       };
     });
 
@@ -2468,6 +3455,27 @@ app.get('/api/products/:id', async (req, res) => {
       imageUrl: sanitizeApiImageUrl(comparison.product?.imageUrl)
     };
 
+    const rawOffers = comparison.offers.map(o => o.offer);
+    const offerQualityByOfferId = Object.fromEntries(
+      rawOffers.map(off => [
+        off.id,
+        PriceQualityClassifier.classifyOffer(off, {
+          product: comparison.product,
+          confirmationsCount: rawOffers.length
+        })
+      ])
+    );
+
+    const sanitizedObservations = observations.filter(
+      o => o && Number.isFinite(o.price) && o.price > 0 && o.source !== 'demo' && o.source !== 'estimated'
+    );
+
+    const historyStats = PriceHistoryService.getProductPriceStats(sanitizedProduct.id, {
+      offers: rawOffers,
+      observations: sanitizedObservations,
+      stores: STORES
+    });
+
     res.json({
       success: true,
       product: sanitizedProduct,
@@ -2475,9 +3483,13 @@ app.get('/api/products/:id', async (req, res) => {
         ...comparison,
         product: sanitizedProduct
       },
-      observationsCount: observations.length,
-      hasSufficientHistory: observations.length >= 2,
-      observations: observations.slice(0, 50)
+      offerQualityByOfferId,
+      observationsCount: historyStats.observationsCount,
+      distinctDaysCount: historyStats.distinctDaysCount,
+      hasSufficientHistory: historyStats.hasSufficientHistory,
+      intervalStats: historyStats.intervalStats,
+      allIntervalStats: historyStats.intervalStats,
+      observations: sanitizedObservations.slice(0, 200)
     });
   } catch (err: any) {
     console.error('Eroare GET /api/products/:id:', err);
@@ -2486,7 +3498,7 @@ app.get('/api/products/:id', async (req, res) => {
 });
 
 // POST /api/products/report-error - Semnalare eroare de către utilizator
-app.post('/api/products/report-error', (req, res) => {
+app.post('/api/products/report-error', publicReportLimiter, (req, res) => {
   try {
     const {
       productId,
@@ -5462,6 +6474,7 @@ app.post('/api/admin/import/run-retailer/:retailerId', requireAdminAuth, async (
     });
 
     const result = await CatalogStagingManager.runPilotImportForRetailer(retailerId);
+    invalidateCatalogOptimizationCache();
 
     await DatabaseService.logAdminActivity({
       userEmail: userEmail || 'admin@cosulmeu.ro',
@@ -5529,6 +6542,7 @@ app.post('/api/indexing/collect-now', async (req, res) => {
     const result = await IndexingScheduler.runRetailerJob(retailerId, {
       triggeredBy: 'api_collect_now'
     });
+    invalidateCatalogOptimizationCache();
     res.json({ success: true, result });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Eroare la declanșarea colectării.' });

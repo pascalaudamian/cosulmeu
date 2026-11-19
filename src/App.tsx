@@ -4,6 +4,8 @@ import {
   countLocalDashboardData,
   deleteReceiptForUser,
   importLocalDashboardData,
+  markAlertNotificationsReadForUser,
+  saveAlertNotificationsForUser,
   savePriceAlertsForUser,
   saveReceiptForUser,
   saveShoppingListsForUser,
@@ -103,10 +105,11 @@ import {
   resolveIsDark,
   saveUserThemePreference
 } from './services/ThemeService.js';
-import { ShoppingList, Receipt, UserProfile, PriceAlert, Product, ProductOffer, Store, ThemeMode } from './types.js';
+import { ShoppingList, Receipt, UserProfile, PriceAlert, InAppPriceNotification, Product, ProductOffer, Store, ThemeMode } from './types.js';
+import { PriceAlertService } from './services/PriceAlertService.js';
 import { useAuth } from './auth/AuthProvider.js';
 import { supabase } from './lib/supabase.js';
-import { PRODUCTS } from './data/mockData.js';
+import { PRODUCTS, STORES as MOCK_STORES } from './data/mockData.js';
 import {
   buildGuestDemoShoppingList,
   GUEST_DEMO_LIST_ID,
@@ -173,6 +176,11 @@ export default function App() {
   const [catalogProducts, setCatalogProducts] = useState<Product[]>([]);
   const [catalogOffers, setCatalogOffers] = useState<ProductOffer[]>([]);
   const [catalogStores, setCatalogStores] = useState<Store[]>([]);
+  const [inAppNotifications, setInAppNotifications] = useState<InAppPriceNotification[]>(() =>
+    PriceAlertService.loadLocalNotifications()
+  );
+  const [alertFeedbackBanner, setAlertFeedbackBanner] = useState<string | null>(null);
+  const lastAlertEvalSigRef = useRef<string>('');
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => getSystemPrefersDark());
   const isDarkMode = resolveIsDark(themeMode, systemPrefersDark);
@@ -224,9 +232,9 @@ export default function App() {
     });
   }, []);
 
-  // Load catalog immediately when needed by dashboard/catalog/list/compare/stores, otherwise prefetch lazily after first paint
+  // Load catalog immediately when needed by dashboard/catalog/list/compare/stores/price-history, otherwise prefetch lazily after first paint
   useEffect(() => {
-    if (['dashboard', 'shopping-list', 'compare', 'products', 'stores', 'product-detail'].includes(currentTab)) {
+    if (['dashboard', 'shopping-list', 'compare', 'products', 'stores', 'product-detail', 'price-history'].includes(currentTab)) {
       loadCatalogDatasets();
       return;
     }
@@ -242,10 +250,90 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [currentTab, loadCatalogDatasets]);
 
+  // Sync DB notifications into state when dashboardData loads for authenticated user
+  useEffect(() => {
+    if (!user || !dashboardData?.alertNotifications?.length) return;
+    setInAppNotifications(prev => {
+      const seen = new Set(dashboardData.alertNotifications.map(n => n.dedupeKey));
+      const merged = [
+        ...dashboardData.alertNotifications,
+        ...prev.filter(n => !seen.has(n.dedupeKey))
+      ].slice(0, 100);
+      PriceAlertService.saveLocalNotifications(merged);
+      return merged;
+    });
+  }, [user, dashboardData?.alertNotifications]);
+
+  // Evaluate active price alerts idempotently against current catalog offers & generate in-app notifications
+  const activeAlertsSource = user ? dashboardData?.priceAlerts : priceAlerts;
+  useEffect(() => {
+    const alertsList = activeAlertsSource || [];
+    if (alertsList.length === 0) return;
+
+    const offersToCheck = catalogOffers.length > 0 ? catalogOffers : StorageService.getProductOffers();
+    if (offersToCheck.length === 0) return;
+
+    const sig = `${alertsList.map(a => `${a.id}:${a.isActive}:${a.targetPrice}:${a.alertType || 'below_target'}:${a.intervalDays || ''}:${a.lastNotifiedKey || ''}`).join(',')}|${offersToCheck.length}`;
+    if (lastAlertEvalSigRef.current === sig) return;
+    lastAlertEvalSigRef.current = sig;
+
+    const productsToCheck = catalogProducts.length > 0 ? catalogProducts : PRODUCTS;
+    const storesToCheck = catalogStores.length > 0 ? catalogStores : MOCK_STORES;
+    const obsToCheck = StorageService.getPriceObservations();
+
+    const { updatedAlerts, newNotifications } = PriceAlertService.evaluateAlerts({
+      alerts: alertsList,
+      offers: offersToCheck,
+      products: productsToCheck,
+      observations: obsToCheck,
+      stores: storesToCheck,
+      existingNotifications: inAppNotifications
+    });
+
+    if (newNotifications.length > 0) {
+      const merged = [...newNotifications, ...inAppNotifications].slice(0, 100);
+      setInAppNotifications(merged);
+      PriceAlertService.saveLocalNotifications(merged);
+    }
+
+    const alertsChanged = updatedAlerts.some((nextA, idx) => {
+      const prevA = alertsList[idx];
+      return (
+        !prevA ||
+        nextA.lastNotifiedKey !== prevA.lastNotifiedKey ||
+        nextA.currentLowestPrice !== prevA.currentLowestPrice ||
+        nextA.lastEvaluatedPrice !== prevA.lastEvaluatedPrice
+      );
+    });
+
+    if (alertsChanged) {
+      if (!user) {
+        setPriceAlerts(updatedAlerts);
+        StorageService.savePriceAlerts(updatedAlerts);
+      } else if (dashboardData) {
+        void savePriceAlertsForUser(user.id, dashboardData.priceAlerts, updatedAlerts)
+          .then(saved => {
+            if (newNotifications.length > 0) {
+              void saveAlertNotificationsForUser(user.id, newNotifications, saved);
+            }
+            void mutateDashboardData(
+              current => (current ? { ...current, priceAlerts: saved } : current),
+              { revalidate: false }
+            );
+          })
+          .catch(() => {
+            // Non-blocking background sync for alert evaluation metadata
+          });
+      }
+    } else if (newNotifications.length > 0 && user && dashboardData) {
+      void saveAlertNotificationsForUser(user.id, newNotifications, dashboardData.priceAlerts);
+    }
+  }, [activeAlertsSource, catalogOffers, catalogProducts, catalogStores, user, dashboardData, inAppNotifications, mutateDashboardData]);
+
   const handlePrefetchTab = useCallback((tab: string) => {
     const loader = TAB_PREFETCHERS[tab];
     if (loader) void loader();
-    if (['shopping-list', 'compare', 'products', 'stores'].includes(tab)) {
+    if (['shopping-list', 'compare', 'products', 'stores', 'price-history'].includes(tab)) {
       loadCatalogDatasets();
     }
   }, [loadCatalogDatasets]);
@@ -909,6 +997,124 @@ export default function App() {
     setDataWriteError(null);
   };
 
+  const handleMarkNotificationRead = (notifId: string) => {
+    const next = inAppNotifications.map(n => (n.id === notifId ? { ...n, isRead: true } : n));
+    setInAppNotifications(next);
+    PriceAlertService.saveLocalNotifications(next);
+    if (user) {
+      void markAlertNotificationsReadForUser(user.id, notifId);
+    }
+  };
+
+  const handleMarkAllNotificationsRead = () => {
+    const next = inAppNotifications.map(n => ({ ...n, isRead: true }));
+    setInAppNotifications(next);
+    PriceAlertService.saveLocalNotifications(next);
+    if (user) {
+      void markAlertNotificationsReadForUser(user.id);
+    }
+  };
+
+  const handleCreateAlertsFromList = (
+    list: ShoppingList,
+    options?: { alertType?: 'below_target' | 'any_drop' | 'interval_low'; intervalDays?: 30 | 90 | 180 | 365 }
+  ) => {
+    const resolvedProducts = catalogProducts.length > 0 ? catalogProducts : StorageService.getAllProducts();
+    const resolvedOffers = catalogOffers.length > 0 ? catalogOffers : StorageService.getProductOffers();
+    const { createdAlerts, skippedExistingCount } = PriceAlertService.createAlertsFromShoppingList(
+      list,
+      dashboardAlerts,
+      resolvedProducts,
+      resolvedOffers,
+      options
+    );
+
+    if (createdAlerts.length > 0) {
+      void handleUpdatePriceAlerts([...createdAlerts, ...dashboardAlerts]);
+      setAlertFeedbackBanner(
+        `Au fost create ${createdAlerts.length} alerte de preț pentru produsele din „${list.name}”${skippedExistingCount > 0 ? ` (${skippedExistingCount} existau deja)` : ''}.`
+      );
+    } else {
+      setAlertFeedbackBanner(
+        `Toate produsele potrivite din „${list.name}” au deja alerte configurate.`
+      );
+    }
+    window.setTimeout(() => setAlertFeedbackBanner(null), 4500);
+    return { createdCount: createdAlerts.length, skippedCount: skippedExistingCount };
+  };
+
+  const handleSaveProductAlert = (savedAlert: PriceAlert) => {
+    const existsById = dashboardAlerts.some(a => a.id === savedAlert.id);
+    if (existsById) {
+      const next = dashboardAlerts.map(a => (a.id === savedAlert.id ? savedAlert : a));
+      void handleUpdatePriceAlerts(next);
+      setAlertFeedbackBanner(`Alerta pentru „${savedAlert.productName}” a fost actualizată.`);
+      window.setTimeout(() => setAlertFeedbackBanner(null), 4000);
+      return;
+    }
+
+    const duplicateRule = dashboardAlerts.some(
+      a =>
+        a.productId === savedAlert.productId &&
+        (a.alertType || 'below_target') === (savedAlert.alertType || 'below_target') &&
+        ((a.alertType || 'below_target') !== 'interval_low' || (a.intervalDays || 90) === (savedAlert.intervalDays || 90))
+    );
+    if (duplicateRule) {
+      setAlertFeedbackBanner(`Există deja o alertă similară pentru „${savedAlert.productName}”.`);
+      window.setTimeout(() => setAlertFeedbackBanner(null), 4000);
+      return;
+    }
+
+    void handleUpdatePriceAlerts([savedAlert, ...dashboardAlerts]);
+    setAlertFeedbackBanner(
+      `Alertă activată pentru „${savedAlert.productName}” (${PriceAlertService.getAlertTypeLabel(savedAlert.alertType, savedAlert.intervalDays)}).`
+    );
+    window.setTimeout(() => setAlertFeedbackBanner(null), 4500);
+  };
+
+  const handleToggleProductAlert = (alertId: string) => {
+    const next = dashboardAlerts.map(a => (a.id === alertId ? { ...a, isActive: !a.isActive } : a));
+    void handleUpdatePriceAlerts(next);
+  };
+
+  const handleDeleteProductAlert = (alertId: string) => {
+    const next = dashboardAlerts.filter(a => a.id !== alertId);
+    void handleUpdatePriceAlerts(next);
+    setAlertFeedbackBanner('Alerta a fost ștearsă.');
+    window.setTimeout(() => setAlertFeedbackBanner(null), 3500);
+  };
+
+  const handleQuickCreateAlertForProduct = (product: Product, suggestedPrice?: number) => {
+    const alreadyExists = dashboardAlerts.some(
+      a => a.productId === product.id && (a.alertType || 'below_target') === 'below_target'
+    );
+    if (alreadyExists) {
+      setAlertFeedbackBanner(`Există deja o alertă activă pentru „${product.name}”.`);
+      window.setTimeout(() => setAlertFeedbackBanner(null), 4000);
+      return;
+    }
+
+    const base = suggestedPrice && suggestedPrice > 0 ? suggestedPrice : product.baseReferencePrice || 5;
+    const targetPrice = Math.max(0.1, Math.round(base * 0.9 * 100) / 100);
+    const newAlert: PriceAlert = {
+      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `alert-${Date.now()}`,
+      productId: product.id,
+      productName: `${product.name}${product.brand ? ` (${product.brand})` : ''}`,
+      targetPrice,
+      currentLowestPrice: suggestedPrice && suggestedPrice > 0 ? suggestedPrice : 0,
+      createdAt: new Date().toISOString().slice(0, 10),
+      isActive: true,
+      alertType: 'below_target',
+      lastEvaluatedPrice: suggestedPrice && suggestedPrice > 0 ? suggestedPrice : undefined
+    };
+
+    void handleUpdatePriceAlerts([newAlert, ...dashboardAlerts]);
+    setAlertFeedbackBanner(
+      `Alertă creată pentru „${product.name}” la pragul de ${targetPrice.toFixed(2)} lei.`
+    );
+    window.setTimeout(() => setAlertFeedbackBanner(null), 4500);
+  };
+
   const handleResetAllData = () => {
     StorageService.resetAllData();
     setShoppingLists(StorageService.getShoppingLists());
@@ -933,6 +1139,8 @@ export default function App() {
         isAuthenticated={Boolean(user)}
         isAdmin={isAdmin}
         alerts={dashboardAlerts}
+        notifications={inAppNotifications}
+        onMarkNotificationRead={handleMarkNotificationRead}
         itemsCount={activeList.items.length}
         themeMode={themeMode}
         isDarkMode={isDarkMode}
@@ -944,6 +1152,11 @@ export default function App() {
         {dataWriteError && (
           <div role="alert" className="mb-5 rounded-xl border border-rose-200 dark:border-rose-800/70 bg-rose-50 dark:bg-rose-950/50 px-4 py-3 text-sm font-medium text-rose-800 dark:text-rose-200">
             {dataWriteError}
+          </div>
+        )}
+        {alertFeedbackBanner && (
+          <div role="status" className="mb-5 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 px-4 py-3 text-sm font-medium text-emerald-800 dark:text-emerald-200">
+            {alertFeedbackBanner}
           </div>
         )}
 
@@ -1007,6 +1220,11 @@ export default function App() {
               onNavigateToCategory={handleNavigateToCategory}
               activeList={activeList}
               onAddToList={handleAddProductToList}
+              onCreateAlertForProduct={handleQuickCreateAlertForProduct}
+              productAlerts={dashboardAlerts.filter(a => a.productId === selectedProductId)}
+              onSaveProductAlert={handleSaveProductAlert}
+              onToggleProductAlert={handleToggleProductAlert}
+              onDeleteProductAlert={handleDeleteProductAlert}
             />
           )}
 
@@ -1018,6 +1236,9 @@ export default function App() {
               onSelectActiveList={handleActiveListSelect}
               onCompare={() => handleSelectTab('compare')}
               catalogProducts={catalogProducts}
+              catalogOffers={catalogOffers}
+              catalogStores={catalogStores}
+              onCreateAlertsFromList={handleCreateAlertsFromList}
             />
           )}
 
@@ -1053,6 +1274,15 @@ export default function App() {
               trackedProductIds={dashboardTrackedProductIds}
               onUpdateAlerts={handleUpdatePriceAlerts}
               onUpdateTrackedProductIds={handleUpdateTrackedProducts}
+              onSelectProductForDetails={product => handleSelectProduct(product.id)}
+              catalogProducts={catalogProducts}
+              catalogOffers={catalogOffers}
+              catalogStores={catalogStores}
+              activeList={activeList}
+              notifications={inAppNotifications}
+              onMarkNotificationRead={handleMarkNotificationRead}
+              onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
+              onCreateAlertsFromList={handleCreateAlertsFromList}
             />
           )}
 

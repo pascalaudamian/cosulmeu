@@ -24,7 +24,7 @@ import {
   Monitor
 } from 'lucide-react';
 import { ROMANIAN_CITIES } from '../data/mockData.js';
-import { UserProfile, PriceAlert, ThemeMode } from '../types.js';
+import { UserProfile, PriceAlert, InAppPriceNotification, ThemeMode } from '../types.js';
 import { getNextQuickToggleTheme } from '../services/ThemeService.js';
 
 interface NavbarProps {
@@ -37,6 +37,8 @@ interface NavbarProps {
   isAuthenticated?: boolean;
   isAdmin?: boolean;
   alerts: PriceAlert[];
+  notifications?: InAppPriceNotification[];
+  onMarkNotificationRead?: (id: string) => void;
   itemsCount: number;
   themeMode?: ThemeMode;
   isDarkMode?: boolean;
@@ -53,6 +55,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   isAuthenticated = false,
   isAdmin = false,
   alerts,
+  notifications = [],
+  onMarkNotificationRead,
   itemsCount,
   themeMode = 'light',
   isDarkMode = false,
@@ -72,6 +76,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   const moreMenuRef = useRef<HTMLDivElement>(null);
 
   const activeAlerts = alerts.filter(a => a.isActive);
+  const unreadNotifications = notifications.filter(n => !n.isRead);
+  const bellCount = unreadNotifications.length > 0 ? unreadNotifications.length : activeAlerts.length;
   const avatarSrc = userProfile.avatarUrl || userProfile.avatar_url;
   const isUserAdmin = Boolean(isAdmin || userProfile.role === 'admin');
 
@@ -289,9 +295,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                 aria-expanded={showAlertsMenu}
               >
                 <Bell className="w-3.5 h-3.5" />
-                {activeAlerts.length > 0 && (
-                  <span className="absolute -top-1 -right-1 bg-emerald-600 text-white text-[9px] font-bold min-w-[15px] h-[15px] px-0.5 rounded-full flex items-center justify-center shadow-xs">
-                    {activeAlerts.length}
+                {bellCount > 0 && (
+                  <span
+                    className={`absolute -top-1 -right-1 text-white text-[9px] font-bold min-w-[15px] h-[15px] px-0.5 rounded-full flex items-center justify-center shadow-xs ${
+                      unreadNotifications.length > 0 ? 'bg-rose-600' : 'bg-emerald-600'
+                    }`}
+                  >
+                    {bellCount}
                   </span>
                 )}
               </button>
@@ -299,11 +309,13 @@ export const Navbar: React.FC<NavbarProps> = ({
               {showAlertsMenu && (
                 <div
                   role="menu"
-                  aria-label="Alerte de preț active"
+                  aria-label="Alerte și notificări de preț"
                   className="absolute right-0 top-full mt-1.5 w-76 sm:w-80 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-3 z-50 animate-in fade-in zoom-in-95"
                 >
                   <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800 mb-2">
-                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100">Alerte de preț active</span>
+                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                      Notificări &amp; Alerte ({unreadNotifications.length} noi)
+                    </span>
                     <button
                       type="button"
                       onClick={() => handleNavigate('price-history')}
@@ -313,10 +325,43 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
                   </div>
 
+                  {unreadNotifications.length > 0 && (
+                    <div className="space-y-1.5 mb-2.5 pb-2 border-b border-slate-100 dark:border-slate-800 max-h-40 overflow-y-auto">
+                      {unreadNotifications.slice(0, 5).map(notif => (
+                        <div
+                          key={notif.id}
+                          className="p-2 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200/70 dark:border-emerald-800/60 flex items-start justify-between gap-2"
+                        >
+                          <div
+                            onClick={() => handleNavigate('price-history')}
+                            className="min-w-0 cursor-pointer"
+                          >
+                            <span className="text-[11px] font-bold text-emerald-900 dark:text-emerald-200 block line-clamp-1">
+                              {notif.title}
+                            </span>
+                            <span className="text-[11px] text-slate-600 dark:text-slate-300 block line-clamp-2">
+                              {notif.message}
+                            </span>
+                          </div>
+                          {onMarkNotificationRead && (
+                            <button
+                              type="button"
+                              onClick={() => onMarkNotificationRead(notif.id)}
+                              className="p-1 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 rounded cursor-pointer shrink-0"
+                              title="Marchează citit"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {activeAlerts.length === 0 ? (
                     <div className="text-center py-4 px-2">
                       <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">Nu ai nicio alertă de preț activă.</p>
-                      <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">Adaugă alerte din catalogul de produse.</p>
+                      <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">Adaugă alerte din catalog sau din lista ta.</p>
                     </div>
                   ) : (
                     <div className="space-y-1.5 max-h-56 overflow-y-auto">
@@ -332,7 +377,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                             </span>
                             <TrendingDown className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 ml-1" />
                           </div>
-                          <div className="flex items-center justify-between mt-1 text-[11px] text-slate-600 dark:text-slate-400">
+                          <div className="flex items-center justify-between mt-1 text-[11px] text-slate-600 dark:text-slate-400 tabular-nums">
                             <span>Țintă: {alert.targetPrice.toFixed(2)} lei</span>
                             <span className="font-bold text-emerald-700 dark:text-emerald-400">
                               Acum: {alert.currentLowestPrice.toFixed(2)} lei
