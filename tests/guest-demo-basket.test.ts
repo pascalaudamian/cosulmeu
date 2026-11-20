@@ -364,7 +364,11 @@ describe('Guest Demo Basket & Reset la Login', () => {
       SAMPLE_STORES
     );
     assert.strictEqual(comparisons.length, 3);
-    assert.ok(comparisons.some(c => c.isWinner));
+    assert.ok(
+      comparisons.every(c => !c.isWinner && !c.isCompleteBasket),
+      'Magazinele cu acoperire parțială nu pot fi declarate cel mai ieftin coș complet'
+    );
+    assert.strictEqual(comparisons[0].store.id, 'kaufland');
     assert.ok(comparisons.some(c => c.availableItems.length >= 3));
   });
 

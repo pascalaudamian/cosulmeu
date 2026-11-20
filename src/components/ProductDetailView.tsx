@@ -30,7 +30,9 @@ import {
   Pause,
   Play,
   Edit2,
-  Trash2
+  Trash2,
+  ArrowRightLeft,
+  Scale
 } from 'lucide-react';
 import {
   PriceAlert,
@@ -41,13 +43,16 @@ import {
   ProductOffer,
   PriceObservation,
   ShoppingList,
-  PriceDataQualityAssessment
+  PriceDataQualityAssessment,
+  ProductAlternativesResult,
+  ProductAlternativeKind
 } from '../types.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 import { PriceAlertService } from '../services/PriceAlertService.js';
 import { PriceQualityClassifier } from '../services/PriceQualityClassifier.js';
+import { ProductAlternativesService } from '../services/ProductAlternativesService.js';
 import { StorageService } from '../services/StorageService.js';
-import { STORES } from '../data/mockData.js';
+import { STORES, PRODUCTS } from '../data/mockData.js';
 import { getSafeProductImageSrc } from '../utils/urlSecurity.js';
 import { ProductPriceTrend } from './ProductPriceTrend.js';
 
@@ -57,6 +62,8 @@ interface ProductDetailViewProps {
   onNavigateToCategory?: (category: string) => void;
   activeList?: ShoppingList;
   onAddToList?: (productId: string, productName: string, product?: Product) => Promise<boolean> | boolean | void;
+  onSelectProduct?: (productId: string) => void;
+  useLoyaltyCards?: boolean;
   onCreateAlertForProduct?: (product: Product, suggestedPrice?: number) => void;
   productAlerts?: PriceAlert[];
   onSaveProductAlert?: (alert: PriceAlert) => void;
@@ -78,6 +85,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   onNavigateToCategory,
   activeList,
   onAddToList,
+  onSelectProduct,
+  useLoyaltyCards = true,
   onCreateAlertForProduct,
   productAlerts = [],
   onSaveProductAlert,
@@ -85,6 +94,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   onDeleteProductAlert
 }) => {
   const [loading, setLoading] = useState<boolean>(true);
+  const [alternativesData, setAlternativesData] = useState<ProductAlternativesResult | null>(null);
+  const [alternativesLoading, setAlternativesLoading] = useState<boolean>(false);
   const [data, setData] = useState<{
     product: Product;
     comparison: any;
@@ -166,6 +177,64 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       isMounted = false;
     };
   }, [productId]);
+
+  useEffect(() => {
+    let isMounted = true;
+    setAlternativesLoading(true);
+    fetch(`/api/products/${encodeURIComponent(productId)}/alternatives?useLoyaltyCards=${useLoyaltyCards ? 'true' : 'false'}`)
+      .then(res => res.json())
+      .then(resData => {
+        if (!isMounted) return;
+        if (resData?.success && resData.alternatives) {
+          setAlternativesData(resData.alternatives as ProductAlternativesResult);
+        } else {
+          const allProductsRaw = StorageService.getAllProducts();
+          const allProducts = allProductsRaw.length > 0 ? allProductsRaw : PRODUCTS;
+          const targetProduct = allProducts.find(p => p.id === productId);
+          if (targetProduct) {
+            const allOffers = StorageService.getProductOffers();
+            setAlternativesData(
+              ProductAlternativesService.getAlternatives({
+                targetProduct,
+                allProducts,
+                allOffers,
+                stores: STORES,
+                useLoyaltyCards
+              })
+            );
+          } else {
+            setAlternativesData(null);
+          }
+        }
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        const allProductsRaw = StorageService.getAllProducts();
+        const allProducts = allProductsRaw.length > 0 ? allProductsRaw : PRODUCTS;
+        const targetProduct = allProducts.find(p => p.id === productId);
+        if (targetProduct) {
+          const allOffers = StorageService.getProductOffers();
+          setAlternativesData(
+            ProductAlternativesService.getAlternatives({
+              targetProduct,
+              allProducts,
+              allOffers,
+              stores: STORES,
+              useLoyaltyCards
+            })
+          );
+        } else {
+          setAlternativesData(null);
+        }
+      })
+      .finally(() => {
+        if (isMounted) setAlternativesLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [productId, useLoyaltyCards]);
 
   // SEO & Schema.org JSON-LD structured data management
   useEffect(() => {
@@ -879,6 +948,130 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                       </div>
                     </div>
                   )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* SECȚIUNEA 1B: Produse alternative & comparație pe preț normalizat */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/90 dark:border-slate-800 p-6 sm:p-8 shadow-xs mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-slate-100 dark:border-slate-800 mb-5">
+          <div>
+            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <ArrowRightLeft className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              <span>Produse alternative & economii pe unitate</span>
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Comparație bazată strict pe prețul normalizat ({alternativesData?.referenceNormalizedUnitLabel || 'lei/unitate'}) și compatibilitate de categorie.
+            </p>
+          </div>
+          {alternativesData?.referenceNormalizedUnitPrice && (
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 tabular-nums self-start sm:self-auto">
+              <Scale className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <span>
+                Referință produs: {PriceComparisonService.formatRon(alternativesData.referenceNormalizedUnitPrice)} / {alternativesData.referenceNormalizedUnitLabel}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {alternativesLoading ? (
+          <div className="py-8 text-center text-xs text-slate-500 dark:text-slate-400 animate-pulse">
+            Se calculează alternativele compatibile pe unitate de măsură...
+          </div>
+        ) : !alternativesData || alternativesData.totalCount === 0 ? (
+          <div className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/80 text-xs text-slate-600 dark:text-slate-300">
+            Nu am găsit în acest moment alternative compatibile cu oferte active valide în catalog pentru acest produs.
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {(
+              [
+                { key: 'same_product_other_retailer', title: 'Același produs la alt retailer' },
+                { key: 'same_product_other_size', title: 'Același produs în alt gramaj' },
+                { key: 'private_label', title: 'Marcă proprie' },
+                { key: 'alternative_brand', title: 'Branduri alternative' },
+                { key: 'similar_product', title: 'Produse similare compatibile' }
+              ] as Array<{ key: ProductAlternativeKind; title: string }>
+            ).map(group => {
+              const items = alternativesData.groups[group.key] || [];
+              if (items.length === 0) return null;
+              return (
+                <div key={group.key} className="space-y-2.5">
+                  <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    {group.title} ({items.length})
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {items.map((alt, idx) => (
+                      <div
+                        key={`${group.key}-${alt.product.id}-${alt.store.id}-${idx}`}
+                        className="p-3.5 rounded-2xl border border-slate-200/90 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex flex-col justify-between gap-2.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-bold text-sm text-slate-900 dark:text-slate-100 truncate">
+                                {alt.product.name}
+                              </span>
+                              {alt.isPrivateLabel && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300">
+                                  Marcă proprie
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                              {alt.product.brand || 'Generic'} · {alt.product.packageWeightOrVolume} {alt.product.packageUnit} · La <strong>{alt.store.name}</strong>
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0 tabular-nums">
+                            <span className="font-black text-base text-slate-900 dark:text-slate-100 block">
+                              {PriceComparisonService.formatRon(alt.price)}
+                            </span>
+                            <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 block">
+                              {PriceComparisonService.formatRon(alt.normalizedUnitPrice)} / {alt.normalizedUnitLabel}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-700/70">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            {alt.isCheaperNormalized && alt.savingsPercent > 0 ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 tabular-nums">
+                                -{alt.savingsPercent.toFixed(0)}% / {alt.normalizedUnitLabel}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                                {alt.compatibilityReasonRo}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {onSelectProduct && alt.product.id !== product.id && (
+                              <button
+                                type="button"
+                                onClick={() => onSelectProduct(alt.product.id)}
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"
+                              >
+                                Vezi
+                              </button>
+                            )}
+                            {onAddToList && (
+                              <button
+                                type="button"
+                                onClick={() => void onAddToList(alt.product.id, alt.product.name, alt.product)}
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>Listă</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               );
             })}

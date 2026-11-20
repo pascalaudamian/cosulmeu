@@ -424,7 +424,7 @@ export const LEGAL_CONFIG = {
     country: 'România',
     contactEmail: '[De completat: Adresa oficială de email pentru contact]',
     contactPhone: '[De completat (opțional): Număr de telefon de contact]',
-    website: 'https://cosulmeu.vercel.app/',
+    website: 'https://cosulmeu.online/',
     activityDescription: 'Administrarea și actualizarea platformei Coșul Meu',
     businessRegistrationStatus:
       'Platforma este administrată și actualizată de o persoană fizică și nu este prezentată ca fiind operată de o societate comercială.'

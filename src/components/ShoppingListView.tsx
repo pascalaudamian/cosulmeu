@@ -18,12 +18,32 @@ import {
   AlertTriangle,
   RotateCcw,
   Bell,
-  Split
+  Split,
+  Bot,
+  Barcode,
+  Users,
+  Lock,
+  ArrowRightLeft,
+  Radio
 } from 'lucide-react';
-import { ShoppingList, ShoppingListItem, ProductCategory, UnitType, Product, ProductOffer, Store } from '../types.js';
+import {
+  ShoppingList,
+  ShoppingListItem,
+  ProductCategory,
+  UnitType,
+  Product,
+  ProductOffer,
+  Store,
+  ProductAlternativeRecommendation
+} from '../types.js';
 import { StorageService } from '../services/StorageService.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
+import { ProductAlternativesService } from '../services/ProductAlternativesService.js';
+import { STORES as MOCK_STORES } from '../data/mockData.js';
 import { BasketOptimizerPanel } from './BasketOptimizerPanel.js';
+import { SharedListModal } from './SharedListModal.js';
+import { BarcodeScannerModal } from './BarcodeScannerModal.js';
+import { ShoppingAssistantPanel } from './ShoppingAssistantPanel.js';
 
 interface ShoppingListViewProps {
   lists: ShoppingList[];
@@ -38,6 +58,15 @@ interface ShoppingListViewProps {
     list: ShoppingList,
     options?: { alertType?: 'below_target' | 'any_drop' | 'interval_low'; intervalDays?: 30 | 90 | 180 | 365 }
   ) => void;
+  isAuthenticated?: boolean;
+  accessToken?: string;
+  currentUserId?: string;
+  useLoyaltyCards?: boolean;
+  userCity?: string;
+  realtimeConnected?: boolean;
+  onCollaborationUpdated?: () => void;
+  onAddProductToList?: (productId: string, productName: string, productData?: Product) => Promise<boolean>;
+  onSelectProduct?: (productId: string) => void;
 }
 
 const CATEGORIES: ProductCategory[] = [
@@ -64,7 +93,16 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   catalogProducts,
   catalogOffers,
   catalogStores,
-  onCreateAlertsFromList
+  onCreateAlertsFromList,
+  isAuthenticated = false,
+  accessToken,
+  currentUserId,
+  useLoyaltyCards = true,
+  userCity,
+  realtimeConnected = false,
+  onCollaborationUpdated,
+  onAddProductToList,
+  onSelectProduct
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Toate');
@@ -76,7 +114,31 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   const [copiedFeedback, setCopiedFeedback] = useState(false);
   const [showOptimizer, setShowOptimizer] = useState(false);
   const [showListAlertsMenu, setShowListAlertsMenu] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showBarcodeModal, setShowBarcodeModal] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(false);
   const optimizerSectionRef = React.useRef<HTMLDivElement>(null);
+
+  const isReadOnlyViewer = activeList.myRole === 'viewer';
+  const isUuidList = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(activeList.id);
+
+  const logListActivity = (
+    action: 'item_added' | 'item_updated' | 'item_checked' | 'item_unchecked' | 'item_removed' | 'list_renamed',
+    itemName?: string,
+    details?: Record<string, unknown>
+  ) => {
+    if (!isAuthenticated || !accessToken || !isUuidList || !activeList.isShared) return;
+    void fetch(`/api/lists/${encodeURIComponent(activeList.id)}/activity`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ action, itemName, details })
+    }).catch(() => {
+      // Best-effort collaboration feed logging
+    });
+  };
 
   // Custom product add modal state
   const [showCustomModal, setShowCustomModal] = useState(false);
@@ -85,12 +147,43 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   const [customCategory, setCustomCategory] = useState<ProductCategory>('Produse de bază');
   const [customQuantity, setCustomQuantity] = useState(1);
   const [customUnit, setCustomUnit] = useState<UnitType>('buc');
-  const [customEstPrice, setCustomEstPrice] = useState<number>(10);
+  const [customEstPrice, setCustomEstPrice] = useState<string>('');
 
   const allCatalogProducts = useMemo(
     () => (catalogProducts && catalogProducts.length > 0 ? catalogProducts : StorageService.getAllProducts()),
     [catalogProducts]
   );
+  const allCatalogOffers = useMemo(
+    () => (catalogOffers && catalogOffers.length > 0 ? catalogOffers : StorageService.getProductOffers()),
+    [catalogOffers]
+  );
+  const allCatalogStores = useMemo(
+    () => (catalogStores && catalogStores.length > 0 ? catalogStores : MOCK_STORES),
+    [catalogStores]
+  );
+
+  // Cheaper compatible alternatives per catalog-matched item in activeList
+  const cheaperAltByItemId = useMemo(() => {
+    const map = new Map<string, ProductAlternativeRecommendation>();
+    for (const item of activeList.items) {
+      if (!item.productId) continue;
+      const targetProduct = allCatalogProducts.find(p => p.id === item.productId);
+      if (!targetProduct) continue;
+      const altRes = ProductAlternativesService.getAlternatives({
+        targetProduct,
+        allProducts: allCatalogProducts,
+        allOffers: allCatalogOffers,
+        stores: allCatalogStores,
+        useLoyaltyCards,
+        limitPerGroup: 2
+      });
+      const best = altRes?.cheaperNormalizedAlternatives?.[0];
+      if (best && best.savingsPercent >= 3) {
+        map.set(item.id, best);
+      }
+    }
+    return map;
+  }, [activeList.items, allCatalogProducts, allCatalogOffers, allCatalogStores, useLoyaltyCards]);
 
   // Filter autocomplete suggestions based on search query
   const autocompleteSuggestions = useMemo(() => {
@@ -117,11 +210,11 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
 
   // Add catalog product to active list
   const handleAddCatalogProduct = (product: Product) => {
+    if (isReadOnlyViewer) return;
     const existingIndex = activeList.items.findIndex(i => i.productId === product.id);
 
     let updatedItems: ShoppingListItem[];
     if (existingIndex >= 0) {
-      // Increment quantity
       updatedItems = activeList.items.map((item, idx) =>
         idx === existingIndex ? { ...item, quantity: item.quantity + 1 } : item
       );
@@ -146,13 +239,42 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       l.id === activeList.id ? { ...l, items: updatedItems, updatedAt: new Date().toISOString() } : l
     );
     saveLists(updatedLists);
+    logListActivity('item_added', product.name);
     setSearchQuery('');
+  };
+
+  // Replace an item with a cheaper compatible alternative
+  const handleReplaceWithAlternative = (itemId: string, alt: ProductAlternativeRecommendation) => {
+    if (isReadOnlyViewer) return;
+    const updatedItems = activeList.items.map(item =>
+      item.id === itemId
+        ? {
+            ...item,
+            productId: alt.product.id,
+            name: alt.product.name,
+            brand: alt.product.brand,
+            category: alt.product.category,
+            unit: alt.product.defaultUnit || item.unit,
+            barcode: alt.product.barcode,
+            referencePrice: alt.price,
+            estimatedPrice: alt.price
+          }
+        : item
+    );
+    const updatedLists = lists.map(l =>
+      l.id === activeList.id ? { ...l, items: updatedItems, updatedAt: new Date().toISOString() } : l
+    );
+    saveLists(updatedLists);
+    logListActivity('item_updated', alt.product.name, { replacedItemId: itemId });
   };
 
   // Add custom unlisted product
   const handleAddCustomProduct = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customName.trim()) return;
+    if (isReadOnlyViewer || !customName.trim()) return;
+
+    const parsedCustomPrice = customEstPrice.trim() ? parseFloat(customEstPrice) : NaN;
+    const validCustomPrice = Number.isFinite(parsedCustomPrice) && parsedCustomPrice > 0 ? parsedCustomPrice : undefined;
 
     const newItem: ShoppingListItem = {
       id: crypto.randomUUID(),
@@ -162,8 +284,8 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       quantity: customQuantity,
       unit: customUnit,
       checked: false,
-      referencePrice: customEstPrice,
-      estimatedPrice: customEstPrice
+      referencePrice: validCustomPrice,
+      estimatedPrice: validCustomPrice
     };
 
     const updatedItems = [newItem, ...activeList.items];
@@ -171,15 +293,19 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       l.id === activeList.id ? { ...l, items: updatedItems, updatedAt: new Date().toISOString() } : l
     );
     saveLists(updatedLists);
+    logListActivity('item_added', newItem.name);
 
     setCustomName('');
     setCustomBrand('');
+    setCustomEstPrice('');
     setShowCustomModal(false);
     setSearchQuery('');
   };
 
   // Toggle item check status
   const handleToggleCheck = (itemId: string) => {
+    if (isReadOnlyViewer) return;
+    const targetItem = activeList.items.find(i => i.id === itemId);
     const updatedItems = activeList.items.map(item =>
       item.id === itemId ? { ...item, checked: !item.checked } : item
     );
@@ -187,10 +313,15 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       l.id === activeList.id ? { ...l, items: updatedItems, updatedAt: new Date().toISOString() } : l
     );
     saveLists(updatedLists);
+    if (targetItem) {
+      logListActivity(targetItem.checked ? 'item_unchecked' : 'item_checked', targetItem.name);
+    }
   };
 
   // Update quantity
   const handleUpdateQuantity = (itemId: string, delta: number) => {
+    if (isReadOnlyViewer) return;
+    const targetItem = activeList.items.find(i => i.id === itemId);
     const updatedItems = activeList.items
       .map(item => {
         if (item.id === itemId) {
@@ -205,10 +336,14 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       l.id === activeList.id ? { ...l, items: updatedItems, updatedAt: new Date().toISOString() } : l
     );
     saveLists(updatedLists);
+    if (targetItem) {
+      logListActivity('item_updated', targetItem.name, { delta });
+    }
   };
 
   // Update unit
   const handleUpdateUnit = (itemId: string, newUnit: UnitType) => {
+    if (isReadOnlyViewer) return;
     const updatedItems = activeList.items.map(item =>
       item.id === itemId ? { ...item, unit: newUnit } : item
     );
@@ -220,15 +355,21 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
 
   // Remove item
   const handleRemoveItem = (itemId: string) => {
+    if (isReadOnlyViewer) return;
+    const targetItem = activeList.items.find(i => i.id === itemId);
     const updatedItems = activeList.items.filter(item => item.id !== itemId);
     const updatedLists = lists.map(l =>
       l.id === activeList.id ? { ...l, items: updatedItems, updatedAt: new Date().toISOString() } : l
     );
     saveLists(updatedLists);
+    if (targetItem) {
+      logListActivity('item_removed', targetItem.name);
+    }
   };
 
   // Clear list
   const handleClearList = () => {
+    if (isReadOnlyViewer) return;
     const updatedLists = lists.map(l =>
       l.id === activeList.id ? { ...l, items: [], updatedAt: new Date().toISOString() } : l
     );
@@ -270,11 +411,12 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
 
   // Rename list
   const handleSaveListName = () => {
-    if (!editedListName.trim()) return;
+    if (isReadOnlyViewer || activeList.myRole === 'editor' || !editedListName.trim()) return;
     const updatedLists = lists.map(l =>
       l.id === activeList.id ? { ...l, name: editedListName.trim(), updatedAt: new Date().toISOString() } : l
     );
     saveLists(updatedLists);
+    logListActivity('list_renamed', editedListName.trim());
     setIsEditingListName(false);
   };
 
@@ -293,11 +435,14 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
     setTimeout(() => setCopiedFeedback(false), 2000);
   };
 
-  // Total estimated
+  // Total estimated & unpriced items tracking (never invent fallback prices)
   const totalEstimatedCost = activeList.items.reduce(
-    (sum, item) => sum + (item.estimatedPrice || item.referencePrice || 0) * item.quantity,
+    (sum, item) => sum + ((item.estimatedPrice && item.estimatedPrice > 0 ? item.estimatedPrice : item.referencePrice && item.referencePrice > 0 ? item.referencePrice : 0) * item.quantity),
     0
   );
+  const unpricedItemsCount = activeList.items.filter(
+    item => !(item.estimatedPrice && item.estimatedPrice > 0) && !(item.referencePrice && item.referencePrice > 0)
+  ).length;
 
   const checkedCount = activeList.items.filter(i => i.checked).length;
 
@@ -323,33 +468,35 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
               <ChevronDown className="w-4 h-4 text-slate-500 dark:text-slate-400 absolute right-2.5 top-3 pointer-events-none" />
             </div>
 
-            {isEditingListName ? (
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="text"
-                  value={editedListName}
-                  onChange={e => setEditedListName(e.target.value)}
-                  className="px-2.5 py-1.5 rounded-lg border border-emerald-500 bg-white dark:bg-slate-800 text-sm font-bold text-slate-900 dark:text-slate-100 focus:outline-hidden"
-                  autoFocus
-                />
+            {!isReadOnlyViewer && activeList.myRole !== 'editor' && (
+              isEditingListName ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={editedListName}
+                    onChange={e => setEditedListName(e.target.value)}
+                    className="px-2.5 py-1.5 rounded-lg border border-emerald-500 bg-white dark:bg-slate-800 text-sm font-bold text-slate-900 dark:text-slate-100 focus:outline-hidden"
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleSaveListName}
+                    className="p-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
                 <button
-                  onClick={handleSaveListName}
-                  className="p-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 cursor-pointer"
+                  onClick={() => {
+                    setEditedListName(activeList.name);
+                    setIsEditingListName(true);
+                  }}
+                  className="p-1.5 rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                  title="Redenumește lista"
                 >
-                  <Check className="w-4 h-4" />
+                  <Edit2 className="w-4 h-4" />
                 </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => {
-                  setEditedListName(activeList.name);
-                  setIsEditingListName(true);
-                }}
-                className="p-1.5 rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
-                title="Redenumește lista"
-              >
-                <Edit2 className="w-4 h-4" />
-              </button>
+              )
             )}
 
             <button
@@ -360,8 +507,50 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             </button>
           </div>
 
-          {/* List actions: Optimize, Alerts, Duplicate, Copy, Print, Clear */}
-          <div className="flex items-center gap-1.5 self-end sm:self-auto no-print">
+          {/* List actions: AI, Scan, Share, Optimize, Alerts, Duplicate, Copy, Print, Clear */}
+          <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-auto no-print">
+            <button
+              type="button"
+              onClick={() => setShowAssistant(prev => !prev)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                showAssistant
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border-indigo-200/80 dark:border-indigo-800/70'
+              }`}
+              title="Asistent inteligent de cumpărături"
+            >
+              <Bot className="w-3.5 h-3.5" />
+              <span>Asistent AI</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowBarcodeModal(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700 border border-slate-200/80 dark:border-slate-700 transition-colors cursor-pointer"
+              title="Scanează cod de bare EAN/UPC"
+            >
+              <Barcode className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Scanează</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowShareModal(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700 border border-slate-200/80 dark:border-slate-700 transition-colors cursor-pointer"
+              title="Partajează lista și gestionează colaboratorii"
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Partajează</span>
+              {activeList.isShared && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 tabular-nums">
+                  {activeList.members?.length || 1}
+                </span>
+              )}
+              {realtimeConnected && isUuidList && (
+                <Radio className="w-3 h-3 text-emerald-500 animate-pulse" aria-label="Sincronizare Live" />
+              )}
+            </button>
+
             {activeList.items.length > 0 && (
               <button
                 type="button"
@@ -458,15 +647,25 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
               <Printer className="w-4 h-4" />
             </button>
 
-            <button
-              onClick={() => setShowClearConfirm(true)}
-              className="p-2 rounded-xl text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
-              title="Golește lista"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+            {!isReadOnlyViewer && (
+              <button
+                onClick={() => setShowClearConfirm(true)}
+                className="p-2 rounded-xl text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
+                title="Golește lista"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
+
+        {/* Viewer read-only indicator */}
+        {isReadOnlyViewer && (
+          <div className="mt-3 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/70 text-amber-800 dark:text-amber-200 text-xs font-semibold flex items-center gap-2">
+            <Lock className="w-4 h-4 shrink-0" />
+            <span>Acces doar citire (Viewer) — poți vizualiza lista și comparațiile în timp real, fără drepturi de modificare.</span>
+          </div>
+        )}
 
         {/* Search Bar & Autocomplete */}
         <div className="mt-4 relative no-print">
@@ -476,18 +675,21 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
               type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Caută lapte, ouă, piept de pui, detergent..."
-              className="w-full pl-10 pr-28 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800 hover:bg-white dark:hover:bg-slate-800/90 focus:bg-white dark:focus:bg-slate-900 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden transition-all"
+              disabled={isReadOnlyViewer}
+              placeholder={isReadOnlyViewer ? 'Filtrare produse în listă (acces viewer)...' : 'Caută lapte, ouă, piept de pui, detergent...'}
+              className="w-full pl-10 pr-28 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800 hover:bg-white dark:hover:bg-slate-800/90 focus:bg-white dark:focus:bg-slate-900 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-hidden transition-all disabled:opacity-60"
             />
-            <button
-              onClick={() => {
-                setCustomName(searchQuery);
-                setShowCustomModal(true);
-              }}
-              className="absolute right-2 top-2 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors cursor-pointer"
-            >
-              + Produs nou
-            </button>
+            {!isReadOnlyViewer && (
+              <button
+                onClick={() => {
+                  setCustomName(searchQuery);
+                  setShowCustomModal(true);
+                }}
+                className="absolute right-2 top-2 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors cursor-pointer"
+              >
+                + Produs nou
+              </button>
+            )}
           </div>
 
           {/* Autocomplete Suggestions Dropdown */}
@@ -552,6 +754,33 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
         </div>
       </div>
 
+      {/* Embedded Shopping AI Assistant Panel */}
+      {showAssistant && (
+        <div className="no-print">
+          <ShoppingAssistantPanel
+            open={showAssistant}
+            onClose={() => setShowAssistant(false)}
+            activeList={activeList}
+            catalogProducts={allCatalogProducts}
+            accessToken={accessToken}
+            useLoyaltyCards={useLoyaltyCards}
+            onAddProductToList={async (productId, productName, productData) => {
+              if (isReadOnlyViewer) return false;
+              if (onAddProductToList) {
+                const ok = await onAddProductToList(productId, productName, productData);
+                if (ok) logListActivity('item_added', productName);
+                return ok;
+              }
+              if (productData) {
+                handleAddCatalogProduct(productData);
+                return true;
+              }
+              return false;
+            }}
+          />
+        </div>
+      )}
+
       {showOptimizer && activeList.items.length > 0 ? (
         <div ref={optimizerSectionRef} className="no-print scroll-mt-24">
           <BasketOptimizerPanel
@@ -563,6 +792,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             offers={catalogOffers}
             stores={catalogStores}
             initialTransportCost={0}
+            defaultRegion={userCity}
           />
         </div>
       ) : (
@@ -589,10 +819,17 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                 )}
               </div>
               <div className="text-right tabular-nums">
-                <span className="text-xs text-slate-500 dark:text-slate-400">Total estimativ:</span>
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  {unpricedItemsCount > 0 ? 'Subtotal estimativ:' : 'Total estimativ:'}
+                </span>
                 <span className="font-display font-bold text-slate-900 dark:text-slate-100 text-sm sm:text-base ml-1.5">
                   {PriceComparisonService.formatRon(totalEstimatedCost)}
                 </span>
+                {unpricedItemsCount > 0 && (
+                  <span className="block text-[11px] text-amber-700 dark:text-amber-400 font-medium">
+                    {unpricedItemsCount} fără preț de referință
+                  </span>
+                )}
               </div>
             </div>
 
@@ -609,7 +846,9 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
               </div>
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredItems.map(item => (
+                {filteredItems.map(item => {
+                  const cheaperAlt = cheaperAltByItemId.get(item.id);
+                  return (
                   <div
                     key={item.id}
                     className={`p-3.5 sm:p-4 flex items-center justify-between gap-3 transition-colors ${
@@ -621,8 +860,11 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                     {/* Left: Checkbox & Name */}
                     <div className="flex items-center gap-3 min-w-0 flex-1">
                       <button
+                        disabled={isReadOnlyViewer}
                         onClick={() => handleToggleCheck(item.id)}
-                        className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
+                        className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors shrink-0 ${
+                          isReadOnlyViewer ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                        } ${
                           item.checked
                             ? 'bg-emerald-600 border-emerald-600 text-white'
                             : 'border-slate-300 dark:border-slate-600 hover:border-emerald-500 bg-white dark:bg-slate-800'
@@ -651,6 +893,23 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                             <span>· ~{PriceComparisonService.formatRon(item.estimatedPrice * item.quantity)}</span>
                           )}
                         </div>
+                        {cheaperAlt && !item.checked && (
+                          <div className="mt-1.5 inline-flex flex-wrap items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200/70 dark:border-emerald-800/60 text-[11px] text-emerald-800 dark:text-emerald-300">
+                            <ArrowRightLeft className="w-3 h-3 shrink-0" />
+                            <span>
+                              Alternativă ({cheaperAlt.kindLabelRo.toLowerCase()}): <strong>{cheaperAlt.product.name}</strong> (-{cheaperAlt.savingsPercent.toFixed(0)}% / {cheaperAlt.normalizedUnitLabel} la {cheaperAlt.store.name})
+                            </span>
+                            {!isReadOnlyViewer && (
+                              <button
+                                type="button"
+                                onClick={() => handleReplaceWithAlternative(item.id, cheaperAlt)}
+                                className="ml-1 font-extrabold underline hover:text-emerald-600 dark:hover:text-emerald-200 cursor-pointer"
+                              >
+                                Înlocuiește
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -659,8 +918,9 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                       {/* Quantity Stepper */}
                       <div className="flex items-center border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 overflow-hidden">
                         <button
+                          disabled={isReadOnlyViewer}
                           onClick={() => handleUpdateQuantity(item.id, item.unit === 'kg' ? -0.5 : -1)}
-                          className="px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-sm font-bold cursor-pointer"
+                          className="px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-sm font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           title="Scade cantitatea"
                         >
                           -
@@ -669,8 +929,9 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                           {item.quantity}
                         </span>
                         <button
+                          disabled={isReadOnlyViewer}
                           onClick={() => handleUpdateQuantity(item.id, item.unit === 'kg' ? 0.5 : 1)}
-                          className="px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-sm font-bold cursor-pointer"
+                          className="px-2 py-1 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-sm font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           title="Crește cantitatea"
                         >
                           +
@@ -679,9 +940,10 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
 
                       {/* Unit Selector */}
                       <select
+                        disabled={isReadOnlyViewer}
                         value={item.unit}
                         onChange={e => handleUpdateUnit(item.id, e.target.value as UnitType)}
-                        className="text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-1 px-1.5 focus:outline-hidden cursor-pointer"
+                        className="text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-1 px-1.5 focus:outline-hidden cursor-pointer disabled:opacity-50"
                       >
                         {UNITS.map(u => (
                           <option key={u} value={u}>
@@ -691,16 +953,19 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                       </select>
 
                       {/* Delete Button */}
-                      <button
-                        onClick={() => handleRemoveItem(item.id)}
-                        className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
-                        title="Șterge produsul"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {!isReadOnlyViewer && (
+                        <button
+                          onClick={() => handleRemoveItem(item.id)}
+                          className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
+                          title="Șterge produsul"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -710,7 +975,11 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             <div className="sticky bottom-16 md:bottom-6 z-30 pt-2 no-print">
               <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md p-3 sm:p-4 rounded-2xl border border-emerald-200/90 dark:border-emerald-800/70 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="tabular-nums">
-                  <span className="text-xs text-slate-500 dark:text-slate-400 block">Total estimat · {activeList.name}</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                    {unpricedItemsCount > 0
+                      ? `Subtotal estimat (${unpricedItemsCount} fără preț) · ${activeList.name}`
+                      : `Total estimat · ${activeList.name}`}
+                  </span>
                   <span className="font-display text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100">
                     {PriceComparisonService.formatRon(totalEstimatedCost)}
                   </span>
@@ -818,13 +1087,14 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">Preț estimat (lei)</label>
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">Preț estimat (opțional, lei)</label>
                   <input
                     type="number"
                     step="0.5"
                     min="0"
+                    placeholder="—"
                     value={customEstPrice}
-                    onChange={e => setCustomEstPrice(parseFloat(e.target.value) || 0)}
+                    onChange={e => setCustomEstPrice(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-hidden"
                   />
                 </div>
@@ -916,6 +1186,40 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* V2 Modals: Shared List & Barcode Scanner */}
+      <SharedListModal
+        open={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        activeList={activeList}
+        isAuthenticated={isAuthenticated}
+        accessToken={accessToken}
+        currentUserId={currentUserId}
+        onCollaborationUpdated={onCollaborationUpdated}
+      />
+
+      <BarcodeScannerModal
+        open={showBarcodeModal}
+        onClose={() => setShowBarcodeModal(false)}
+        accessToken={accessToken}
+        onAddToList={async (productId, productName, productData) => {
+          if (isReadOnlyViewer) return false;
+          if (onAddProductToList) {
+            const ok = await onAddProductToList(productId, productName, productData);
+            if (ok) logListActivity('item_added', productName);
+            return ok;
+          }
+          if (productData) {
+            handleAddCatalogProduct(productData);
+            return true;
+          }
+          return false;
+        }}
+        onViewProduct={id => {
+          setShowBarcodeModal(false);
+          if (onSelectProduct) onSelectProduct(id);
+        }}
+      />
     </div>
   );
 };

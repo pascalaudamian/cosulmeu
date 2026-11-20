@@ -23,17 +23,19 @@ import {
   Sun,
   Moon,
   Monitor,
-  Palette
+  Palette,
+  Wallet
 } from 'lucide-react';
-import { UserProfile, ThemeMode } from '../types.js';
+import { PersonalBudgetSettings, Product, Receipt, UserProfile, ThemeMode } from '../types.js';
 import { StorageService } from '../services/StorageService.js';
 import { ROMANIAN_CITIES, STORES } from '../data/mockData.js';
 import { useAuth } from '../auth/AuthProvider.js';
 import { supabase } from '../lib/supabase.js';
 import { ProfileGdprSection } from './ProfileGdprSection.js';
+import { PersonalBudgetSection } from './PersonalBudgetSection.js';
 import type { LegalRoutePath } from '../config/legalConfig.js';
 
-export type ProfileTab = 'profile' | 'privacy';
+export type ProfileTab = 'profile' | 'budget' | 'privacy';
 
 interface ProfileViewProps {
   userProfile: UserProfile;
@@ -46,6 +48,10 @@ interface ProfileViewProps {
   onOpenCookieSettings?: () => void;
   onNavigateLegal?: (path: LegalRoutePath) => void;
   initialTab?: ProfileTab;
+  receipts?: Receipt[];
+  catalogProducts?: Product[];
+  accessToken?: string;
+  onSaveBudgetSettings?: (next: PersonalBudgetSettings) => void | Promise<void>;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -58,7 +64,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onChangeTheme,
   onOpenCookieSettings,
   onNavigateLegal,
-  initialTab = 'profile'
+  initialTab = 'profile',
+  receipts = [],
+  catalogProducts = [],
+  accessToken,
+  onSaveBudgetSettings
 }) => {
   const { user, signOut, updatePassword } = useAuth();
   const [activeTab, setActiveTab] = useState<ProfileTab>(initialTab);
@@ -302,6 +312,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         >
           <User className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
           <span>Profil și preferințe</span>
+        </button>
+
+        <button
+          id="profile-tab-budget"
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'budget'}
+          aria-controls="profile-panel-budget"
+          onClick={() => setActiveTab('budget')}
+          className={`flex-1 min-w-[180px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 transition-all cursor-pointer ${
+            activeTab === 'budget'
+              ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-xs border border-slate-200/80 dark:border-slate-700'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+          }`}
+        >
+          <Wallet className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span>Buget și cheltuieli</span>
         </button>
 
         <button
@@ -788,6 +815,40 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 : ' Ai acces privat deplin la listele personale, bonuri scanate și alerte, protejate prin PostgreSQL Row Level Security (RLS). Rolul de administrator este protejat împotriva auto-escaladării.'}
             </p>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'budget' && (
+        <div
+          id="profile-panel-budget"
+          role="tabpanel"
+          aria-labelledby="profile-tab-budget"
+        >
+          <PersonalBudgetSection
+            receipts={receipts}
+            catalogProducts={catalogProducts}
+            initialSettings={{
+              monthlyBudget: userProfile.monthlyBudget ?? null,
+              weeklyBudget: userProfile.weeklyBudget ?? null,
+              alertThresholdPct: userProfile.budgetAlertThresholdPct ?? 80
+            }}
+            isAuthenticated={Boolean(user)}
+            accessToken={accessToken}
+            onSaveSettings={async next => {
+              const updated: UserProfile = {
+                ...profile,
+                monthlyBudget: next.monthlyBudget,
+                weeklyBudget: next.weeklyBudget,
+                budgetAlertThresholdPct: next.alertThresholdPct
+              };
+              setProfile(updated);
+              if (onSaveBudgetSettings) {
+                await onSaveBudgetSettings(next);
+              } else {
+                onUpdateProfile(updated);
+              }
+            }}
+          />
         </div>
       )}
 

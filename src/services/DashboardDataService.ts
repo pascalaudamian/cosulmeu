@@ -1,6 +1,7 @@
 import type {
   ConfidenceLevel,
   InAppPriceNotification,
+  PersonalBudgetSettings,
   PriceAlert,
   PriceAlertType,
   PriceHistoryInterval,
@@ -8,6 +9,9 @@ import type {
   ProductOffer,
   Receipt,
   ReceiptItem,
+  SharedListActivityEntry,
+  SharedListMember,
+  SharedListRole,
   ShoppingList,
   ShoppingListItem,
   Store,
@@ -69,7 +73,8 @@ const VALID_VERIFICATION_STATUSES = new Set<VerificationStatus>([
   'pending',
   'rejected',
   'expired',
-  'demo'
+  'demo',
+  'isolated'
 ]);
 const VALID_CONFIDENCE_LEVELS = new Set<ConfidenceLevel>(['high', 'medium', 'low']);
 
@@ -567,14 +572,97 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
   throwIfError(alertsResult.error, 'Nu am putut prelua alertele contului');
   throwIfError(profileResult.error, 'Nu am putut prelua preferințele contului');
 
-  const listRows = listsResult.data || [];
-  const listIds = listRows.map(row => stringValue(row.id)).filter(Boolean);
+  let sharedMemberRows: DatabaseRow[] = [];
+  let sharedListRows: DatabaseRow[] = [];
+  try {
+    const { data: myMemberships, error: membErr } = await supabase
+      .from('shopping_list_members')
+      .select('id,list_id,user_id,role,display_name,email_masked,joined_at')
+      .eq('user_id', userId);
+    if (!membErr && Array.isArray(myMemberships) && myMemberships.length > 0) {
+      sharedMemberRows = myMemberships;
+      const ownedIds = new Set((listsResult.data || []).map(row => stringValue(row.id)));
+      const externalListIds = myMemberships
+        .map(m => stringValue(m.list_id))
+        .filter(id => id && !ownedIds.has(id));
+      if (externalListIds.length > 0) {
+        const { data: extLists } = await supabase
+          .from('shopping_lists')
+          .select('id,user_id,name,description,is_archived,created_at,updated_at')
+          .in('id', externalListIds);
+        if (Array.isArray(extLists)) {
+          sharedListRows = extLists;
+        }
+      }
+    }
+  } catch {
+    // Migration 013 may not be applied yet — keep V1 lists cleanly
+  }
+
+  const listRows = [...(listsResult.data || []), ...sharedListRows];
+  const listIds = Array.from(new Set(listRows.map(row => stringValue(row.id)).filter(Boolean)));
   const itemsResult = listIds.length
     ? await supabase.from('shopping_list_items').select(
         'id,list_id,product_id,product_name,quantity,unit,notes,is_checked,created_at,updated_at'
       ).in('list_id', listIds).order('created_at', { ascending: false })
     : { data: [], error: null };
   throwIfError(itemsResult.error, 'Nu am putut prelua produsele listelor');
+
+  const membersByListId = new Map<string, SharedListMember[]>();
+  const activityByListId = new Map<string, SharedListActivityEntry[]>();
+  if (listIds.length > 0) {
+    try {
+      const [allMembersRes, recentActivityRes] = await Promise.all([
+        supabase
+          .from('shopping_list_members')
+          .select('id,list_id,user_id,role,display_name,email_masked,joined_at')
+          .in('list_id', listIds),
+        supabase
+          .from('shopping_list_activity')
+          .select('id,list_id,actor_user_id,actor_name,action_type,target_name,details,created_at')
+          .in('list_id', listIds)
+          .order('created_at', { ascending: false })
+          .limit(60)
+      ]);
+      if (!allMembersRes.error && Array.isArray(allMembersRes.data)) {
+        for (const m of allMembersRes.data) {
+          const lId = stringValue(m.list_id);
+          const arr = membersByListId.get(lId) || [];
+          arr.push({
+            id: stringValue(m.id),
+            listId: lId,
+            userId: stringValue(m.user_id),
+            role: (['owner', 'editor', 'viewer'].includes(stringValue(m.role))
+              ? stringValue(m.role)
+              : 'viewer') as SharedListRole,
+            displayName: stringValue(m.display_name, 'Colaborator'),
+            emailMasked: stringValue(m.email_masked) || undefined,
+            joinedAt: stringValue(m.joined_at, new Date().toISOString())
+          });
+          membersByListId.set(lId, arr);
+        }
+      }
+      if (!recentActivityRes.error && Array.isArray(recentActivityRes.data)) {
+        for (const a of recentActivityRes.data) {
+          const lId = stringValue(a.list_id);
+          const arr = activityByListId.get(lId) || [];
+          arr.push({
+            id: stringValue(a.id),
+            listId: lId,
+            actorUserId: stringValue(a.actor_user_id) || undefined,
+            actorName: stringValue(a.actor_name, 'Utilizator'),
+            actionType: stringValue(a.action_type) as SharedListActivityEntry['actionType'],
+            targetName: stringValue(a.target_name) || undefined,
+            details: recordValue(a.details),
+            createdAt: stringValue(a.created_at, new Date().toISOString())
+          });
+          activityByListId.set(lId, arr);
+        }
+      }
+    } catch {
+      // Ignore if migration 013 is pending
+    }
+  }
 
   const preferences = recordValue(profileResult.data?.preferences);
   const trackedProductIds = getTrackedIds(preferences);
@@ -595,14 +683,35 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
     itemsByListId.set(listId, items);
   }
 
-  const shoppingLists: ShoppingList[] = listRows.map(row => ({
-    id: stringValue(row.id),
-    name: stringValue(row.name, 'Lista mea'),
-    items: itemsByListId.get(stringValue(row.id)) || [],
-    createdAt: stringValue(row.created_at, new Date().toISOString()),
-    updatedAt: stringValue(row.updated_at, stringValue(row.created_at, new Date().toISOString())),
-    isArchived: Boolean(row.is_archived)
-  }));
+  const myRoleByListId = new Map<string, SharedListRole>();
+  for (const m of sharedMemberRows) {
+    const roleStr = stringValue(m.role);
+    if (roleStr === 'owner' || roleStr === 'editor' || roleStr === 'viewer') {
+      myRoleByListId.set(stringValue(m.list_id), roleStr);
+    }
+  }
+
+  const shoppingLists: ShoppingList[] = listRows.map(row => {
+    const listId = stringValue(row.id);
+    const ownerId = stringValue(row.user_id);
+    const members = membersByListId.get(listId) || [];
+    const recentActivity = activityByListId.get(listId) || [];
+    const resolvedRole: SharedListRole =
+      ownerId === userId ? 'owner' : (myRoleByListId.get(listId) || 'viewer');
+    return {
+      id: listId,
+      name: stringValue(row.name, 'Lista mea'),
+      items: itemsByListId.get(listId) || [],
+      createdAt: stringValue(row.created_at, new Date().toISOString()),
+      updatedAt: stringValue(row.updated_at, stringValue(row.created_at, new Date().toISOString())),
+      isArchived: Boolean(row.is_archived),
+      ownerId,
+      myRole: resolvedRole,
+      isShared: members.length > 0 || ownerId !== userId,
+      members,
+      recentActivity
+    };
+  });
 
   const offersByProduct = new Map<string, ProductOffer[]>();
   for (const offer of catalog.productOffers) {
@@ -951,20 +1060,36 @@ export async function saveShoppingListsForUser(
     items: list.items.map(item => productIds.has(item.productId || '') ? item : { ...item, productId: undefined })
   }));
 
-  const listRows = safeLists.map(list => ({
-    id: list.id,
-    user_id: userId,
-    name: list.name,
-    description: null,
-    is_archived: Boolean(list.isArchived),
-    updated_at: list.updatedAt || new Date().toISOString()
-  }));
-  for (const batch of chunks(listRows)) {
+  // Do not allow viewer collaborators to persist mutations; preserve their existing items untouched
+  const currentById = new Map(currentLists.map(l => [l.id, l]));
+  const sanitizedLists = safeLists.map(list => {
+    const existing = currentById.get(list.id);
+    const role = existing?.myRole || list.myRole;
+    if (role === 'viewer' && existing) {
+      return existing;
+    }
+    return list;
+  });
+
+  // Only list owners (or creators of new local lists) upsert shopping_lists metadata
+  const ownedListRows = sanitizedLists
+    .filter(list => !list.ownerId || list.ownerId === userId || list.myRole === 'owner')
+    .map(list => ({
+      id: list.id,
+      user_id: userId,
+      name: list.name,
+      description: null,
+      is_archived: Boolean(list.isArchived),
+      updated_at: list.updatedAt || new Date().toISOString()
+    }));
+  for (const batch of chunks(ownedListRows)) {
     const { error } = await supabase.from('shopping_lists').upsert(batch, { onConflict: 'id' });
     throwIfError(error, 'Nu am putut salva listele de cumpărături');
   }
 
-  const itemRows = safeLists.flatMap(list => list.items.map(item => ({
+  // Owners and editors can sync shopping_list_items; viewers are skipped
+  const editableLists = sanitizedLists.filter(list => list.myRole !== 'viewer');
+  const itemRows = editableLists.flatMap(list => list.items.map(item => ({
     id: item.id,
     list_id: list.id,
     product_id: item.productId || null,
@@ -980,10 +1105,12 @@ export async function saveShoppingListsForUser(
     throwIfError(error, 'Nu am putut salva produsele din listă');
   }
 
-  const nextListIds = new Set(safeLists.map(list => list.id));
+  const nextListIds = new Set(sanitizedLists.map(list => list.id));
   for (const currentList of currentLists) {
     if (!isUuid(currentList.id)) continue;
-    const nextList = safeLists.find(list => list.id === currentList.id);
+    if (currentList.myRole === 'viewer') continue;
+
+    const nextList = sanitizedLists.find(list => list.id === currentList.id);
     const nextItemIds = new Set(nextList?.items.map(item => item.id) || []);
     const removedItemIds = currentList.items.map(item => item.id).filter(id => isUuid(id) && !nextItemIds.has(id));
     if (removedItemIds.length) {
@@ -991,14 +1118,15 @@ export async function saveShoppingListsForUser(
         .eq('list_id', currentList.id).in('id', removedItemIds);
       throwIfError(error, 'Nu am putut șterge produsele eliminate din listă');
     }
-    if (!nextListIds.has(currentList.id)) {
+    const isOwner = !currentList.ownerId || currentList.ownerId === userId || currentList.myRole === 'owner';
+    if (isOwner && !nextListIds.has(currentList.id)) {
       const { error } = await supabase.from('shopping_lists').delete()
         .eq('id', currentList.id).eq('user_id', userId);
       throwIfError(error, 'Nu am putut șterge lista eliminată');
     }
   }
 
-  return safeLists;
+  return sanitizedLists;
 }
 
 export async function savePriceAlertsForUser(
@@ -1275,4 +1403,69 @@ export async function importLocalDashboardData(
     skippedTrackedProducts: snapshot.trackedProductIds.length - importedTrackedProductIds.length,
     imagesLeftOnDevice: counts.receiptsWithImages
   };
+}
+
+export async function loadPersonalBudgetSettings(userId: string): Promise<PersonalBudgetSettings | null> {
+  if (!userId) return null;
+  try {
+    const { data, error } = await supabase
+      .from('user_preferences')
+      .select('monthly_budget,weekly_budget,budget_alert_threshold_pct')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!error && data) {
+      return {
+        monthlyBudget: data.monthly_budget != null ? Number(data.monthly_budget) : null,
+        weeklyBudget: data.weekly_budget != null ? Number(data.weekly_budget) : null,
+        alertThresholdPct: Number(data.budget_alert_threshold_pct) || 80
+      };
+    }
+  } catch {
+    // Fallback to profiles.preferences
+  }
+  try {
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('preferences')
+      .eq('id', userId)
+      .maybeSingle();
+    const prefs = recordValue(profileData?.preferences);
+    if (prefs.monthlyBudget !== undefined || prefs.weeklyBudget !== undefined || prefs.budgetAlertThresholdPct !== undefined) {
+      return {
+        monthlyBudget: prefs.monthlyBudget != null ? Number(prefs.monthlyBudget) : null,
+        weeklyBudget: prefs.weeklyBudget != null ? Number(prefs.weeklyBudget) : null,
+        alertThresholdPct: Number(prefs.budgetAlertThresholdPct) || 80
+      };
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
+}
+
+export async function savePersonalBudgetSettings(
+  userId: string,
+  settings: PersonalBudgetSettings
+): Promise<void> {
+  if (!userId) return;
+  try {
+    const { error } = await supabase.from('user_preferences').upsert(
+      {
+        user_id: userId,
+        monthly_budget: settings.monthlyBudget,
+        weekly_budget: settings.weeklyBudget,
+        budget_alert_threshold_pct: settings.alertThresholdPct,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'user_id' }
+    );
+    if (!error) return;
+  } catch {
+    // Fallback to profiles.preferences if migration 013 columns not yet applied
+  }
+  await updateProfilePreferences(userId, {
+    monthlyBudget: settings.monthlyBudget,
+    weeklyBudget: settings.weeklyBudget,
+    budgetAlertThresholdPct: settings.alertThresholdPct
+  });
 }

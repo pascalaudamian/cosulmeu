@@ -62,7 +62,7 @@ assert.deepEqual(sections.confidentialitate, [
 // 4. Verifică structura operatorului persoană fizică
 assert.equal(LEGAL_CONFIG.operator.operatorType, 'individual');
 assert.equal(LEGAL_CONFIG.operator.country, 'România');
-assert.equal(LEGAL_CONFIG.operator.website, 'https://cosulmeu.vercel.app/');
+assert.equal(LEGAL_CONFIG.operator.website, 'https://cosulmeu.online/');
 assert.ok(LEGAL_CONFIG.operator.activityDescription.length > 0);
 assert.ok(LEGAL_CONFIG.operator.businessRegistrationStatus.includes('persoană fizică'));
 

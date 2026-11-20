@@ -24,7 +24,7 @@ import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
-import { Product, Receipt, Store, PriceAlert, InAppPriceNotification } from './src/types.ts';
+import { Product, ProductOffer, Receipt, Store, PriceAlert, InAppPriceNotification } from './src/types.ts';
 import { createHash } from 'node:crypto';
 import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 import { validatePublicHttpUrl } from './src/utils/urlSecurity.ts';
@@ -64,6 +64,18 @@ import {
   MARKETING_CONSENT_TEXT_VERSION,
   PRIVACY_POLICY_VERSION
 } from './src/config/legalConfig.ts';
+import {
+  assistantQueryRequestSchema,
+  barcodeSuggestionCreateSchema,
+  budgetSettingsUpdateSchema,
+  sharedListActivityCreateSchema,
+  sharedListInviteCreateSchema,
+  sharedListMemberRoleUpdateSchema
+} from './src/server/validation.ts';
+import { BudgetService } from './src/services/BudgetService.ts';
+import { ProductAlternativesService } from './src/services/ProductAlternativesService.ts';
+import { lookupProductByBarcode, normalizeBarcodeCandidates } from './src/services/BarcodeService.ts';
+import { ShoppingAssistantService } from './src/services/ShoppingAssistantService.ts';
 
 function sanitizeApiImageUrl(rawUrl?: string | null): string | undefined {
   if (!rawUrl || !rawUrl.trim()) return undefined;
@@ -95,6 +107,16 @@ const PORT = process.env.PORT || 3000;
 const isProd = process.env.NODE_ENV === 'production';
 
 app.use(express.json({ limit: '25mb' }));
+
+// Canonical domain redirect: cosulmeu.vercel.app -> https://cosulmeu.online
+app.use((req, res, next) => {
+  const rawHost = (req.headers['x-forwarded-host'] || req.hostname || '').toString().split(',')[0].trim().toLowerCase();
+  const hostOnly = rawHost.replace(/:\d+$/, '');
+  if (hostOnly === 'cosulmeu.vercel.app' && (req.method === 'GET' || req.method === 'HEAD')) {
+    return res.redirect(301, `https://cosulmeu.online${req.originalUrl || '/'}`);
+  }
+  next();
+});
 
 // Lightweight in-memory sliding-window rate limiter for public write/compute routes
 function createRateLimiter(options: { windowMs: number; maxRequests: number; messageRo: string }) {
@@ -2325,12 +2347,35 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
 // Server-side Basket Comparison endpoint
 app.post('/api/catalog/compare', publicComputeLimiter, async (req, res) => {
   try {
-    const { items = [], options = {} } = req.body;
+    const { items = [], options = {} } = req.body || {};
+    const normalizedOptions = {
+      useLoyaltyCards: typeof options?.useLoyaltyCards === 'boolean' ? options.useLoyaltyCards : true,
+      useCoupons: typeof options?.useCoupons === 'boolean' ? options.useCoupons : false,
+      region: typeof options?.region === 'string' && options.region.trim() ? options.region.trim() : undefined,
+      includeStaleOffers: typeof options?.includeStaleOffers === 'boolean' ? options.includeStaleOffers : true,
+      maxOfferAgeDays:
+        typeof options?.maxOfferAgeDays === 'number' && Number.isFinite(options.maxOfferAgeDays)
+          ? options.maxOfferAgeDays
+          : undefined
+    };
     const [allProducts, allOffers, allStores] = isPostgresConfigured()
       ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers(), DatabaseService.getStores()])
       : [StorageService.getAllProducts(), StorageService.getProductOffers(), STORES];
-    const comparisons = PriceComparisonService.compareBasketAcrossStores(items, options, allProducts, allOffers, allStores);
-    res.json({ success: true, comparisons });
+    const comparisons = PriceComparisonService.compareBasketAcrossStores(
+      items,
+      normalizedOptions,
+      allProducts,
+      allOffers,
+      allStores
+    );
+    const savingsSummary = PriceComparisonService.getPotentialSavingsForList(
+      items,
+      normalizedOptions,
+      allProducts,
+      allOffers,
+      allStores
+    );
+    res.json({ success: true, comparisons, savingsSummary });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la calculul comparativ al coșului.' });
   }
@@ -2511,6 +2556,21 @@ app.get('/api/basket/optimize/:listId', publicComputeLimiter, async (req, res) =
 
     const maxStores = Math.max(1, Math.min(8, Number(req.query.maxStores) || 3));
     const useLoyaltyCards = req.query.useLoyaltyCards !== 'false';
+    const useCoupons = req.query.useCoupons === 'true';
+    const includeStaleOffers = req.query.includeStaleOffers !== 'false';
+    const maxOfferAgeDaysRaw = Number(req.query.maxOfferAgeDays);
+    const maxOfferAgeDays =
+      Number.isFinite(maxOfferAgeDaysRaw) && maxOfferAgeDaysRaw >= 1 && maxOfferAgeDaysRaw <= 90
+        ? Math.floor(maxOfferAgeDaysRaw)
+        : undefined;
+    const region =
+      typeof req.query.region === 'string' && req.query.region.trim()
+        ? req.query.region.trim().slice(0, 80)
+        : undefined;
+    const clientRevision =
+      typeof req.query.clientRevision === 'string' && req.query.clientRevision.trim()
+        ? req.query.clientRevision.trim().slice(0, 160)
+        : undefined;
     const excludedStoreIds =
       typeof req.query.excludedStoreIds === 'string'
         ? req.query.excludedStoreIds.split(',').map(s => s.trim()).filter(Boolean)
@@ -2533,7 +2593,18 @@ app.get('/api/basket/optimize/:listId', publicComputeLimiter, async (req, res) =
     const optimization = BasketOptimizerService.optimize({
       list: { id: listId, name: ownedResult.listName },
       items: ownedResult.items,
-      options: { maxStores, useLoyaltyCards, excludedStoreIds, favoriteStoreIds, transportCostPerExtraStore: 0 },
+      options: {
+        maxStores,
+        useLoyaltyCards,
+        useCoupons,
+        includeStaleOffers,
+        maxOfferAgeDays,
+        region,
+        clientRevision,
+        excludedStoreIds,
+        favoriteStoreIds,
+        transportCostPerExtraStore: 0
+      },
       products: dataset.products,
       offers: dataset.offers,
       stores: dataset.stores
@@ -6546,6 +6617,1128 @@ app.post('/api/indexing/collect-now', async (req, res) => {
     res.json({ success: true, result });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Eroare la declanșarea colectării.' });
+  }
+});
+
+// =========================================================================
+// V2 PERSONAL SHOPPING ASSISTANT ENDPOINTS
+// =========================================================================
+
+const inMemoryBarcodeSuggestions: Array<Record<string, any>> = [];
+
+async function loadV2CatalogDataset(includeObservations = false): Promise<{
+  products: Product[];
+  offers: ProductOffer[];
+  stores: Store[];
+  observations: any[];
+}> {
+  if (isPostgresConfigured()) {
+    try {
+      const [products, offers, stores, observations] = await Promise.all([
+        DatabaseService.getProducts(),
+        DatabaseService.getOffers(),
+        DatabaseService.getStores(),
+        includeObservations ? DatabaseService.getPriceObservations() : Promise.resolve([])
+      ]);
+      if (products.length > 0) {
+        return { products, offers, stores, observations };
+      }
+    } catch {
+      // Fallback to local catalog
+    }
+  }
+  return {
+    products: StorageService.getAllProducts(),
+    offers: StorageService.getProductOffers(),
+    stores: STORES,
+    observations: includeObservations ? StorageService.getPriceObservations() : []
+  };
+}
+
+function mapSupabaseReceiptRowForBudget(row: any): Receipt {
+  const ext = (row?.extracted_data && typeof row.extracted_data === 'object') ? row.extracted_data : {};
+  const rawItems = Array.isArray(ext.items) ? ext.items : [];
+  const rawDate = row?.purchased_at
+    ? String(row.purchased_at).slice(0, 10)
+    : typeof ext.date === 'string'
+    ? ext.date
+    : String(row?.created_at || new Date().toISOString()).slice(0, 10);
+
+  return {
+    id: String(row.id),
+    storeId: String(row.store_id || ext.storeId || 'unknown'),
+    storeName: String(row.merchant_name || ext.storeName || 'Magazin'),
+    date: rawDate,
+    items: rawItems.map((it: any, idx: number) => ({
+      id: String(it.id || `item-${idx}`),
+      rawName: String(it.rawName || it.raw_name || 'Produs'),
+      matchedProductId: it.matchedProductId || it.matched_product_id || undefined,
+      quantity: Number(it.quantity) || 1,
+      unit: it.unit || 'buc',
+      unitPrice: Number(it.unitPrice ?? it.unit_price) || 0,
+      totalPrice: Number(it.totalPrice ?? it.total_price) || 0,
+      discount: Number(it.discount) || 0,
+      isSgr: Boolean(it.isSgr ?? it.is_sgr),
+      isCouponOrDiscountLine: Boolean(it.isCouponOrDiscountLine),
+      confidence: it.confidence || 'medium',
+      category: it.category || undefined
+    })),
+    subtotal: Number(ext.subtotal ?? row.total_amount) || 0,
+    discountTotal: Number(ext.discountTotal) || 0,
+    total: Number(row.total_amount ?? ext.total) || 0,
+    currency: 'RON',
+    createdAt: String(row.created_at || new Date().toISOString()),
+    verifiedStatus: row.status === 'processed' || ext.verifiedStatus === 'confirmed' ? 'confirmed' : 'draft',
+    validationStatus: ext.validationStatus || 'VALID',
+    ...(row.status === 'failed' ? { status: 'failed' } : {})
+  } as Receipt;
+}
+
+function maskEmailAddress(email?: string | null): string | undefined {
+  if (!email || !email.includes('@')) return undefined;
+  const [local, domain] = email.split('@');
+  const prefix = local.slice(0, Math.min(2, local.length));
+  return `${prefix}***@${domain}`;
+}
+
+function hashInviteToken(rawToken: string): string {
+  return createHash('sha256').update(rawToken).digest('hex');
+}
+
+async function resolveSharedListRoleAndMeta(params: {
+  auth: { user: { id: string; email?: string }; userClient: SupabaseClient };
+  listId: string;
+}): Promise<
+  | { ok: true; role: 'owner' | 'editor' | 'viewer'; list: { id: string; name: string; user_id: string } }
+  | { ok: false; status: number; error: string }
+> {
+  const { auth, listId } = params;
+  if (!UUID_STRICT_RE.test(listId)) {
+    return { ok: false, status: 400, error: 'Identificator listă invalid.' };
+  }
+
+  const adminClient = getSupabaseAdminClient();
+  const lookupClient = adminClient || auth.userClient;
+
+  const { data: listRow, error: listErr } = await lookupClient
+    .from('shopping_lists')
+    .select('id, user_id, name')
+    .eq('id', listId)
+    .maybeSingle();
+
+  if (listErr) {
+    return { ok: false, status: 500, error: 'Eroare la verificarea listei partajate.' };
+  }
+  if (!listRow) {
+    return { ok: false, status: 404, error: 'Lista de cumpărături nu a fost găsită.' };
+  }
+
+  if (listRow.user_id === auth.user.id) {
+    return { ok: true, role: 'owner', list: listRow };
+  }
+
+  const { data: memberRow, error: membErr } = await lookupClient
+    .from('shopping_list_members')
+    .select('role')
+    .eq('list_id', listId)
+    .eq('user_id', auth.user.id)
+    .maybeSingle();
+
+  if (membErr) {
+    return { ok: false, status: 500, error: 'Eroare la verificarea permisiunilor pe listă.' };
+  }
+
+  if (!memberRow || !['owner', 'editor', 'viewer'].includes(memberRow.role)) {
+    return { ok: false, status: 403, error: 'Acces interzis: nu ai permisiuni pe această listă.' };
+  }
+
+  return { ok: true, role: memberRow.role as 'owner' | 'editor' | 'viewer', list: listRow };
+}
+
+// 1. V2 Personal Budget Summary & Settings
+app.get('/api/budget/summary', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară pentru bugetul personal.' });
+    }
+
+    const [receiptsRes, prefRes, profileRes, catalogData] = await Promise.all([
+      auth.userClient
+        .from('receipts')
+        .select('id, store_id, merchant_name, purchased_at, total_amount, extracted_data, status, created_at')
+        .eq('user_id', auth.user.id)
+        .order('purchased_at', { ascending: false, nullsFirst: false })
+        .limit(500),
+      auth.userClient
+        .from('user_preferences')
+        .select('monthly_budget, weekly_budget, budget_alert_threshold_pct')
+        .eq('user_id', auth.user.id)
+        .maybeSingle(),
+      auth.userClient
+        .from('profiles')
+        .select('preferences')
+        .eq('id', auth.user.id)
+        .maybeSingle(),
+      loadV2CatalogDataset(false)
+    ]);
+
+    if (receiptsRes.error) {
+      return res.status(500).json({ success: false, error: 'Nu am putut citi bonurile contului.' });
+    }
+
+    const profilePrefs = (profileRes.data?.preferences && typeof profileRes.data.preferences === 'object')
+      ? profileRes.data.preferences
+      : {};
+    const settings = {
+      monthlyBudget:
+        prefRes.data?.monthly_budget != null
+          ? Number(prefRes.data.monthly_budget)
+          : profilePrefs.monthlyBudget != null
+          ? Number(profilePrefs.monthlyBudget)
+          : null,
+      weeklyBudget:
+        prefRes.data?.weekly_budget != null
+          ? Number(prefRes.data.weekly_budget)
+          : profilePrefs.weeklyBudget != null
+          ? Number(profilePrefs.weeklyBudget)
+          : null,
+      alertThresholdPct:
+        Number(prefRes.data?.budget_alert_threshold_pct ?? profilePrefs.budgetAlertThresholdPct ?? 80) || 80
+    };
+
+    const receipts = (receiptsRes.data || []).map(mapSupabaseReceiptRowForBudget);
+    const summary = BudgetService.calculateSummary({
+      receipts,
+      settings,
+      catalogProducts: catalogData.products
+    });
+
+    return res.json({ success: true, summary });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la calcularea bugetului personal.' });
+  }
+});
+
+app.patch('/api/budget/settings', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară pentru salvarea bugetului.' });
+    }
+
+    const parsed = budgetSettingsUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Date invalide pentru configurarea bugetului.'
+      });
+    }
+
+    const { data: existingPrefs } = await auth.userClient
+      .from('user_preferences')
+      .select('monthly_budget, weekly_budget, budget_alert_threshold_pct')
+      .eq('user_id', auth.user.id)
+      .maybeSingle();
+
+    const { data: profileRow } = await auth.userClient
+      .from('profiles')
+      .select('preferences')
+      .eq('id', auth.user.id)
+      .maybeSingle();
+    const currentProfilePrefs =
+      profileRow?.preferences && typeof profileRow.preferences === 'object' ? profileRow.preferences : {};
+
+    const nextSettings = {
+      monthlyBudget:
+        parsed.data.monthlyBudget !== undefined
+          ? parsed.data.monthlyBudget
+          : existingPrefs?.monthly_budget != null
+          ? Number(existingPrefs.monthly_budget)
+          : currentProfilePrefs.monthlyBudget ?? null,
+      weeklyBudget:
+        parsed.data.weeklyBudget !== undefined
+          ? parsed.data.weeklyBudget
+          : existingPrefs?.weekly_budget != null
+          ? Number(existingPrefs.weekly_budget)
+          : currentProfilePrefs.weeklyBudget ?? null,
+      alertThresholdPct:
+        parsed.data.alertThresholdPct !== undefined
+          ? parsed.data.alertThresholdPct
+          : Number(existingPrefs?.budget_alert_threshold_pct ?? currentProfilePrefs.budgetAlertThresholdPct ?? 80) || 80
+    };
+
+    const { error: upsertErr } = await auth.userClient.from('user_preferences').upsert(
+      {
+        user_id: auth.user.id,
+        monthly_budget: nextSettings.monthlyBudget,
+        weekly_budget: nextSettings.weeklyBudget,
+        budget_alert_threshold_pct: nextSettings.alertThresholdPct,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'user_id' }
+    );
+
+    if (upsertErr) {
+      // Fallback safely to profiles.preferences if migration 013 hasn't added columns yet
+      await auth.userClient
+        .from('profiles')
+        .upsert(
+          {
+            id: auth.user.id,
+            preferences: {
+              ...currentProfilePrefs,
+              monthlyBudget: nextSettings.monthlyBudget,
+              weeklyBudget: nextSettings.weeklyBudget,
+              budgetAlertThresholdPct: nextSettings.alertThresholdPct
+            },
+            updated_at: new Date().toISOString()
+          },
+          { onConflict: 'id' }
+        );
+    }
+
+    return res.json({ success: true, settings: nextSettings });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la actualizarea bugetului personal.' });
+  }
+});
+
+// 2. V2 Product Alternatives Endpoint
+app.get('/api/products/:id/alternatives', publicComputeLimiter, async (req, res) => {
+  try {
+    const productId = String(req.params.id || '').trim();
+    if (!productId) {
+      return res.status(400).json({ success: false, error: 'ID-ul produsului este obligatoriu.' });
+    }
+    const useLoyaltyCards = req.query.useLoyaltyCards !== 'false';
+    const dataset = await loadV2CatalogDataset(false);
+    const targetProduct = dataset.products.find(p => p.id === productId);
+    if (!targetProduct) {
+      return res.status(404).json({ success: false, error: 'Produsul nu a fost găsit în catalog.' });
+    }
+
+    const result = ProductAlternativesService.getAlternatives({
+      targetProduct,
+      allProducts: dataset.products,
+      allOffers: dataset.offers,
+      stores: dataset.stores,
+      useLoyaltyCards
+    });
+
+    return res.json({ success: true, alternatives: result, ...result });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la calcularea produselor alternative.' });
+  }
+});
+
+// 3. V2 Barcode Lookup & Moderation-first Suggestions Endpoints
+app.get('/api/catalog/barcode/:code', publicComputeLimiter, async (req, res) => {
+  try {
+    const rawCode = String(req.params.code || '').trim();
+    const candidates = normalizeBarcodeCandidates(rawCode);
+    if (candidates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Codul de bare trebuie să conțină între 6 și 14 cifre (EAN/UPC).'
+      });
+    }
+
+    const dataset = await loadV2CatalogDataset(true);
+    const lookup = lookupProductByBarcode({
+      barcode: rawCode,
+      products: dataset.products,
+      offers: dataset.offers,
+      stores: dataset.stores,
+      observations: dataset.observations
+    });
+
+    return res.json({ success: true, ...lookup });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la căutarea codului de bare în catalog.' });
+  }
+});
+
+app.post('/api/products/suggestions', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const parsed = barcodeSuggestionCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Date invalide pentru sugestia de produs.'
+      });
+    }
+
+    const hasBearerHeader = Boolean(req.headers.authorization && req.headers.authorization.startsWith('Bearer '));
+    const auth = hasBearerHeader ? await getAuthenticatedSupabaseUser(req) : null;
+    if (hasBearerHeader && !auth) {
+      return res.status(401).json({ success: false, error: 'Sesiune invalidă.' });
+    }
+
+    const data = parsed.data;
+    const suggestionRecord = {
+      id: crypto.randomUUID(),
+      user_id: auth?.user.id || null,
+      barcode: data.barcode,
+      proposed_name: data.proposedName,
+      proposed_brand: data.proposedBrand || null,
+      category: data.category,
+      package_weight_or_volume: data.packageWeightOrVolume ?? null,
+      package_unit: data.packageUnit || null,
+      observed_store_id: data.observedStoreId || null,
+      observed_price: data.observedPrice ?? null,
+      notes: data.notes || null,
+      status: 'pending' as const,
+      created_at: new Date().toISOString()
+    };
+
+    const writeClient = auth?.userClient || getSupabaseAdminClient();
+    let persistedInDb = false;
+    if (writeClient) {
+      const { error: insertErr } = await writeClient
+        .from('product_barcode_suggestions')
+        .insert(suggestionRecord);
+      if (!insertErr) {
+        persistedInDb = true;
+      }
+    }
+
+    if (!persistedInDb) {
+      inMemoryBarcodeSuggestions.push(suggestionRecord);
+    }
+
+    // IMPORTANT: Never auto-publish barcode suggestions directly into public products catalog!
+    return res.status(201).json({
+      success: true,
+      persistedInDb,
+      autoPublished: false,
+      suggestion: {
+        id: suggestionRecord.id,
+        barcode: suggestionRecord.barcode,
+        proposedName: suggestionRecord.proposed_name,
+        proposedBrand: suggestionRecord.proposed_brand || undefined,
+        category: suggestionRecord.category,
+        packageWeightOrVolume: suggestionRecord.package_weight_or_volume ?? undefined,
+        packageUnit: suggestionRecord.package_unit || undefined,
+        observedStoreId: suggestionRecord.observed_store_id || undefined,
+        observedPrice: suggestionRecord.observed_price ?? undefined,
+        notes: suggestionRecord.notes || undefined,
+        status: 'pending',
+        createdAt: suggestionRecord.created_at
+      },
+      messageRo: 'Sugestia a fost salvată în coada de moderare și va fi verificată înainte de publicarea în catalog.'
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la înregistrarea sugestiei de produs.' });
+  }
+});
+
+// 4. V2 Shared Shopping Lists, Invites, Roles & Activity History Endpoints
+app.get('/api/lists/:listId/collaboration', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+    const listId = req.params.listId;
+    const access = await resolveSharedListRoleAndMeta({ auth, listId });
+    if (access.ok === false) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const adminClient = getSupabaseAdminClient();
+    const client = adminClient || auth.userClient;
+
+    const [membersRes, activityRes, invitesRes] = await Promise.all([
+      client
+        .from('shopping_list_members')
+        .select('id, list_id, user_id, role, display_name, email_masked, joined_at')
+        .eq('list_id', listId)
+        .order('joined_at', { ascending: true }),
+      client
+        .from('shopping_list_activity')
+        .select('id, list_id, actor_user_id, actor_name, action_type, target_name, details, created_at')
+        .eq('list_id', listId)
+        .order('created_at', { ascending: false })
+        .limit(40),
+      access.role === 'owner'
+        ? client
+            .from('shopping_list_invites')
+            .select('id, list_id, role, invited_email, expires_at, max_uses, uses_count, revoked_at, created_at')
+            .eq('list_id', listId)
+            .is('revoked_at', null)
+            .order('created_at', { ascending: false })
+            .limit(20)
+        : Promise.resolve({ data: [], error: null })
+    ]);
+
+    return res.json({
+      success: true,
+      listId,
+      listName: access.list.name,
+      myRole: access.role,
+      members: (membersRes.data || []).map((m: any) => ({
+        id: m.id,
+        listId: m.list_id,
+        userId: m.user_id,
+        role: m.role,
+        displayName: m.display_name || 'Colaborator',
+        emailMasked: m.email_masked || undefined,
+        joinedAt: m.joined_at
+      })),
+      invites: (invitesRes.data || []).map((inv: any) => ({
+        id: inv.id,
+        listId: inv.list_id,
+        role: inv.role,
+        invitedEmail: inv.invited_email || null,
+        expiresAt: inv.expires_at,
+        maxUses: inv.max_uses,
+        usesCount: inv.uses_count,
+        revokedAt: inv.revoked_at || null,
+        createdAt: inv.created_at
+      })),
+      activity: (activityRes.data || []).map((act: any) => ({
+        id: act.id,
+        listId: act.list_id,
+        actorUserId: act.actor_user_id || undefined,
+        actorName: act.actor_name || 'Utilizator',
+        actionType: act.action_type,
+        targetName: act.target_name || undefined,
+        details: act.details || {},
+        createdAt: act.created_at
+      }))
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la încărcarea colaboratorilor listei.' });
+  }
+});
+
+app.post('/api/lists/:listId/invites', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+    const listId = req.params.listId;
+    const access = await resolveSharedListRoleAndMeta({ auth, listId });
+    if (access.ok === false) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+    if (access.role !== 'owner') {
+      return res.status(403).json({
+        success: false,
+        error: 'Doar proprietarul listei poate genera invitații de partajare.'
+      });
+    }
+
+    const parsed = sharedListInviteCreateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Parametri de invitație invalizi.'
+      });
+    }
+
+    const rawToken = crypto.randomBytes(24).toString('base64url');
+    const tokenHash = hashInviteToken(rawToken);
+    const expiresAt = new Date(Date.now() + parsed.data.expiresInHours * 3600 * 1000).toISOString();
+
+    const adminClient = getSupabaseAdminClient();
+    const writeClient = adminClient || auth.userClient;
+
+    // Ensure owner record exists in shopping_list_members
+    await writeClient.from('shopping_list_members').upsert(
+      {
+        list_id: listId,
+        user_id: auth.user.id,
+        role: 'owner',
+        display_name: auth.user.user_metadata?.display_name || auth.user.email?.split('@')[0] || 'Proprietar',
+        email_masked: maskEmailAddress(auth.user.email) || null,
+        invited_by: auth.user.id
+      },
+      { onConflict: 'list_id,user_id' }
+    );
+
+    const { data: createdInvite, error: invErr } = await writeClient
+      .from('shopping_list_invites')
+      .insert({
+        list_id: listId,
+        created_by: auth.user.id,
+        role: parsed.data.role,
+        token_hash: tokenHash,
+        invited_email: parsed.data.invitedEmail ? parsed.data.invitedEmail.toLowerCase() : null,
+        expires_at: expiresAt,
+        max_uses: parsed.data.maxUses
+      })
+      .select('id, list_id, role, invited_email, expires_at, max_uses, uses_count, created_at')
+      .single();
+
+    if (invErr || !createdInvite) {
+      return res.status(500).json({
+        success: false,
+        error: 'Nu am putut salva invitația în baza de date (verifică migrarea 013).'
+      });
+    }
+
+    await writeClient.from('shopping_list_activity').insert({
+      list_id: listId,
+      actor_user_id: auth.user.id,
+      actor_name: auth.user.user_metadata?.display_name || auth.user.email?.split('@')[0] || 'Proprietar',
+      action_type: 'list_shared',
+      target_name: parsed.data.invitedEmail || `Link rol ${parsed.data.role}`,
+      details: { role: parsed.data.role, expiresAt }
+    });
+
+    const inviteUrl = `/?tab=shopping-list&invite=${encodeURIComponent(rawToken)}`;
+    return res.status(201).json({
+      success: true,
+      token: rawToken,
+      inviteUrl,
+      invite: {
+        id: createdInvite.id,
+        listId: createdInvite.list_id,
+        role: createdInvite.role,
+        invitedEmail: createdInvite.invited_email || null,
+        expiresAt: createdInvite.expires_at,
+        maxUses: createdInvite.max_uses,
+        usesCount: createdInvite.uses_count,
+        createdAt: createdInvite.created_at,
+        inviteUrl
+      }
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la crearea invitației.' });
+  }
+});
+
+app.post('/api/lists/invites/:token/accept', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentifică-te pentru a accepta invitația la listă.' });
+    }
+
+    const rawToken = String(req.params.token || '').trim();
+    if (!rawToken || rawToken.length < 16) {
+      return res.status(400).json({ success: false, error: 'Codul de invitație este invalid.' });
+    }
+
+    const adminClient = getSupabaseAdminClient();
+    if (!adminClient) {
+      return res.status(503).json({
+        success: false,
+        error: 'Acceptarea invitațiilor securizate necesită configurarea serviciului pe server.'
+      });
+    }
+
+    const tokenHash = hashInviteToken(rawToken);
+    const { data: invite, error: lookupErr } = await adminClient
+      .from('shopping_list_invites')
+      .select('id, list_id, role, invited_email, expires_at, max_uses, uses_count, revoked_at')
+      .eq('token_hash', tokenHash)
+      .maybeSingle();
+
+    if (lookupErr) {
+      return res.status(500).json({ success: false, error: 'Eroare la verificarea invitației.' });
+    }
+    if (!invite || invite.revoked_at) {
+      return res.status(404).json({ success: false, error: 'Invitația nu există sau a fost revocată.' });
+    }
+    if (new Date(invite.expires_at).getTime() <= Date.now()) {
+      return res.status(410).json({ success: false, error: 'Această invitație a expirat.' });
+    }
+    if (Number(invite.uses_count) >= Number(invite.max_uses)) {
+      return res.status(410).json({ success: false, error: 'Această invitație a atins numărul maxim de utilizări.' });
+    }
+    if (invite.invited_email && auth.user.email?.toLowerCase() !== invite.invited_email.toLowerCase()) {
+      return res.status(403).json({
+        success: false,
+        error: 'Această invitație este destinată unei alte adrese de email.'
+      });
+    }
+
+    const { data: listRow } = await adminClient
+      .from('shopping_lists')
+      .select('id, user_id, name')
+      .eq('id', invite.list_id)
+      .maybeSingle();
+    if (!listRow) {
+      return res.status(404).json({ success: false, error: 'Lista partajată nu mai există.' });
+    }
+
+    if (listRow.user_id === auth.user.id) {
+      return res.json({
+        success: true,
+        listId: invite.list_id,
+        listName: listRow.name,
+        role: 'owner',
+        alreadyOwner: true
+      });
+    }
+
+    const displayName =
+      auth.user.user_metadata?.display_name || auth.user.email?.split('@')[0] || 'Colaborator';
+
+    const { error: memberErr } = await adminClient.from('shopping_list_members').upsert(
+      {
+        list_id: invite.list_id,
+        user_id: auth.user.id,
+        role: invite.role,
+        display_name: displayName,
+        email_masked: maskEmailAddress(auth.user.email) || null,
+        invited_by: listRow.user_id,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'list_id,user_id' }
+    );
+
+    if (memberErr) {
+      return res.status(500).json({ success: false, error: 'Nu am putut adăuga accesul la listă.' });
+    }
+
+    await adminClient
+      .from('shopping_list_invites')
+      .update({ uses_count: Number(invite.uses_count) + 1 })
+      .eq('id', invite.id);
+
+    await adminClient.from('shopping_list_activity').insert({
+      list_id: invite.list_id,
+      actor_user_id: auth.user.id,
+      actor_name: displayName,
+      action_type: 'member_joined',
+      target_name: displayName,
+      details: { role: invite.role }
+    });
+
+    return res.json({
+      success: true,
+      listId: invite.list_id,
+      listName: listRow.name,
+      role: invite.role
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la acceptarea invitației.' });
+  }
+});
+
+app.patch('/api/lists/:listId/members/:memberUserId', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+    const { listId, memberUserId } = req.params;
+    if (!UUID_STRICT_RE.test(memberUserId)) {
+      return res.status(400).json({ success: false, error: 'Identificator membru invalid.' });
+    }
+
+    const access = await resolveSharedListRoleAndMeta({ auth, listId });
+    if (access.ok === false) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+    if (access.role !== 'owner') {
+      return res.status(403).json({
+        success: false,
+        error: 'Doar proprietarul listei poate modifica rolurile colaboratorilor.'
+      });
+    }
+    if (memberUserId === access.list.user_id) {
+      return res.status(400).json({ success: false, error: 'Rolul proprietarului principal nu poate fi retrogradat.' });
+    }
+
+    const parsed = sharedListMemberRoleUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: 'Rol invalid.' });
+    }
+
+    const writeClient = getSupabaseAdminClient() || auth.userClient;
+    const { data: updated, error: updErr } = await writeClient
+      .from('shopping_list_members')
+      .update({ role: parsed.data.role, updated_at: new Date().toISOString() })
+      .eq('list_id', listId)
+      .eq('user_id', memberUserId)
+      .select('id, display_name, role')
+      .maybeSingle();
+
+    if (updErr || !updated) {
+      return res.status(404).json({ success: false, error: 'Colaboratorul nu a fost găsit pe această listă.' });
+    }
+
+    await writeClient.from('shopping_list_activity').insert({
+      list_id: listId,
+      actor_user_id: auth.user.id,
+      actor_name: auth.user.user_metadata?.display_name || auth.user.email?.split('@')[0] || 'Proprietar',
+      action_type: 'member_role_changed',
+      target_name: updated.display_name || 'Colaborator',
+      details: { newRole: parsed.data.role }
+    });
+
+    return res.json({ success: true, member: updated });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la modificarea rolului colaboratorului.' });
+  }
+});
+
+app.delete('/api/lists/:listId/members/:memberUserId', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+    const { listId, memberUserId } = req.params;
+    if (!UUID_STRICT_RE.test(memberUserId)) {
+      return res.status(400).json({ success: false, error: 'Identificator membru invalid.' });
+    }
+
+    const access = await resolveSharedListRoleAndMeta({ auth, listId });
+    if (access.ok === false) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+    const isSelfLeave = memberUserId === auth.user.id;
+    if (access.role !== 'owner' && !isSelfLeave) {
+      return res.status(403).json({
+        success: false,
+        error: 'Doar proprietarul poate revoca accesul altor membri.'
+      });
+    }
+    if (memberUserId === access.list.user_id) {
+      return res.status(400).json({ success: false, error: 'Proprietarul principal nu poate fi revocat.' });
+    }
+
+    const writeClient = getSupabaseAdminClient() || auth.userClient;
+    const { data: removed } = await writeClient
+      .from('shopping_list_members')
+      .delete()
+      .eq('list_id', listId)
+      .eq('user_id', memberUserId)
+      .select('display_name')
+      .maybeSingle();
+
+    await writeClient.from('shopping_list_activity').insert({
+      list_id: listId,
+      actor_user_id: auth.user.id,
+      actor_name: auth.user.user_metadata?.display_name || auth.user.email?.split('@')[0] || 'Utilizator',
+      action_type: 'member_revoked',
+      target_name: removed?.display_name || 'Colaborator',
+      details: { selfLeave: isSelfLeave }
+    });
+
+    return res.json({ success: true, revokedUserId: memberUserId });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la revocarea accesului.' });
+  }
+});
+
+app.get('/api/lists/:listId/activity', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+    const listId = req.params.listId;
+    const access = await resolveSharedListRoleAndMeta({ auth, listId });
+    if (access.ok === false) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const client = getSupabaseAdminClient() || auth.userClient;
+    const { data, error } = await client
+      .from('shopping_list_activity')
+      .select('id, list_id, actor_user_id, actor_name, action_type, target_name, details, created_at')
+      .eq('list_id', listId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      return res.status(500).json({ success: false, error: 'Nu am putut prelua istoricul modificărilor.' });
+    }
+    return res.json({
+      success: true,
+      activity: (data || []).map((a: any) => ({
+        id: a.id,
+        listId: a.list_id,
+        actorUserId: a.actor_user_id || undefined,
+        actorName: a.actor_name || 'Utilizator',
+        actionType: a.action_type,
+        targetName: a.target_name || undefined,
+        details: a.details || {},
+        createdAt: a.created_at
+      }))
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la citirea istoricului.' });
+  }
+});
+
+app.post('/api/lists/:listId/activity', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const auth = await getAuthenticatedSupabaseUser(req);
+    if (!auth) {
+      return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
+    }
+    const listId = req.params.listId;
+    const access = await resolveSharedListRoleAndMeta({ auth, listId });
+    if (access.ok === false) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+    if (access.role === 'viewer') {
+      return res.status(403).json({
+        success: false,
+        error: 'Rolul Viewer permite doar vizualizarea listei, nu modificarea ei.'
+      });
+    }
+
+    const parsed = sharedListActivityCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: 'Date invalide pentru jurnalul de activitate.' });
+    }
+
+    const writeClient = getSupabaseAdminClient() || auth.userClient;
+    const actorName =
+      auth.user.user_metadata?.display_name || auth.user.email?.split('@')[0] || 'Utilizator';
+
+    const { data: inserted, error: insErr } = await writeClient
+      .from('shopping_list_activity')
+      .insert({
+        list_id: listId,
+        actor_user_id: auth.user.id,
+        actor_name: actorName,
+        action_type: parsed.data.actionType,
+        target_name: parsed.data.targetName || null,
+        details: parsed.data.details || {}
+      })
+      .select('id, list_id, actor_user_id, actor_name, action_type, target_name, details, created_at')
+      .single();
+
+    if (insErr) {
+      return res.status(500).json({ success: false, error: 'Nu am putut înregistra modificarea în istoric.' });
+    }
+
+    return res.status(201).json({
+      success: true,
+      entry: {
+        id: inserted.id,
+        listId: inserted.list_id,
+        actorUserId: inserted.actor_user_id || undefined,
+        actorName: inserted.actor_name,
+        actionType: inserted.action_type,
+        targetName: inserted.target_name || undefined,
+        details: inserted.details || {},
+        createdAt: inserted.created_at
+      }
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare la salvarea activității.' });
+  }
+});
+
+// 5. V2 Grounded AI Shopping Assistant Endpoint (Gemini server-side + deterministic math)
+app.post('/api/assistant/query', publicComputeLimiter, async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const parsed = assistantQueryRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Cerere invalidă către asistent.'
+      });
+    }
+
+    const hasBearerHeader = Boolean(req.headers.authorization && req.headers.authorization.startsWith('Bearer '));
+    const auth = hasBearerHeader ? await getAuthenticatedSupabaseUser(req) : null;
+    if (hasBearerHeader && !auth) {
+      return res.status(401).json({ success: false, error: 'Sesiune invalidă pentru accesarea asistentului.' });
+    }
+
+    const input = parsed.data;
+    let activeListItems = input.items || [];
+    let resolvedListName = 'Coșul meu';
+
+    if (auth && input.listId && UUID_STRICT_RE.test(input.listId) && activeListItems.length === 0) {
+      const access = await resolveSharedListRoleAndMeta({ auth, listId: input.listId });
+      if (access.ok === false) {
+        return res.status(access.status).json({ success: false, error: access.error });
+      }
+      resolvedListName = access.list.name;
+      const client = getSupabaseAdminClient() || auth.userClient;
+      const { data: itemRows } = await client
+        .from('shopping_list_items')
+        .select('id, product_id, product_name, quantity, unit, is_checked')
+        .eq('list_id', input.listId);
+      activeListItems = (itemRows || []).map((r: any) => ({
+        id: r.id,
+        productId: r.product_id || undefined,
+        name: r.product_name || 'Produs',
+        category: 'Alte produse',
+        quantity: Number(r.quantity) || 1,
+        unit: r.unit || 'buc',
+        checked: Boolean(r.is_checked)
+      }));
+    }
+
+    const dataset = await loadV2CatalogDataset(false);
+
+    const activeList =
+      activeListItems.length > 0
+        ? {
+            id: input.listId || 'active',
+            name: resolvedListName,
+            items: activeListItems,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        : null;
+
+    const plan = ShoppingAssistantService.buildDeterministicPlan({
+      prompt: input.prompt,
+      explicitIntent: input.intent,
+      budgetLei: input.budgetLei,
+      days: input.days,
+      activeList: activeList as any,
+      selectedProductId: input.selectedProductId,
+      allProducts: dataset.products,
+      allOffers: dataset.offers,
+      allStores: dataset.stores,
+      useLoyaltyCards: input.useLoyaltyCards
+    });
+
+    if (plan.items.length === 0) {
+      const honest = ShoppingAssistantService.formatDeterministicAnswer(plan);
+      return res.json({
+        success: true,
+        intent: plan.intent,
+        answerRo: honest.answerRo,
+        highlights: honest.highlights,
+        recommendedItems: [],
+        totalEstimatedCost: 0,
+        remainingBudgetLei: plan.remainingBudgetLei,
+        estimatedSavingsLei: plan.estimatedSavingsLei,
+        limitations: plan.limitations,
+        groundedSourceCount: plan.validOffersCount,
+        generatedWithAi: false
+      });
+    }
+
+    if (!ai) {
+      return res.status(503).json({
+        success: false,
+        code: 'AI_UNAVAILABLE',
+        error: 'Asistentul AI nu este configurat pe server (lipsește GEMINI_API_KEY).',
+        deterministicPlan: plan
+      });
+    }
+
+    const groundingContextJson = JSON.stringify({
+      intent: plan.intent,
+      titleRo: plan.titleRo,
+      budgetRequestedLei: plan.budgetRequestedLei ?? null,
+      daysRequested: plan.daysRequested ?? null,
+      totalEstimatedCost: plan.totalEstimatedCost,
+      remainingBudgetLei: plan.remainingBudgetLei ?? null,
+      estimatedSavingsLei: plan.estimatedSavingsLei ?? null,
+      optimizationSummary: plan.optimizationSummary ?? null,
+      limitations: plan.limitations,
+      verifiedItems: plan.items.map(it => ({
+        productId: it.productId,
+        productName: it.productName,
+        brand: it.brand,
+        category: it.category,
+        storeName: it.storeName,
+        quantity: it.quantity,
+        unit: it.unit,
+        price: it.price,
+        unitPrice: it.unitPrice,
+        unitPriceMeasure: it.unitPriceMeasure,
+        isPromo: it.isPromo,
+        dayLabel: it.dayLabel ?? null,
+        noteRo: it.noteRo ?? null
+      }))
+    });
+
+    const systemPrompt = `Ești asistentul de cumpărături Coșul Meu pentru piața din România.
+REGULI STRICTE (ANTI-HALUCINAȚIE):
+1. Folosește EXCLUSIV produsele, ID-urile (productId), magazinele, prețurile și totalurile furnizate în JSON-ul verificat de mai jos.
+2. NU inventa niciun produs, preț, promoție, disponibilitate sau economie care nu există explicit în datele verificate.
+3. Nu modifica sumele calculate determinist.
+4. Răspunde concis, prietenos și util în limba română, menționând eventualele limitări.
+5. În citedProductIds include DOAR productId-urile reale din verifiedItems pe care le menționezi.
+
+Întrebarea utilizatorului: ${JSON.stringify(input.prompt)}
+Date verificate determinist: ${groundingContextJson}`;
+
+    let geminiResp;
+    try {
+      geminiResp = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: systemPrompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              answerRo: { type: Type.STRING },
+              highlights: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              citedProductIds: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              }
+            },
+            required: ['answerRo', 'highlights', 'citedProductIds']
+          }
+        }
+      });
+    } catch (geminiErr: any) {
+      console.error('[assistant-ai] Provider error:', geminiErr?.message || 'AI error');
+      return res.status(502).json({
+        success: false,
+        code: 'AI_PROVIDER_ERROR',
+        error: 'Serviciul Gemini AI nu a putut răspunde în acest moment.',
+        deterministicPlan: plan
+      });
+    }
+
+    let rawAiPayload: unknown = null;
+    try {
+      const txt = geminiResp.text?.trim();
+      if (txt) rawAiPayload = JSON.parse(txt);
+    } catch {
+      rawAiPayload = null;
+    }
+
+    const validated = ShoppingAssistantService.validateAiOutputAgainstPlan({
+      plan,
+      aiPayload: rawAiPayload
+    });
+
+    return res.json({
+      success: true,
+      intent: plan.intent,
+      answerRo: validated.answerRo,
+      highlights: validated.highlights,
+      recommendedItems: plan.items,
+      totalEstimatedCost: plan.totalEstimatedCost,
+      remainingBudgetLei: plan.remainingBudgetLei,
+      estimatedSavingsLei: plan.estimatedSavingsLei,
+      limitations: plan.limitations,
+      groundedSourceCount: plan.validOffersCount,
+      generatedWithAi: validated.valid && !validated.hallucinationDetected,
+      model: 'gemini-4-hydrogen'
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Eroare internă la procesarea cererii de asistent.' });
   }
 });
 

@@ -1,6 +1,19 @@
 {
   "buildCommand": "bun run build",
   "outputDirectory": "dist",
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "cosulmeu.vercel.app"
+        }
+      ],
+      "destination": "https://cosulmeu.online/:path*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/:path*",

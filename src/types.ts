@@ -48,6 +48,8 @@ export interface Product {
   imageUrl?: string;
   isBio?: boolean;
   isRomanianProduct?: boolean;
+  isSoldByWeight?: boolean;
+  isIndivisiblePackage?: boolean;
   baseReferencePrice: number;
   subcategory?: string;
   description?: string;
@@ -66,6 +68,9 @@ export interface ProductOffer {
   promoDetails?: string;
   loyaltyCardRequired?: boolean;
   loyaltyCardName?: string; // ex: 'Lidl Plus', 'Kaufland Card', 'Club Carrefour', 'Penny Card'
+  couponRequired?: boolean;
+  couponCode?: string;
+  minQuantityForPromo?: number;
   validUntil?: string; // YYYY-MM-DD
   observationDate: string; // YYYY-MM-DD
   source: DataSourceType;
@@ -171,6 +176,54 @@ export interface ShoppingListItem {
   lastBoughtStoreId?: string;
 }
 
+export type SharedListRole = 'owner' | 'editor' | 'viewer';
+
+export interface SharedListMember {
+  id: string;
+  listId: string;
+  userId: string;
+  role: SharedListRole;
+  displayName: string;
+  emailMasked?: string;
+  joinedAt: string;
+}
+
+export interface SharedListInvite {
+  id: string;
+  listId: string;
+  role: Exclude<SharedListRole, 'owner'>;
+  invitedEmail?: string | null;
+  expiresAt: string;
+  maxUses: number;
+  usesCount: number;
+  revokedAt?: string | null;
+  createdAt: string;
+  inviteUrl?: string;
+}
+
+export type SharedListActivityAction =
+  | 'list_shared'
+  | 'member_joined'
+  | 'member_role_changed'
+  | 'member_revoked'
+  | 'item_added'
+  | 'item_updated'
+  | 'item_checked'
+  | 'item_unchecked'
+  | 'item_removed'
+  | 'list_renamed';
+
+export interface SharedListActivityEntry {
+  id: string;
+  listId: string;
+  actorUserId?: string;
+  actorName: string;
+  actionType: SharedListActivityAction;
+  targetName?: string;
+  details?: Record<string, any>;
+  createdAt: string;
+}
+
 export interface ShoppingList {
   id: string;
   name: string;
@@ -178,6 +231,11 @@ export interface ShoppingList {
   createdAt: string;
   updatedAt: string;
   isArchived?: boolean;
+  ownerId?: string;
+  myRole?: SharedListRole;
+  isShared?: boolean;
+  members?: SharedListMember[];
+  recentActivity?: SharedListActivityEntry[];
 }
 
 export type ReceiptConfidenceBand =
@@ -388,11 +446,41 @@ export interface BasketStoreComparison {
   grandTotal: number;
   savingsVsWorst: number;
   isWinner: boolean;
+  isCompleteBasket?: boolean;
+  isCheapestCompleteBasket?: boolean;
+  rankingBucket?: 'complete' | 'partial' | 'no_offers';
+  hasValidOffers?: boolean;
+  totalItemsCount?: number;
+  coveredItemsCount?: number;
+  unpricedItemsCount?: number;
+  comparableDiffVsCompleteWinner?: number | null;
+  comparableDiffVsSameCoverageLeader?: number | null;
+  oldestVerifiedAt?: string | null;
   completenessPercentage: number;
   confidenceLevel: ConfidenceLevel;
   lastUpdated: string;
   hasLoyaltyDiscount: boolean;
   loyaltySavings: number;
+}
+
+export interface BasketSavingsSummary {
+  status: 'determined' | 'undetermined';
+  cheapestTotal: number;
+  availableSubtotal: number;
+  mostExpensiveTotal: number;
+  maxSavings: number;
+  bestStoreName: string;
+  mostExpensiveStoreName?: string;
+  hasLoyaltyDiscount: boolean;
+  hasCompleteComparableBaskets: boolean;
+  isCompleteBasket: boolean;
+  pricedItemsCount: number;
+  unpricedItemsCount: number;
+  totalItemsCount: number;
+  comparableStoresCount: number;
+  comparedStoreNames: string[];
+  comparableItemsCount: number;
+  savingsExplanationRo: string;
 }
 
 export interface MultiStoreOptimization {
@@ -512,6 +600,9 @@ export interface UserProfile {
   theme?: ThemeMode;
   role?: 'user' | 'admin';
   monthlySavingsGoal: number;
+  monthlyBudget?: number | null;
+  weeklyBudget?: number | null;
+  budgetAlertThresholdPct?: number;
   notificationsEnabled: boolean;
   optionalNotificationsEnabled?: boolean;
   marketingConsent?: boolean;
@@ -778,6 +869,7 @@ export interface PriceQualityClassifierConfig {
   recentlyVerifiedMaxHours: number;
   verifiedMaxHours: number;
   staleMaxHours: number;
+  expiredMaxHours?: number;
   suspiciousDeviationHighRatio: number;
   suspiciousDropNoPromoRatio: number;
   minPlausiblePrice: number;
@@ -811,7 +903,14 @@ export interface PriceDataQualityAssessment {
 // V1 Roadmap: Basket Optimizer (1-Store & Multi-Store)
 // =========================================================================
 
-export type BasketMatchConfidence = 'exact_id' | 'exact_ean' | 'exact_name' | 'high_token';
+export type BasketMatchConfidence =
+  | 'exact_id'
+  | 'exact_ean'
+  | 'exact_brand_name_weight'
+  | 'exact_name'
+  | 'high_token';
+
+export type ConditionalPromoType = 'none' | 'loyalty_card' | 'coupon' | 'min_quantity';
 
 export interface BasketItemAllocation {
   item: ShoppingListItem;
@@ -827,6 +926,19 @@ export interface BasketItemAllocation {
   unitPriceDisplay: string;
   loyaltyApplied: boolean;
   loyaltyCardName?: string;
+  requestedQuantity?: number;
+  requestedUnit?: UnitType;
+  packagesCount?: number;
+  packageSizeLabel?: string;
+  purchasedQuantity?: number;
+  purchasedUnit?: UnitType;
+  surplusQuantity?: number;
+  surplusUnit?: UnitType;
+  isIndivisiblePackage?: boolean;
+  conditionalPromoType?: ConditionalPromoType;
+  conditionalPromoApplied?: boolean;
+  conditionalPromoNoteRo?: string;
+  regionMatched?: string;
 }
 
 export interface BasketUnconfidentMatch {
@@ -862,6 +974,9 @@ export interface BasketSingleStorePlan {
   lastVerifiedAt: string | null;
   oldestVerifiedAt: string | null;
   savingsVsWorstStore: number | null;
+  totalSurplusItemsCount?: number;
+  staleItemsCount?: number;
+  hasIncompleteData?: boolean;
 }
 
 export interface BasketMultiStoreStop {
@@ -894,15 +1009,21 @@ export interface BasketMultiStorePlan {
   lastVerifiedAt: string | null;
   oldestVerifiedAt: string | null;
   explanationRo: string;
+  totalSurplusItemsCount?: number;
+  savingsBasisRo?: string;
 }
 
 export interface BasketOptimizationOptions {
   useLoyaltyCards?: boolean;
+  useCoupons?: boolean;
   maxStores?: number; // 1, 2, 3, or higher
   excludedStoreIds?: string[];
   favoriteStoreIds?: string[];
   includeStaleOffers?: boolean;
+  maxOfferAgeDays?: number;
+  region?: string;
   transportCostPerExtraStore?: number; // Default 0 - never invent transport costs
+  clientRevision?: string;
   now?: Date;
 }
 
@@ -930,6 +1051,11 @@ export interface BasketOptimizationResult {
   oldestPriceVerificationAt: string | null;
   limitations: string[];
   calculatedAt: string;
+  appliedRegion?: string | null;
+  maxOfferAgeDaysApplied?: number | null;
+  useCouponsApplied?: boolean;
+  revisionToken?: string;
+  savingsMethodNoteRo?: string;
 }
 
 // =========================================================================
@@ -958,6 +1084,191 @@ export interface PriceHistoryIntervalStats {
   hasSufficientHistory: boolean;
   noticeRo?: string;
 }
+
+// =========================================================================
+// V2 Personal Shopping Assistant: Budget, Alternatives, Barcode, AI Grounding
+// =========================================================================
+
+export interface PersonalBudgetSettings {
+  monthlyBudget: number | null;
+  weeklyBudget: number | null;
+  alertThresholdPct: number; // default 80
+}
+
+export type BudgetAlertLevel = 'none' | 'warning' | 'exceeded' | 'unconfigured';
+
+export interface CategorySpendingSummary {
+  category: ProductCategory | string;
+  amount: number;
+  sharePct: number;
+  itemsCount: number;
+}
+
+export interface MonthlySpendingHistoryEntry {
+  monthKey: string; // YYYY-MM
+  labelRo: string;
+  totalSpent: number;
+  receiptsCount: number;
+  budgetTarget: number | null;
+  overBudget: boolean;
+}
+
+export interface BudgetStatusSummary {
+  settings: PersonalBudgetSettings;
+  currentMonthKey: string;
+  currentWeekRangeLabel: string;
+  monthlySpent: number;
+  weeklySpent: number;
+  monthlyRemaining: number | null;
+  weeklyRemaining: number | null;
+  monthlyProgressPct: number | null;
+  weeklyProgressPct: number | null;
+  monthlyAlertLevel: BudgetAlertLevel;
+  weeklyAlertLevel: BudgetAlertLevel;
+  confirmedReceiptsCount: number;
+  excludedReceiptsCount: number;
+  categoryBreakdown: CategorySpendingSummary[];
+  monthlyHistory: MonthlySpendingHistoryEntry[];
+  warningsRo: string[];
+}
+
+export type ProductAlternativeKind =
+  | 'same_product_other_retailer'
+  | 'same_product_other_size'
+  | 'similar_product'
+  | 'alternative_brand'
+  | 'private_label';
+
+export interface ProductAlternativeRecommendation {
+  kind: ProductAlternativeKind;
+  kindLabelRo: string;
+  product: Product;
+  bestOffer: ProductOffer;
+  store: Store;
+  price: number;
+  normalizedUnitPrice: number;
+  normalizedUnitLabel: string;
+  savingsPerNormalizedUnit: number;
+  savingsPercent: number;
+  isCheaperNormalized: boolean;
+  isPrivateLabel: boolean;
+  compatibilityReasonRo: string;
+}
+
+export interface ProductAlternativesResult {
+  targetProduct: Product;
+  referenceOffer: ProductOffer | null;
+  referenceStore: Store | null;
+  referenceNormalizedUnitPrice: number | null;
+  referenceNormalizedUnitLabel: string;
+  groups: Record<ProductAlternativeKind, ProductAlternativeRecommendation[]>;
+  cheaperNormalizedAlternatives: ProductAlternativeRecommendation[];
+  totalCount: number;
+  limitations: string[];
+}
+
+export interface BarcodeLookupResult {
+  found: boolean;
+  searchedBarcode: string;
+  normalizedBarcodes: string[];
+  product?: Product;
+  offers: Array<{
+    offer: ProductOffer;
+    store: Store;
+  }>;
+  lowestPrice: number | null;
+  lowestStoreName: string | null;
+  historySummary?: {
+    observationsCount: number;
+    minPrice90d: number | null;
+    avgPrice90d: number | null;
+    lastObservationDate: string | null;
+  };
+  messageRo: string;
+}
+
+export interface ProductBarcodeSuggestion {
+  id: string;
+  userId?: string;
+  barcode: string;
+  proposedName: string;
+  proposedBrand?: string;
+  category: ProductCategory;
+  packageWeightOrVolume?: number;
+  packageUnit?: UnitType;
+  observedStoreId?: string;
+  observedPrice?: number;
+  notes?: string;
+  status: 'pending' | 'under_review' | 'approved' | 'rejected';
+  createdAt: string;
+}
+
+export type ShoppingAssistantIntent =
+  | 'budget_basket'
+  | 'optimize_list'
+  | 'list_promos'
+  | 'cheaper_alternatives'
+  | 'meal_plan_days'
+  | 'general_guidance';
+
+export interface ShoppingAssistantGroundedItem {
+  productId: string;
+  productName: string;
+  brand: string;
+  category: string;
+  storeId: string;
+  storeName: string;
+  quantity: number;
+  unit: UnitType;
+  price: number;
+  unitPrice: number;
+  unitPriceMeasure: string;
+  isPromo: boolean;
+  originalPrice?: number;
+  promoDetails?: string;
+  dayLabel?: string;
+  noteRo?: string;
+}
+
+export interface ShoppingAssistantDeterministicPlan {
+  intent: ShoppingAssistantIntent;
+  titleRo: string;
+  budgetRequestedLei?: number;
+  daysRequested?: number;
+  catalogAvailableCount: number;
+  validOffersCount: number;
+  items: ShoppingAssistantGroundedItem[];
+  totalEstimatedCost: number;
+  remainingBudgetLei?: number;
+  estimatedSavingsLei?: number;
+  optimizationSummary?: {
+    bestSingleStoreName?: string;
+    bestSingleStoreTotal?: number;
+    bestMultiStoreTotal?: number;
+    savingsAmount?: number;
+    missingItemsCount: number;
+    unconfidentMatchesCount: number;
+  };
+  limitations: string[];
+  allowedProductIds: string[];
+}
+
+export interface ShoppingAssistantResponse {
+  success: boolean;
+  intent: ShoppingAssistantIntent;
+  answerRo: string;
+  highlights: string[];
+  recommendedItems: ShoppingAssistantGroundedItem[];
+  totalEstimatedCost: number;
+  remainingBudgetLei?: number;
+  estimatedSavingsLei?: number;
+  limitations: string[];
+  groundedSourceCount: number;
+  generatedWithAi: boolean;
+  model?: string;
+  error?: string;
+}
+
 
 
 

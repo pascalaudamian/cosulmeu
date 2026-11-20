@@ -10,6 +10,7 @@ interface MultiStoreOptimizationModalProps {
   products?: Product[];
   offers?: ProductOffer[];
   stores?: StoreType[];
+  initialMaxStores?: number;
 }
 
 export const MultiStoreOptimizationModal: React.FC<MultiStoreOptimizationModalProps> = ({
@@ -18,7 +19,8 @@ export const MultiStoreOptimizationModal: React.FC<MultiStoreOptimizationModalPr
   onClose,
   products,
   offers,
-  stores
+  stores,
+  initialMaxStores = 3
 }) => {
   const virtualList: ShoppingList = {
     id: 'modal-active-list',
@@ -62,6 +64,7 @@ export const MultiStoreOptimizationModal: React.FC<MultiStoreOptimizationModalPr
           offers={offers}
           stores={stores}
           initialTransportCost={0}
+          initialMaxStores={initialMaxStores}
         />
       </div>
     </div>

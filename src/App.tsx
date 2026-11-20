@@ -4,8 +4,10 @@ import {
   countLocalDashboardData,
   deleteReceiptForUser,
   importLocalDashboardData,
+  loadPersonalBudgetSettings,
   markAlertNotificationsReadForUser,
   saveAlertNotificationsForUser,
+  savePersonalBudgetSettings,
   savePriceAlertsForUser,
   saveReceiptForUser,
   saveShoppingListsForUser,
@@ -105,7 +107,18 @@ import {
   resolveIsDark,
   saveUserThemePreference
 } from './services/ThemeService.js';
-import { ShoppingList, Receipt, UserProfile, PriceAlert, InAppPriceNotification, Product, ProductOffer, Store, ThemeMode } from './types.js';
+import {
+  ShoppingList,
+  Receipt,
+  UserProfile,
+  PriceAlert,
+  InAppPriceNotification,
+  Product,
+  ProductOffer,
+  Store,
+  ThemeMode,
+  PersonalBudgetSettings
+} from './types.js';
 import { PriceAlertService } from './services/PriceAlertService.js';
 import { useAuth } from './auth/AuthProvider.js';
 import { supabase } from './lib/supabase.js';
@@ -180,6 +193,7 @@ export default function App() {
     PriceAlertService.loadLocalNotifications()
   );
   const [alertFeedbackBanner, setAlertFeedbackBanner] = useState<string | null>(null);
+  const [realtimeConnected, setRealtimeConnected] = useState<boolean>(false);
   const lastAlertEvalSigRef = useRef<string>('');
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode());
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => getSystemPrefersDark());
@@ -367,12 +381,13 @@ export default function App() {
         .eq('id', userId)
         .maybeSingle(),
       loadUserThemePreference(userId),
+      loadPersonalBudgetSettings(userId),
       supabase
         .from('user_preferences')
         .select('optional_notifications_enabled, marketing_consent, marketing_consent_updated_at, marketing_consent_withdrawn_at')
         .eq('user_id', userId)
         .maybeSingle()
-    ]).then(async ([profileRes, remoteTheme, gdprPrefRes]) => {
+    ]).then(async ([profileRes, remoteTheme, budgetSettings, gdprPrefRes]) => {
       if (cancelled) return;
       const data = profileRes.data;
       const gdprPrefs = gdprPrefRes?.data as any;
@@ -422,6 +437,9 @@ export default function App() {
           preferredStores: Array.isArray(preferences.preferredStores) ? preferences.preferredStores : ['lidl', 'kaufland', 'carrefour', 'auchan'],
           defaultTransportCostEstimate: typeof preferences.defaultTransportCostEstimate === 'number' ? preferences.defaultTransportCostEstimate : 12,
           useLoyaltyCards: typeof preferences.useLoyaltyCards === 'boolean' ? preferences.useLoyaltyCards : true,
+          monthlyBudget: budgetSettings?.monthlyBudget ?? (typeof preferences.monthlyBudget === 'number' ? preferences.monthlyBudget : null),
+          weeklyBudget: budgetSettings?.weeklyBudget ?? (typeof preferences.weeklyBudget === 'number' ? preferences.weeklyBudget : null),
+          budgetAlertThresholdPct: budgetSettings?.alertThresholdPct ?? (typeof preferences.budgetAlertThresholdPct === 'number' ? preferences.budgetAlertThresholdPct : 80),
           createdAt: data.created_at || user.created_at,
           created_at: data.created_at || user.created_at,
         };
@@ -469,6 +487,9 @@ export default function App() {
           preferredStores: ['lidl', 'kaufland', 'carrefour', 'auchan'],
           defaultTransportCostEstimate: 12,
           useLoyaltyCards: true,
+          monthlyBudget: budgetSettings?.monthlyBudget ?? null,
+          weeklyBudget: budgetSettings?.weeklyBudget ?? null,
+          budgetAlertThresholdPct: budgetSettings?.alertThresholdPct ?? 80,
           createdAt: user.created_at,
           created_at: user.created_at,
         };
@@ -552,6 +573,107 @@ export default function App() {
       });
     }
   };
+
+  const handleSaveBudgetSettings = useCallback(
+    async (settings: PersonalBudgetSettings) => {
+      setUserProfile(prev => {
+        const updated: UserProfile = {
+          ...prev,
+          monthlyBudget: settings.monthlyBudget,
+          weeklyBudget: settings.weeklyBudget,
+          budgetAlertThresholdPct: settings.alertThresholdPct
+        };
+        StorageService.saveUserProfile(updated);
+        return updated;
+      });
+      if (user) {
+        await savePersonalBudgetSettings(user.id, settings);
+      }
+    },
+    [user]
+  );
+
+  // Accept shared shopping list invite link (?invite=...) when authenticated
+  useEffect(() => {
+    if (typeof window === 'undefined' || !user || !session?.access_token) return;
+    const params = new URLSearchParams(window.location.search);
+    const inviteToken = params.get('invite');
+    if (!inviteToken) return;
+
+    let cancelled = false;
+    fetch(`/api/lists/invites/${encodeURIComponent(inviteToken)}/accept`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.access_token}` }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (cancelled) return;
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('invite');
+        window.history.replaceState({}, '', cleanUrl.toString());
+
+        if (data?.success && data.listId) {
+          setActiveListId(data.listId);
+          StorageService.setActiveListId(data.listId);
+          setCurrentTab('shopping-list');
+          setAlertFeedbackBanner('Te-ai alăturat listei partajate! Sincronizarea în timp real este activă.');
+          window.setTimeout(() => setAlertFeedbackBanner(null), 5000);
+          void mutateDashboardData();
+        } else {
+          setDataWriteError(data?.error || 'Invitația de partajare nu a putut fi acceptată.');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDataWriteError('Nu am putut procesa linkul de invitație pentru lista partajată.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, session?.access_token, mutateDashboardData]);
+
+  // Supabase Realtime sync for active synced UUID shopping list
+  useEffect(() => {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(activeListId || '');
+    if (!user || !isUuid) {
+      setRealtimeConnected(false);
+      return;
+    }
+
+    const channel = supabase
+      .channel(`shared-list-${activeListId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shopping_list_items', filter: `list_id=eq.${activeListId}` },
+        () => {
+          void mutateDashboardData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shopping_list_members', filter: `list_id=eq.${activeListId}` },
+        () => {
+          void mutateDashboardData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shopping_list_activity', filter: `list_id=eq.${activeListId}` },
+        () => {
+          void mutateDashboardData();
+        }
+      )
+      .subscribe(status => {
+        setRealtimeConnected(status === 'SUBSCRIBED');
+      });
+
+    return () => {
+      setRealtimeConnected(false);
+      void supabase.removeChannel(channel);
+    };
+  }, [user, activeListId, mutateDashboardData]);
 
   const guestDemoList = useMemo(
     () =>
@@ -1210,6 +1332,7 @@ export default function App() {
               activeList={activeList}
               onAddToList={handleAddProductToList}
               initialCategory={productFilterCategory}
+              accessToken={session?.access_token}
             />
           )}
 
@@ -1220,6 +1343,8 @@ export default function App() {
               onNavigateToCategory={handleNavigateToCategory}
               activeList={activeList}
               onAddToList={handleAddProductToList}
+              onSelectProduct={handleSelectProduct}
+              useLoyaltyCards={userProfile.useLoyaltyCards}
               onCreateAlertForProduct={handleQuickCreateAlertForProduct}
               productAlerts={dashboardAlerts.filter(a => a.productId === selectedProductId)}
               onSaveProductAlert={handleSaveProductAlert}
@@ -1239,6 +1364,15 @@ export default function App() {
               catalogOffers={catalogOffers}
               catalogStores={catalogStores}
               onCreateAlertsFromList={handleCreateAlertsFromList}
+              isAuthenticated={Boolean(user)}
+              accessToken={session?.access_token}
+              currentUserId={user?.id}
+              useLoyaltyCards={userProfile.useLoyaltyCards}
+              userCity={userProfile.city}
+              realtimeConnected={realtimeConnected}
+              onCollaborationUpdated={() => void mutateDashboardData()}
+              onAddProductToList={handleAddProductToList}
+              onSelectProduct={handleSelectProduct}
             />
           )}
 
@@ -1305,6 +1439,10 @@ export default function App() {
                   onChangeTheme={handleChangeTheme}
                   onOpenCookieSettings={() => setShowCookieModal(true)}
                   onNavigateLegal={handleNavigateToLegalRoute}
+                  receipts={dashboardReceipts}
+                  catalogProducts={catalogProducts}
+                  accessToken={session?.access_token}
+                  onSaveBudgetSettings={handleSaveBudgetSettings}
                 />
               )}
             </>

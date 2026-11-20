@@ -273,11 +273,29 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             className="p-5 sm:p-6 text-left transition-colors hover:bg-white/[0.04] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-emerald-400 cursor-pointer"
           >
             <span className="text-xs text-slate-400 block mb-1.5">Economie potențială listă</span>
-            <span className="font-display text-2xl sm:text-3xl font-bold text-emerald-400 tracking-tight tabular-nums block">
-              {statsUnavailable ? '—' : PriceComparisonService.formatRon(activeList.items.length === 0 ? 0 : savingsSummary.maxSavings)}
+            <span
+              className={`font-display font-bold tracking-tight block ${
+                statsUnavailable || activeList.items.length === 0 || savingsSummary.status === 'determined'
+                  ? 'text-2xl sm:text-3xl text-emerald-400 tabular-nums'
+                  : 'text-lg sm:text-xl text-amber-300 leading-tight'
+              }`}
+            >
+              {statsUnavailable
+                ? '—'
+                : activeList.items.length === 0
+                ? PriceComparisonService.formatRon(0)
+                : savingsSummary.status === 'determined'
+                ? PriceComparisonService.formatRon(savingsSummary.maxSavings)
+                : 'Economie nedeterminată'}
             </span>
             <span className="text-xs text-slate-300 font-medium block mt-2">
-              Cel mai ieftin magazin · Detalii
+              {activeList.items.length === 0
+                ? 'Adaugă produse pentru comparație'
+                : savingsSummary.status === 'determined'
+                ? `${savingsSummary.bestStoreName} vs ${savingsSummary.mostExpensiveStoreName} · Detalii`
+                : savingsSummary.comparableStoresCount === 1
+                ? `Doar ${savingsSummary.bestStoreName} are coș complet · Detalii`
+                : 'Acoperire incompletă · Detalii'}
             </span>
           </button>
 
@@ -367,12 +385,38 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-slate-500 dark:text-slate-400">Estimare coș optim</span>
-              <span className="font-display font-bold text-lg text-emerald-700 dark:text-emerald-400 tabular-nums">
-                {PriceComparisonService.formatRon(savingsSummary.cheapestTotal)}
-              </span>
-            </div>
+            {activeList.items.length === 0 ? (
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500 dark:text-slate-400">Estimare coș complet</span>
+                <span className="font-display font-bold text-lg text-emerald-700 dark:text-emerald-400 tabular-nums">
+                  {PriceComparisonService.formatRon(0)}
+                </span>
+              </div>
+            ) : savingsSummary.isCompleteBasket ? (
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500 dark:text-slate-400">Cost estimat coș complet</span>
+                <span className="font-display font-bold text-lg text-emerald-700 dark:text-emerald-400 tabular-nums">
+                  {PriceComparisonService.formatRon(savingsSummary.cheapestTotal)}
+                </span>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2 text-sm">
+                  <span className="text-slate-500 dark:text-slate-400">Subtotal produse cu preț disponibil</span>
+                  <span className="font-display font-bold text-base sm:text-lg text-slate-900 dark:text-slate-100 tabular-nums shrink-0">
+                    {savingsSummary.availableSubtotal > 0
+                      ? PriceComparisonService.formatRon(savingsSummary.availableSubtotal)
+                      : 'Fără oferte verificate'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-amber-700 dark:text-amber-400">
+                  <span>Cost coș complet: nedeterminat</span>
+                  <span className="tabular-nums font-medium">
+                    Produse fără preț: {savingsSummary.unpricedItemsCount}/{savingsSummary.totalItemsCount}
+                  </span>
+                </div>
+              </div>
+            )}
             <button
               type="button"
               onClick={() => onNavigate('compare')}
@@ -391,7 +435,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div>
                 <h2 className="font-display font-bold text-slate-900 dark:text-slate-100 text-lg">Magazine avantajoase</h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-                  Preț total estimat pentru lista curentă ({activeList.items.length} articole)
+                  {storeComparisons.some(c => c.isCompleteBasket)
+                    ? `Comparație pe coș complet (${activeList.items.length} articole)`
+                    : storeComparisons.length > 0
+                    ? `Nu există încă un coș complet comparabil — subtotaluri după acoperire (${activeList.items.length} articole)`
+                    : `Preț estimat pentru lista curentă (${activeList.items.length} articole)`}
                 </p>
               </div>
               <button
@@ -420,49 +468,69 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {Array.from(new Map(storeComparisons.map(c => [c.store.id, c])).values()).slice(0, 4).map(comp => (
-                  <button
-                    type="button"
-                    key={comp.store.id}
-                    onClick={() => onNavigate('compare')}
-                    aria-label={`Deschide comparația completă de prețuri pentru ${comp.store.name}`}
-                    className={`w-full p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
-                      comp.isWinner
-                        ? 'border-emerald-500/80 bg-emerald-50/40 dark:bg-emerald-950/35 hover:bg-emerald-50/70 dark:hover:bg-emerald-950/60'
-                        : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/40 dark:bg-slate-800/40 hover:bg-slate-50 dark:hover:bg-slate-800/70'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div
-                          className={`w-8 h-8 rounded-lg text-white font-bold text-xs flex items-center justify-center shrink-0 ${comp.store.brandColor}`}
-                        >
-                          {comp.store.name.charAt(0)}
+                {Array.from(new Map(storeComparisons.map(c => [c.store.id, c])).values()).slice(0, 4).map(comp => {
+                  const hasAny = comp.availableItems.length > 0;
+                  const isCheapestComplete = Boolean(comp.isCheapestCompleteBasket);
+                  const isComplete = Boolean(comp.isCompleteBasket);
+
+                  return (
+                    <button
+                      type="button"
+                      key={comp.store.id}
+                      onClick={() => onNavigate('compare')}
+                      aria-label={`Deschide comparația completă de prețuri pentru ${comp.store.name}`}
+                      className={`w-full p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                        isCheapestComplete
+                          ? 'border-emerald-500/80 bg-emerald-50/40 dark:bg-emerald-950/35 hover:bg-emerald-50/70 dark:hover:bg-emerald-950/60'
+                          : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-slate-50/40 dark:bg-slate-800/40 hover:bg-slate-50 dark:hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div
+                            className={`w-8 h-8 rounded-lg text-white font-bold text-xs flex items-center justify-center shrink-0 ${comp.store.brandColor}`}
+                          >
+                            {comp.store.name.charAt(0)}
+                          </div>
+                          <div className="min-w-0">
+                            <span className="font-bold text-sm text-slate-900 dark:text-slate-100 block truncate">{comp.store.name}</span>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 block tabular-nums">
+                              {comp.availableItems.length}/{activeList.items.length} găsite
+                            </span>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <span className="font-bold text-sm text-slate-900 dark:text-slate-100 block truncate">{comp.store.name}</span>
-                          <span className="text-[11px] text-slate-500 dark:text-slate-400 block tabular-nums">
-                            {comp.availableItems.length}/{activeList.items.length} găsite
-                          </span>
+                        <div className="text-right shrink-0">
+                          {hasAny ? (
+                            <>
+                              <span className="font-display font-bold text-base text-slate-950 dark:text-slate-50 block tabular-nums">
+                                {PriceComparisonService.formatRon(comp.grandTotal)}
+                              </span>
+                              {isCheapestComplete ? (
+                                <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold block">
+                                  Cel mai ieftin coș complet
+                                </span>
+                              ) : isComplete && comp.comparableDiffVsCompleteWinner !== null && comp.comparableDiffVsCompleteWinner !== undefined ? (
+                                <span className="text-[11px] text-rose-600 dark:text-rose-400 font-medium tabular-nums block">
+                                  {comp.comparableDiffVsCompleteWinner > 0
+                                    ? `+${PriceComparisonService.formatRon(comp.comparableDiffVsCompleteWinner)}`
+                                    : 'Egal cu liderul'}
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium block">
+                                  Subtotal găsite ({comp.missingItems.length} lipsă)
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block">
+                              Fără oferte verificate
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <div className="text-right shrink-0">
-                        <span className="font-display font-bold text-base text-slate-950 dark:text-slate-50 block tabular-nums">
-                          {PriceComparisonService.formatRon(comp.grandTotal)}
-                        </span>
-                        {comp.isWinner ? (
-                          <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold">
-                            Cel mai ieftin
-                          </span>
-                        ) : (
-                          <span className="text-[11px] text-amber-700 dark:text-amber-400 font-medium tabular-nums">
-                            +{PriceComparisonService.formatRon(comp.grandTotal - (storeComparisons[0]?.grandTotal || 0))}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

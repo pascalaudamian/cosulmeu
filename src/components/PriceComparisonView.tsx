@@ -6,17 +6,14 @@ import {
   ChevronUp,
   CheckCircle2,
   AlertTriangle,
-  Info,
-  Store,
-  Tag,
-  ArrowRight,
-  TrendingDown
+  Info
 } from 'lucide-react';
 import { ShoppingList, BasketStoreComparison, Product, ProductOffer, Store as StoreType } from '../types.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 import { StorageService } from '../services/StorageService.js';
 import { MultiStoreOptimizationModal } from './MultiStoreOptimizationModal.js';
 import { STORES } from '../data/mockData.js';
+import { Tag } from 'lucide-react';
 
 interface PriceComparisonViewProps {
   activeList: ShoppingList;
@@ -57,6 +54,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
   catalogStores
 }) => {
   const [showOptimizationModal, setShowOptimizationModal] = useState(false);
+  const [optimizationMaxStores, setOptimizationMaxStores] = useState<number>(3);
   const [expandedStoreId, setExpandedStoreId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'stores' | 'matrix'>('stores');
   const [fetchedProducts, setFetchedProducts] = useState<Product[] | null>(null);
@@ -125,6 +123,32 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
     [activeList.items, useLoyaltyCards, products, offers, stores]
   );
 
+  const savingsSummary = useMemo(
+    () => PriceComparisonService.getPotentialSavingsForList(
+      activeList.items,
+      { useLoyaltyCards },
+      products,
+      offers,
+      stores
+    ),
+    [activeList.items, useLoyaltyCards, products, offers, stores]
+  );
+
+  const completeStores = useMemo(
+    () => comparisons.filter(c => c.isCompleteBasket),
+    [comparisons]
+  );
+
+  const partialStores = useMemo(
+    () => comparisons.filter(c => !c.isCompleteBasket && c.availableItems.length > 0),
+    [comparisons]
+  );
+
+  const noOfferStores = useMemo(
+    () => comparisons.filter(c => c.availableItems.length === 0),
+    [comparisons]
+  );
+
   const matrixStores = useMemo(() => {
     const withOffers = comparisons.filter(c => c.availableItems.length > 0);
     const selected = (withOffers.length > 0 ? withOffers : comparisons).slice(0, 6);
@@ -151,12 +175,187 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
     );
   }
 
-  const winner = comparisons[0];
-  const maxSavings = winner?.savingsVsWorst ?? 0;
+  const completeWinner = completeStores[0] || null;
+
+  const renderStoreCard = (comp: BasketStoreComparison, rankIndex: number) => {
+    const isExpanded = expandedStoreId === comp.store.id;
+    const isComplete = Boolean(comp.isCompleteBasket);
+    const isCompleteLeader = Boolean(comp.isCheapestCompleteBasket);
+    const hasComparableCompleteDiff =
+      isComplete && !isCompleteLeader && comp.comparableDiffVsCompleteWinner !== null && comp.comparableDiffVsCompleteWinner !== undefined;
+    const hasSameCoverageDiff =
+      !isComplete &&
+      comp.comparableDiffVsSameCoverageLeader !== null &&
+      comp.comparableDiffVsSameCoverageLeader !== undefined &&
+      comp.comparableDiffVsSameCoverageLeader > 0;
+
+    return (
+      <div
+        key={comp.store.id}
+        className={`surface-card transition-colors overflow-hidden ${
+          isCompleteLeader
+            ? 'border-emerald-500 ring-1 ring-emerald-500/20'
+            : 'hover:border-slate-300 dark:hover:border-slate-700'
+        }`}
+      >
+        <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          {/* Left: Store info & rank */}
+          <div className="flex items-center gap-3.5 min-w-0">
+            <div
+              className={`w-10 h-10 rounded-xl text-white font-bold text-sm tabular-nums flex items-center justify-center shrink-0 ${comp.store.brandColor}`}
+            >
+              #{rankIndex + 1}
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-display font-bold text-lg text-slate-900 dark:text-slate-100">
+                  {comp.store.name}
+                </span>
+                {isCompleteLeader && (
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                    · Cel mai ieftin coș complet
+                  </span>
+                )}
+                {!isComplete && comp.availableItems.length > 0 && (
+                  <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+                    · Acoperire parțială
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
+                <span className="flex items-center gap-1 font-medium text-slate-700 dark:text-slate-300">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  {comp.availableItems.length}/{activeList.items.length} găsite ({comp.completenessPercentage}%)
+                </span>
+                {comp.missingItems.length > 0 && (
+                  <span className="text-amber-700 dark:text-amber-400 flex items-center gap-1 font-medium">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    {comp.missingItems.length} fără preț
+                  </span>
+                )}
+                {comp.lastUpdated && comp.lastUpdated !== 'Fără oferte verificate' && (
+                  <span className="text-slate-400 dark:text-slate-500">
+                    · Verificat: {comp.lastUpdated}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Cost & Expand button */}
+          <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0">
+            <div className="text-left sm:text-right tabular-nums">
+              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                {isComplete ? 'Total coș complet' : 'Subtotal produse găsite'}
+              </div>
+              <div className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
+                {PriceComparisonService.formatRon(comp.grandTotal)}
+              </div>
+              {isCompleteLeader ? (
+                <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 block">
+                  Cel mai ieftin coș complet (100% produse)
+                </span>
+              ) : hasComparableCompleteDiff ? (
+                <span className="text-xs font-medium text-rose-600 dark:text-rose-400 block">
+                  {comp.comparableDiffVsCompleteWinner! > 0
+                    ? `+${PriceComparisonService.formatRon(comp.comparableDiffVsCompleteWinner!)} față de lider`
+                    : 'Egal cu cel mai ieftin coș complet'}
+                </span>
+              ) : hasSameCoverageDiff ? (
+                <span className="text-xs font-medium text-amber-700 dark:text-amber-400 block">
+                  +{PriceComparisonService.formatRon(comp.comparableDiffVsSameCoverageLeader!)} (aceleași {comp.availableItems.length} produse)
+                </span>
+              ) : (
+                <span className="text-xs font-medium text-amber-700 dark:text-amber-400 block">
+                  Acoperire parțială ({comp.availableItems.length}/{activeList.items.length} produse)
+                </span>
+              )}
+            </div>
+
+            <button
+              onClick={() => setExpandedStoreId(isExpanded ? null : comp.store.id)}
+              className="p-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              title={isExpanded ? 'Ascunde produsele' : 'Vezi detalii produse'}
+            >
+              {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Expanded Item Breakdown */}
+        {isExpanded && (
+          <div className="bg-slate-50/70 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 p-4 sm:p-5">
+            <h4 className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">
+              Detaliu produse în {comp.store.name}
+            </h4>
+
+            <div className="space-y-2 mb-4">
+              {comp.availableItems.map(({ item, calculatedPrice, unitPriceString, isLowest }) => (
+                <div
+                  key={item.id}
+                  className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between text-sm gap-3"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    {item.productId && onViewProductDetail ? (
+                      <button
+                        type="button"
+                        onClick={() => onViewProductDetail(item.productId!)}
+                        className="font-semibold text-slate-800 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline truncate text-left cursor-pointer"
+                      >
+                        {item.name}
+                      </button>
+                    ) : (
+                      <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">{item.name}</span>
+                    )}
+                    <span className="text-xs text-slate-500 dark:text-slate-400 shrink-0 tabular-nums">
+                      · {PriceComparisonService.formatQuantity(item.quantity, item.unit)}
+                    </span>
+                    {isLowest && (
+                      <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 shrink-0">
+                        · Minim
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="text-right shrink-0 tabular-nums">
+                    <span className="font-bold text-slate-900 dark:text-slate-100">
+                      {PriceComparisonService.formatRon(calculatedPrice)}
+                    </span>
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500 block">{unitPriceString}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {comp.missingItems.length > 0 && (
+              <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-200">
+                <span className="font-bold block mb-1.5">
+                  Produse fără ofertă activă în {comp.store.name} ({comp.missingItems.length}):
+                </span>
+                <div className="space-y-1 text-amber-800 dark:text-amber-300 tabular-nums">
+                  {comp.missingItems.map(item => (
+                    <div key={item.id} className="flex items-center justify-between gap-2">
+                      <span>{item.name} ({item.quantity} {item.unit})</span>
+                      <span className="font-medium text-amber-700 dark:text-amber-400">
+                        Preț indisponibil (exclus din subtotal)
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
+                  Produsele fără preț verificat nu sunt calculate ca 0 lei și nu primesc prețuri inventate. Suma afișată reprezintă subtotalul produselor găsite.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6 pb-16">
-      {/* Header Banner: Winner & Max Savings */}
+      {/* Header Banner: Complete Winner or Honest Undetermined State */}
       <section className="bg-slate-950 text-white rounded-2xl border border-slate-800 p-6 sm:p-8">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div>
@@ -166,33 +365,45 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
             <h1 className="font-display text-2xl sm:text-3xl font-bold tracking-tight mt-2 text-white">
               {catalogLoading
                 ? 'Se încarcă prețurile actualizate...'
-                : winner
-                ? `${winner.store.name} oferă cel mai mic total`
-                : 'Comparație prețuri pe magazine'}
+                : completeWinner
+                ? `${completeWinner.store.name} oferă cel mai ieftin coș complet`
+                : 'Nu există încă un coș complet comparabil'}
             </h1>
             <p className="text-slate-400 text-sm mt-1.5 max-w-xl leading-relaxed">
-              Calculat pe <span className="tabular-nums text-slate-200 font-semibold">{activeList.items.length}</span> articole, cu prețuri normalizate la unități echivalente (lei/kg, lei/l, lei/buc).
+              {completeWinner
+                ? <>Calculat pe <span className="tabular-nums text-slate-200 font-semibold">{activeList.items.length}/{activeList.items.length}</span> articole cu prețuri verificate și normalizate la unități echivalente.</>
+                : partialStores.length > 0
+                ? <>Niciun supermarket nu are oferte verificate pentru toate cele <span className="tabular-nums text-slate-200 font-semibold">{activeList.items.length}</span> articole; sumele afișate mai jos sunt subtotaluri parțiale ordonate după acoperire.</>
+                : <>Nu există oferte active verificate pentru produsele din lista ta curentă.</>}
             </p>
           </div>
 
           {/* Quick Savings Metric Ledger */}
-          <div className="bg-slate-900/90 rounded-xl p-4 sm:p-5 border border-white/10 flex items-center gap-5 shrink-0">
-            <div>
+          <div className="bg-slate-900/90 rounded-xl p-4 sm:p-5 border border-white/10 flex flex-col sm:flex-row sm:items-center gap-4 shrink-0">
+            <div className="min-w-0 max-w-xs">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 block">
                 Economie potențială
               </span>
-              <span className="font-display text-2xl sm:text-3xl font-bold text-emerald-400 tabular-nums mt-0.5 block">
-                {PriceComparisonService.formatRon(maxSavings)}
-              </span>
-              <span className="text-[11px] text-slate-400 block mt-0.5">
-                {maxSavings > 0
-                  ? 'față de cel mai scump coș comparabil'
-                  : 'fără economie comparabilă cu acoperire egală'}
+              {savingsSummary.status === 'determined' ? (
+                <span className="font-display text-2xl sm:text-3xl font-bold text-emerald-400 tabular-nums mt-0.5 block">
+                  {PriceComparisonService.formatRon(savingsSummary.maxSavings)}
+                </span>
+              ) : (
+                <span className="font-display text-lg sm:text-xl font-bold text-amber-300 mt-1 block">
+                  Economie nedeterminată
+                </span>
+              )}
+              <span className="text-[11px] text-slate-400 block mt-1 leading-snug">
+                {savingsSummary.savingsExplanationRo}
               </span>
             </div>
             <button
-              onClick={() => setShowOptimizationModal(true)}
-              className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              type="button"
+              onClick={() => {
+                setOptimizationMaxStores(3);
+                setShowOptimizationModal(true);
+              }}
+              className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
             >
               <Split className="w-4 h-4" />
               <span>Optimizează coșul</span>
@@ -203,7 +414,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
 
       {/* Switch between: Store Ranking View & Product Matrix View + Loyalty Toggle */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center bg-slate-200/70 dark:bg-slate-800 p-1 rounded-xl">
             <button
               onClick={() => setViewMode('stores')}
@@ -227,7 +438,6 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
             </button>
           </div>
 
-          {/* Loyalty card filter toggle */}
           <button
             onClick={() => {
               const updated = !useLoyaltyCards;
@@ -247,7 +457,11 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
         </div>
 
         <button
-          onClick={() => setShowOptimizationModal(true)}
+          type="button"
+          onClick={() => {
+            setOptimizationMaxStores(2);
+            setShowOptimizationModal(true);
+          }}
           className="inline-flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 border border-emerald-200/70 dark:border-emerald-800/70 px-3.5 py-1.5 rounded-xl transition-colors cursor-pointer"
         >
           <Split className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
@@ -255,171 +469,93 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
         </button>
       </div>
 
-      {/* View Mode 1: Store Ranking Cards */}
+      {/* View Mode 1: Separated Store Rankings */}
       {viewMode === 'stores' && (
-        <div className="space-y-3.5">
-          {comparisons.map((comp, index) => {
-            const isExpanded = expandedStoreId === comp.store.id;
-            const diffFromWinner = comp.grandTotal - (winner?.grandTotal || 0);
+        <div className="space-y-6">
+          {/* 1. Complete Basket Ranking */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Clasament coș complet (100% produse)
+              </h2>
+              {completeStores.length === 1 && (
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  1 singur magazin acoperă lista completă
+                </span>
+              )}
+            </div>
 
-            return (
-              <div
-                key={comp.store.id}
-                className={`surface-card transition-colors overflow-hidden ${
-                  comp.isWinner
-                    ? 'border-emerald-500 ring-1 ring-emerald-500/20'
-                    : 'hover:border-slate-300 dark:hover:border-slate-700'
-                }`}
-              >
-                {/* Store Main Bar */}
-                <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  {/* Left: Store info & rank */}
-                  <div className="flex items-center gap-3.5">
-                    <div
-                      className={`w-10 h-10 rounded-xl text-white font-bold text-sm tabular-nums flex items-center justify-center shrink-0 ${comp.store.brandColor}`}
-                    >
-                      #{index + 1}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2.5">
-                        <span className="font-display font-bold text-lg text-slate-900 dark:text-slate-100">
+            {completeStores.length === 0 ? (
+              <div className="surface-card p-5 border-amber-200/80 dark:border-amber-800/60 bg-amber-50/50 dark:bg-amber-950/20 flex items-start gap-3">
+                <Info className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    Nu există încă un coș complet comparabil
+                  </p>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                    Un magazin este declarat „Cel mai ieftin coș complet” doar când are prețuri valide verificate pentru toate cele {activeList.items.length} produse din listă.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {completeStores.map((comp, idx) => renderStoreCard(comp, idx))}
+              </div>
+            )}
+          </div>
+
+          {/* 2. Partial Coverage Ranking */}
+          {partialStores.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Clasament după acoperire (subtotaluri parțiale)
+                </h2>
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  Subtotalurile pentru acoperiri diferite nu sunt comparate ca preț total de coș
+                </span>
+              </div>
+              <div className="space-y-3">
+                {partialStores.map((comp, idx) => renderStoreCard(comp, idx))}
+              </div>
+            </div>
+          )}
+
+          {/* 3. Stores Without Valid Offers */}
+          {noOfferStores.length > 0 && (
+            <div className="space-y-3">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Fără oferte verificate ({noOfferStores.length})
+              </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {noOfferStores.map(comp => (
+                  <div
+                    key={comp.store.id}
+                    className="surface-card p-4 flex items-center justify-between gap-3 opacity-85"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div
+                        className={`w-8 h-8 rounded-lg text-white font-bold text-xs flex items-center justify-center shrink-0 ${comp.store.brandColor}`}
+                      >
+                        {comp.store.name.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <span className="font-bold text-sm text-slate-900 dark:text-slate-100 block truncate">
                           {comp.store.name}
                         </span>
-                        {comp.isWinner && (
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                            · Cel mai avantajos
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400 mt-0.5 tabular-nums">
-                        <span className="flex items-center gap-1 font-medium text-slate-700 dark:text-slate-300">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                          {comp.availableItems.length}/{activeList.items.length} găsite ({comp.completenessPercentage}%)
+                        <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                          0/{activeList.items.length} găsite
                         </span>
-                        {comp.missingItems.length > 0 && (
-                          <span className="text-amber-700 dark:text-amber-400 flex items-center gap-1 font-medium">
-                            <AlertTriangle className="w-3.5 h-3.5" />
-                            {comp.missingItems.length} fără preț
-                          </span>
-                        )}
-                        {comp.lastUpdated && (
-                          <span className="text-slate-400 dark:text-slate-500">
-                            · Verificat: {comp.lastUpdated}
-                          </span>
-                        )}
                       </div>
                     </div>
+                    <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 text-right shrink-0">
+                      Fără oferte verificate
+                    </span>
                   </div>
-
-                  {/* Right: Cost & Expand button */}
-                  <div className="flex items-center justify-between sm:justify-end gap-5">
-                    <div className="text-right tabular-nums">
-                      <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 flex items-center justify-end gap-1">
-                        <span>Total oferte găsite</span>
-                        {comp.missingItems.length > 0 && (
-                          <span className="text-amber-700 dark:text-amber-400 font-bold">*estimativ*</span>
-                        )}
-                      </div>
-                      <div className="font-display text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100">
-                        {PriceComparisonService.formatRon(comp.grandTotal)}
-                      </div>
-                      {comp.isWinner ? (
-                        <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 block">
-                          Cel mai bun coș (acoperire &amp; preț)
-                        </span>
-                      ) : comp.availableItems.length === winner?.availableItems.length ? (
-                        <span className="text-xs font-medium text-rose-600 dark:text-rose-400 block">
-                          +{PriceComparisonService.formatRon(diffFromWinner)} față de lider
-                        </span>
-                      ) : (
-                        <span className="text-xs font-medium text-amber-700 dark:text-amber-400 block">
-                          Acoperire mai mică ({comp.availableItems.length}/{winner?.availableItems.length || activeList.items.length})
-                        </span>
-                      )}
-                    </div>
-
-                    <button
-                      onClick={() => setExpandedStoreId(isExpanded ? null : comp.store.id)}
-                      className="p-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                      title={isExpanded ? 'Ascunde produsele' : 'Vezi detalii produse'}
-                    >
-                      {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Expanded Item Breakdown */}
-                {isExpanded && (
-                  <div className="bg-slate-50/70 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 p-4 sm:p-5">
-                    <h4 className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-3">
-                      Detaliu produse în {comp.store.name}
-                    </h4>
-
-                    {/* Available items */}
-                    <div className="space-y-2 mb-4">
-                      {comp.availableItems.map(({ item, calculatedPrice, unitPriceString, isLowest }) => (
-                        <div
-                          key={item.id}
-                          className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between text-sm gap-3"
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            {item.productId && onViewProductDetail ? (
-                              <button
-                                type="button"
-                                onClick={() => onViewProductDetail(item.productId!)}
-                                className="font-semibold text-slate-800 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline truncate text-left cursor-pointer"
-                              >
-                                {item.name}
-                              </button>
-                            ) : (
-                              <span className="font-semibold text-slate-800 dark:text-slate-100 truncate">{item.name}</span>
-                            )}
-                            <span className="text-xs text-slate-500 dark:text-slate-400 shrink-0 tabular-nums">
-                              · {PriceComparisonService.formatQuantity(item.quantity, item.unit)}
-                            </span>
-                            {isLowest && (
-                              <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 shrink-0">
-                                · Minim
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="text-right shrink-0 tabular-nums">
-                            <span className="font-bold text-slate-900 dark:text-slate-100">
-                              {PriceComparisonService.formatRon(calculatedPrice)}
-                            </span>
-                            <span className="text-[11px] text-slate-400 dark:text-slate-500 block">{unitPriceString}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Missing items clearly stated (without synthetic fallback pricing) */}
-                    {comp.missingItems.length > 0 && (
-                      <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/60 text-xs text-amber-900 dark:text-amber-200">
-                        <span className="font-bold block mb-1.5">
-                          Produse fără ofertă activă în {comp.store.name} ({comp.missingItems.length}):
-                        </span>
-                        <div className="space-y-1 text-amber-800 dark:text-amber-300 tabular-nums">
-                          {comp.missingItems.map(item => (
-                            <div key={item.id} className="flex items-center justify-between gap-2">
-                              <span>{item.name} ({item.quantity} {item.unit})</span>
-                              <span className="font-medium text-amber-700 dark:text-amber-400">
-                                Preț indisponibil (exclus din total)
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                        <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
-                          Produsele fără preț verificat nu sunt calculate ca 0 lei și nu primesc prețuri inventate. Totalul afișat este *estimativ* pentru articolele găsite.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
+                ))}
               </div>
-            );
-          })}
+            </div>
+          )}
         </div>
       )}
 
@@ -502,6 +638,7 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
           products={products}
           offers={offers}
           stores={stores}
+          initialMaxStores={optimizationMaxStores}
         />
       )}
     </div>

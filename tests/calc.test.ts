@@ -63,9 +63,11 @@ function runTests() {
 
   const comps = PriceComparisonService.compareBasketAcrossStores(testItems);
   assert(comps.length > 0, `Au fost returnate comparații pentru ${comps.length} magazine`);
-  assert(comps[0].isWinner === true, 'Primul magazin este marcat ca câștigător');
-  assert(comps[0].grandTotal <= comps[comps.length - 1].grandTotal, 'Magazinele sunt ordonate crescător după total');
-  assert(comps[0].savingsVsWorst >= 0, 'Economia față de cel mai scump magazin este pozitivă sau zero');
+  assert(
+    comps.every(c => !c.isWinner && !c.isCompleteBasket && !c.hasValidOffers),
+    'Cu oferte goale (0/2 produse găsite), niciun magazin nu este fals câștigător'
+  );
+  assert(comps[0].savingsVsWorst === 0, 'Fără coș complet comparabil, economia este 0 (nedeterminată)');
 
   // Test 6: Optimization logic with travel cost
   const optWithFreeTransport = OptimizationService.optimizeBasket(testItems, 0);
@@ -165,12 +167,30 @@ function runTests() {
   );
   assert(customComps.length === 2, 'compareBasketAcrossStores folosește magazinele custom');
   assert(
-    customComps[0].store.id === 'lidl' && customComps[0].grandTotal === 3.15,
-    `Normalizare unitate ml -> L și preț 500ml la Lidl (obținut: ${customComps[0]?.store.id} ${customComps[0]?.grandTotal})`
+    customComps[0].store.id === 'lidl' &&
+      customComps[0].grandTotal === 6.29 &&
+      customComps[0].isWinner === true &&
+      customComps[0].isCompleteBasket === true,
+    `Ambalaj indivizibil 1L pentru 500ml la Lidl și câștigător coș complet (obținut: ${customComps[0]?.store.id} ${customComps[0]?.grandTotal})`
   );
   assert(
-    customComps[1].store.id === 'kaufland' && customComps[1].availableItems.length === 1,
-    'storeId "store-kaufland" se potrivește cu magazinul canonic "kaufland"'
+    customComps[1].store.id === 'kaufland' &&
+      customComps[1].availableItems.length === 1 &&
+      customComps[1].comparableDiffVsCompleteWinner === 0.5,
+    'storeId "store-kaufland" se potrivește cu magazinul canonic "kaufland" și calculează diferența corectă (+0.50)'
+  );
+  const bulkProduct = { ...customProduct, id: 'prod-db-bulk', defaultUnit: 'l' as const, isSoldByWeight: true };
+  const bulkOffers = customOffers.map(o => ({ ...o, productId: 'prod-db-bulk' }));
+  const bulkComps = PriceComparisonService.compareBasketAcrossStores(
+    [{ ...dbListItem, productId: 'prod-db-bulk' }],
+    { useLoyaltyCards: true },
+    [bulkProduct],
+    bulkOffers,
+    customStores
+  );
+  assert(
+    bulkComps[0].store.id === 'lidl' && bulkComps[0].grandTotal === 3.15,
+    `Normalizare vrac ml -> L pentru 500ml la Lidl (obținut: ${bulkComps[0]?.grandTotal})`
   );
   const customOpt = OptimizationService.optimizeBasket([dbListItem], 6, [customProduct], customOffers, customStores);
   assert(

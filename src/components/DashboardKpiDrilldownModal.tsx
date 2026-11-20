@@ -34,7 +34,7 @@ export function DashboardKpiDrilldownModal({
     return dashboardData.trackedProductIds.map(productId => {
       const product = productsById.get(productId);
       const currentOffer = dashboardData.productOffers
-        .filter(offer => offer.productId === productId && offer.verificationStatus === 'verified')
+        .filter(offer => offer.productId === productId && PriceComparisonService.isOfferValid(offer, product))
         .sort((left, right) => left.price - right.price)[0];
       const activeAlerts = dashboardData.priceAlerts.filter(alert => alert.productId === productId && alert.isActive);
       return {
@@ -102,7 +102,11 @@ export function DashboardKpiDrilldownModal({
                         {detail.product?.brand ? ` · ${detail.product.brand}` : ''}
                       </p>
                       {detail.cheapestPrice === undefined ? (
-                        <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">Fără ofertă verificată curentă în mai multe magazine.</p>
+                        <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">Fără ofertă verificată curentă în magazine.</p>
+                      ) : detail.comparableStoresCount < 2 ? (
+                        <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                          Ofertă doar la {detail.lowestStoreName}: {PriceComparisonService.formatRon(detail.cheapestPrice)} (comparabilitate insuficientă)
+                        </p>
                       ) : (
                         <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">
                           {detail.lowestStoreName}: {PriceComparisonService.formatRon(detail.cheapestPrice)}
@@ -112,7 +116,11 @@ export function DashboardKpiDrilldownModal({
                     </div>
                     <div className="text-left sm:text-right">
                       <span className="block text-xs font-medium text-slate-500 dark:text-slate-400">Economie estimată</span>
-                      <span className="text-sm font-extrabold text-emerald-700 dark:text-emerald-400">{PriceComparisonService.formatRon(detail.savings)}</span>
+                      {detail.comparableStoresCount >= 2 ? (
+                        <span className="text-sm font-extrabold text-emerald-700 dark:text-emerald-400">{PriceComparisonService.formatRon(detail.savings)}</span>
+                      ) : (
+                        <span className="text-xs font-bold text-amber-700 dark:text-amber-400">Economie nedeterminată</span>
+                      )}
                     </div>
                   </li>
                 ))}

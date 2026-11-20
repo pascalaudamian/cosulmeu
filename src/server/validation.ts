@@ -428,11 +428,15 @@ export const basketItemInputSchema = z.object({
 
 export const basketOptimizeOptionsSchema = z.object({
   useLoyaltyCards: z.boolean().optional(),
+  useCoupons: z.boolean().optional(),
   maxStores: z.coerce.number().int().min(1).max(8).optional(),
   excludedStoreIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   favoriteStoreIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   includeStaleOffers: z.boolean().optional(),
-  transportCostPerExtraStore: z.coerce.number().min(0).max(500).optional()
+  maxOfferAgeDays: z.coerce.number().int().min(1).max(90).optional(),
+  region: z.string().trim().max(80).optional(),
+  transportCostPerExtraStore: z.coerce.number().min(0).max(500).optional(),
+  clientRevision: z.string().trim().max(160).optional()
 });
 
 export const basketOptimizeRequestSchema = z.object({
@@ -495,3 +499,102 @@ export const priceAlertsFromListSchema = z.object({
   intervalDays: priceHistoryIntervalSchema.optional(),
   discountPercentForTarget: z.coerce.number().min(1).max(80).default(10)
 });
+
+// =========================================================================
+// V2 Personal Assistant Validation Schemas
+// =========================================================================
+
+export const budgetSettingsUpdateSchema = z
+  .object({
+    monthlyBudget: z.coerce.number().min(0, 'Bugetul lunar nu poate fi negativ.').max(1000000).nullable().optional(),
+    weeklyBudget: z.coerce.number().min(0, 'Bugetul săptămânal nu poate fi negativ.').max(250000).nullable().optional(),
+    alertThresholdPct: z.coerce.number().int().min(10).max(100).optional()
+  })
+  .refine(
+    val =>
+      val.monthlyBudget !== undefined ||
+      val.weeklyBudget !== undefined ||
+      val.alertThresholdPct !== undefined,
+    { message: 'Trebuie specificat cel puțin un parametru de buget.' }
+  );
+
+export const sharedListRoleSchema = z.enum(['owner', 'editor', 'viewer']);
+export const sharedListInviteRoleSchema = z.enum(['editor', 'viewer']);
+
+export const sharedListInviteCreateSchema = z.object({
+  role: sharedListInviteRoleSchema.default('editor'),
+  invitedEmail: z.string().trim().email('Adresa de email pentru invitație este invalidă.').max(160).optional().nullable(),
+  expiresInHours: z.coerce.number().int().min(1).max(720).default(72),
+  maxUses: z.coerce.number().int().min(1).max(25).default(5)
+});
+
+export const sharedListMemberRoleUpdateSchema = z.object({
+  role: sharedListInviteRoleSchema
+});
+
+export const sharedListActivityCreateSchema = z.object({
+  actionType: z.enum([
+    'list_shared',
+    'member_joined',
+    'member_role_changed',
+    'member_revoked',
+    'item_added',
+    'item_updated',
+    'item_checked',
+    'item_unchecked',
+    'item_removed',
+    'list_renamed'
+  ]),
+  targetName: z.string().trim().max(255).optional().nullable(),
+  details: z.record(z.string(), z.any()).optional()
+});
+
+export const barcodeSuggestionCreateSchema = z.object({
+  barcode: z
+    .string()
+    .trim()
+    .transform(v => v.replace(/\D/g, ''))
+    .refine(v => [8, 12, 13, 14].includes(v.length), {
+      message: 'Codul de bare trebuie să conțină 8, 12, 13 sau 14 cifre (EAN/UPC).'
+    }),
+  proposedName: z.string().trim().min(2, 'Denumirea produsului este obligatorie.').max(200),
+  proposedBrand: z.string().trim().max(120).optional().nullable(),
+  category: z.enum([
+    'Fructe și legume',
+    'Lactate și ouă',
+    'Carne și pește',
+    'Panificație',
+    'Băuturi',
+    'Produse congelate',
+    'Produse de bază',
+    'Curățenie',
+    'Igienă personală',
+    'Alte produse'
+  ]).default('Alte produse'),
+  packageWeightOrVolume: z.coerce.number().positive().max(10000).optional().nullable(),
+  packageUnit: z.enum(['buc', 'kg', 'g', 'l', 'ml', 'pachet']).optional().nullable(),
+  observedStoreId: z.string().trim().max(64).optional().nullable(),
+  observedPrice: z.coerce.number().positive('Prețul observat trebuie să fie > 0.').max(50000).optional().nullable(),
+  notes: z.string().trim().max(500).optional().nullable()
+});
+
+export const assistantQueryRequestSchema = z.object({
+  prompt: z.string().trim().min(2, 'Întrebarea către asistent este prea scurtă.').max(800),
+  intent: z
+    .enum([
+      'budget_basket',
+      'optimize_list',
+      'list_promos',
+      'cheaper_alternatives',
+      'meal_plan_days',
+      'general_guidance'
+    ])
+    .optional(),
+  budgetLei: z.coerce.number().positive().max(100000).optional(),
+  days: z.coerce.number().int().min(1).max(14).optional(),
+  listId: z.string().trim().max(120).optional(),
+  selectedProductId: z.string().trim().max(64).optional(),
+  items: z.array(basketItemInputSchema).max(200).optional(),
+  useLoyaltyCards: z.boolean().default(true)
+});
+

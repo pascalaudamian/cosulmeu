@@ -29,7 +29,8 @@ import {
   Coffee,
   Snowflake,
   Heart,
-  MoreHorizontal
+  MoreHorizontal,
+  Barcode
 } from 'lucide-react';
 import { Product, Store as StoreType, ShoppingList } from '../types.js';
 import { CATEGORIES_TAXONOMY, CategoryDefinition } from '../data/categories.js';
@@ -38,19 +39,22 @@ import { PriceComparisonService } from '../services/PriceComparisonService.js';
 import { PriceQualityClassifier } from '../services/PriceQualityClassifier.js';
 import { StorageService } from '../services/StorageService.js';
 import { STORES } from '../data/mockData.js';
+import { BarcodeScannerModal } from './BarcodeScannerModal.js';
 
 interface ProductsViewProps {
   onSelectProduct: (productId: string) => void;
   activeList?: ShoppingList;
   onAddToList?: (productId: string, productName: string, product?: Product) => Promise<boolean> | boolean | void;
   initialCategory?: string;
+  accessToken?: string;
 }
 
 export const ProductsView: React.FC<ProductsViewProps> = ({
   onSelectProduct,
   activeList,
   onAddToList,
-  initialCategory
+  initialCategory,
+  accessToken
 }) => {
   // Filters state
   const [selectedCategory, setSelectedCategory] = useState<string>(initialCategory || 'toate');
@@ -84,6 +88,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
   const [categories, setCategories] = useState<any[]>(CATEGORIES_TAXONOMY);
   const [addedItemName, setAddedItemName] = useState<string | null>(null);
   const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
+  const [showBarcodeModal, setShowBarcodeModal] = useState(false);
 
   // Store lookup map
   const storeMap = useMemo(() => new Map<string, StoreType>(STORES.map(s => [s.id, s])), []);
@@ -376,35 +381,67 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           </p>
         </div>
 
-        {/* Căutare rapidă */}
-        <div className="w-full md:w-80 relative shrink-0">
-          <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            type="text"
-            aria-label="Caută produse după nume, brand sau EAN"
-            placeholder="Caută produs, brand sau EAN..."
-            value={searchQuery}
-            onChange={e => {
-              setSearchQuery(e.target.value);
-              setCurrentPage(1);
-            }}
-            className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 pl-10 pr-9 py-2.5 rounded-xl text-sm text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 font-medium focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-hidden"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery('');
-                setDebouncedSearchQuery('');
+        {/* Căutare rapidă + Scanare EAN */}
+        <div className="flex items-center gap-2 w-full md:w-auto shrink-0">
+          <div className="flex-1 md:w-72 relative">
+            <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              aria-label="Caută produse după nume, brand sau EAN"
+              placeholder="Caută produs, brand sau EAN..."
+              value={searchQuery}
+              onChange={e => {
+                setSearchQuery(e.target.value);
+                setCurrentPage(1);
               }}
-              aria-label="Șterge căutarea"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
+              className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 pl-10 pr-9 py-2.5 rounded-xl text-sm text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 font-medium focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-hidden"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setDebouncedSearchQuery('');
+                }}
+                aria-label="Șterge căutarea"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 p-0.5 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowBarcodeModal(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-500 text-white text-xs sm:text-sm font-bold shrink-0 shadow-xs transition-colors cursor-pointer"
+            title="Scanează cod de bare EAN/UPC cu camera sau manual"
+          >
+            <Barcode className="w-4 h-4" />
+            <span className="hidden sm:inline">Scanează EAN</span>
+          </button>
         </div>
       </div>
+
+      <BarcodeScannerModal
+        open={showBarcodeModal}
+        onClose={() => setShowBarcodeModal(false)}
+        accessToken={accessToken}
+        onAddToList={async (productId, productName, productData) => {
+          if (onAddToList) {
+            const added = await onAddToList(productId, productName, productData);
+            if (added !== false) {
+              setAddedItemName(productName);
+              setTimeout(() => setAddedItemName(null), 2500);
+            }
+            return Boolean(added !== false);
+          }
+          return false;
+        }}
+        onViewProduct={id => {
+          setShowBarcodeModal(false);
+          onSelectProduct(id);
+        }}
+      />
 
       {/* Bară Categorii */}
       <div className="mb-4 overflow-x-auto no-scrollbar pb-1">

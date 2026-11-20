@@ -16,6 +16,7 @@ export const DEFAULT_PRICE_QUALITY_CONFIG: PriceQualityClassifierConfig = {
   recentlyVerifiedMaxHours: 24,
   verifiedMaxHours: 72,
   staleMaxHours: 168, // 7 zile (ciclu săptămânal standard de catalog retail)
+  expiredMaxHours: 168,
   suspiciousDeviationHighRatio: 0.5,
   suspiciousDropNoPromoRatio: 0.6,
   minPlausiblePrice: 0.1,
@@ -45,6 +46,27 @@ export interface ClassifyOfferQualityOptions {
   config?: Partial<PriceQualityClassifierConfig>;
   confirmationsCount?: number;
   now?: Date;
+}
+
+export interface ValidateOfferContextOptions {
+  product?: Product;
+  storeId?: string;
+  region?: string;
+  useLoyaltyCards?: boolean;
+  useCoupons?: boolean;
+  includeStaleOffers?: boolean;
+  requestedQuantity?: number;
+  config?: Partial<PriceQualityClassifierConfig>;
+  now?: Date;
+}
+
+export interface OfferContextValidationResult {
+  valid: boolean;
+  reasons: string[];
+  assessment: PriceDataQualityAssessment;
+  requiresLoyaltyCard: boolean;
+  requiresCoupon: boolean;
+  minQuantityRequired: number | null;
 }
 
 function mergeConfig(custom?: Partial<PriceQualityClassifierConfig>): PriceQualityClassifierConfig {
@@ -114,6 +136,7 @@ export class PriceQualityClassifier {
 
     const hasFutureValidUntil = Boolean(offer.validUntil && offer.validUntil >= todayStr);
 
+    const expiredThresholdHours = Math.max(cfg.staleMaxHours, cfg.expiredMaxHours ?? cfg.staleMaxHours);
     let ageScore = 0;
     let ageDetail = 'Lipsă dată validă de verificare.';
     if (ageHours === null) {
@@ -133,17 +156,26 @@ export class PriceQualityClassifier {
       if (!hasFutureValidUntil) {
         reasons.push(`Prețul are o vechime între ${cfg.verifiedMaxHours} și ${cfg.staleMaxHours} de ore și necesită reconfirmare.`);
       }
+    } else if (ageHours <= expiredThresholdHours) {
+      ageScore = 25;
+      ageDetail = `Ofertă veche extinsă: ${ageHours.toFixed(1)} ore (${cfg.staleMaxHours}–${expiredThresholdHours}h).`;
+      reasons.push(`Prețul are o vechime de ${Math.round(ageHours)} ore și necesită reconfirmare.`);
     } else {
       ageScore = 10;
-      ageDetail = `Ofertă depășită: ${ageHours.toFixed(1)} ore (> ${cfg.staleMaxHours}h).`;
-      reasons.push(`Observația depășește pragul de ${cfg.staleMaxHours} de ore fără valabilitate extinsă.`);
+      ageDetail = `Ofertă depășită: ${ageHours.toFixed(1)} ore (> ${expiredThresholdHours}h).`;
+      reasons.push(`Observația depășește pragul de ${expiredThresholdHours} de ore fără valabilitate extinsă.`);
     }
 
     // 2. Source provenance
-    const sourceKey = String(offer.source || '').toLowerCase();
+    const sourceKey = String(offer.source || '').trim().toLowerCase();
+    const missingSource = !sourceKey || sourceKey === 'unknown' || sourceKey === 'none' || sourceKey === 'null';
     let sourceScore = 50;
     let sourceDetail = `Sursă: ${offer.source}.`;
-    if (sourceKey === 'official_feed' || sourceKey === 'partner_api' || sourceKey === 'verified' || sourceKey === 'authorized_api') {
+    if (missingSource) {
+      sourceScore = 0;
+      sourceDetail = 'Lipsă sursă declarată — nu poate fi prezentat ca preț verificat.';
+      reasons.push('Prețul nu are sursă declarată și nu poate fi prezentat ca verificat.');
+    } else if (sourceKey === 'official_feed' || sourceKey === 'partner_api' || sourceKey === 'verified' || sourceKey === 'authorized_api') {
       sourceScore = 100;
       sourceDetail = 'Sursă oficială / acreditată.';
     } else if (sourceKey === 'public_catalog_feed' || sourceKey === 'affiliate_feed' || sourceKey === 'manual_import') {
@@ -358,10 +390,10 @@ export class PriceQualityClassifier {
     } else if (
       verifStatus === 'expired' ||
       isPromoExpired ||
-      (!hasFutureValidUntil && ageHours !== null && ageHours > cfg.staleMaxHours)
+      (!hasFutureValidUntil && ageHours !== null && ageHours > expiredThresholdHours)
     ) {
       status = 'EXPIRED';
-    } else if (verifStatus === 'pending' || sourceKey === 'estimated' || ageHours === null) {
+    } else if (missingSource || verifStatus === 'pending' || sourceKey === 'estimated' || ageHours === null) {
       status = 'UNVERIFIED';
     } else if (ageHours > cfg.verifiedMaxHours) {
       status = 'STALE';
@@ -373,6 +405,7 @@ export class PriceQualityClassifier {
 
     const isUsableForComparison =
       !hasFatalAnomaly &&
+      !missingSource &&
       status !== 'EXPIRED' &&
       status !== 'SUSPICIOUS' &&
       offer.price > 0 &&
@@ -383,12 +416,12 @@ export class PriceQualityClassifier {
       verifStatus !== 'isolated';
 
     const isReliableForOptimization =
-      isUsableForComparison && (status === 'VERIFIED_RECENTLY' || status === 'VERIFIED');
+      isUsableForComparison && !missingSource && (status === 'VERIFIED_RECENTLY' || status === 'VERIFIED');
 
     const descriptions: Record<PriceDataQualityStatus, string> = {
       VERIFIED_RECENTLY: 'Preț verificat în ultimele 24h, fără anomalii și cu unități consecvente.',
-      VERIFIED: 'Preț verificat în intervalul normal de actualizare (24–48h).',
-      STALE: 'Preț verificat anterior (48–72h); poate necesita reconfirmare la raft.',
+      VERIFIED: 'Preț verificat în intervalul normal de actualizare (24–72h).',
+      STALE: 'Preț verificat anterior; poate necesita reconfirmare la raft.',
       UNVERIFIED: 'Ofertă încă neverificată sau fără confirmare completă.',
       EXPIRED: 'Ofertă sau promoție expirată — exclusă din optimizările active.',
       SUSPICIOUS: 'Anomalie de preț sau date inconsistente — exclusă din calculele sigure.'
@@ -406,6 +439,85 @@ export class PriceQualityClassifier {
       isReliableForOptimization,
       factors,
       reasons
+    };
+  }
+
+  /**
+   * Validare contextuală centralizată: dată colectare/expirare, sursă, magazin, produs,
+   * regiune, condiții promoție (card fidelitate / cupon / cantitate minimă).
+   */
+  static validateOfferForContext(
+    offer: ProductOffer,
+    options: ValidateOfferContextOptions = {}
+  ): OfferContextValidationResult {
+    const assessment = this.classifyOffer(offer, {
+      product: options.product,
+      config: options.config,
+      now: options.now
+    });
+
+    const reasons = [...assessment.reasons];
+    const includeStaleOffers = options.includeStaleOffers ?? true;
+    const useLoyaltyCards = options.useLoyaltyCards ?? true;
+    const useCoupons = options.useCoupons ?? false;
+
+    const normalizeStore = (val?: string) =>
+      (val || '').toLowerCase().trim().replace(/^store-/, '').replace(/-chain$/, '').replace(/[^a-z0-9-]/g, '');
+
+    if (options.storeId && normalizeStore(offer.storeId) !== normalizeStore(options.storeId)) {
+      reasons.push(`Oferta aparține altui magazin (${offer.storeId}) decât cel evaluat (${options.storeId}).`);
+    }
+
+    if (options.product && offer.productId !== options.product.id) {
+      reasons.push(`Oferta aparține produsului ${offer.productId}, nu produsului ${options.product.id}.`);
+    }
+
+    if (options.region !== undefined) {
+      const offReg = (offer.region || '').toLowerCase().trim();
+      const reqReg = (options.region || '').toLowerCase().trim();
+      const isOffNational = !offReg || offReg === 'național' || offReg === 'national' || offReg === 'romania' || offReg === 'toate';
+      const isReqNational = !reqReg || reqReg === 'național' || reqReg === 'national' || reqReg === 'romania' || reqReg === 'toate';
+      if (!isOffNational && (isReqNational || (!offReg.includes(reqReg) && !reqReg.includes(offReg)))) {
+        reasons.push(`Oferta este valabilă doar în regiunea ${offer.region}, nu pentru ${options.region || 'Național'}.`);
+      }
+    }
+
+    if (!includeStaleOffers && assessment.status === 'STALE') {
+      reasons.push('Preț considerat vechi conform politicii stricte de prospețime.');
+    }
+
+    const requiresLoyaltyCard = Boolean(offer.loyaltyCardRequired);
+    const promoText = (offer.promoDetails || '').toLowerCase();
+    const requiresCoupon = Boolean(offer.couponRequired || offer.couponCode || /\b(cupon|voucher|cod\s+promo)\b/i.test(promoText));
+    const minQuantityRequired =
+      offer.minQuantityForPromo && offer.minQuantityForPromo > 1 ? Math.floor(offer.minQuantityForPromo) : null;
+
+    const hasFallbackRegularPrice = Boolean(
+      (offer.normalPrice && offer.normalPrice > 0) || (offer.originalPrice && offer.originalPrice > 0)
+    );
+
+    if (requiresLoyaltyCard && !useLoyaltyCards && !hasFallbackRegularPrice) {
+      reasons.push('Promoția necesită card de fidelitate și nu are preț standard fără card.');
+    }
+    if (requiresCoupon && !useCoupons && !hasFallbackRegularPrice) {
+      reasons.push('Promoția necesită cupon activat și nu are preț standard alternativ.');
+    }
+    if (minQuantityRequired && options.requestedQuantity !== undefined && options.requestedQuantity < minQuantityRequired && !hasFallbackRegularPrice) {
+      reasons.push(`Promoția necesită minimum ${minQuantityRequired} unități.`);
+    }
+
+    const valid =
+      assessment.isUsableForComparison &&
+      (includeStaleOffers || assessment.status !== 'STALE') &&
+      reasons.length === assessment.reasons.length;
+
+    return {
+      valid,
+      reasons,
+      assessment,
+      requiresLoyaltyCard,
+      requiresCoupon,
+      minQuantityRequired
     };
   }
 }

@@ -907,6 +907,8 @@ export class DatabaseService {
             confidenceLevel: r.confidence_level || 'high',
             verificationStatus: r.verification_status || 'verified',
             lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+            lastVerifiedAt: r.last_verified_at ? new Date(r.last_verified_at).toISOString() : undefined,
+            region: r.region || undefined,
             isSponsored: Boolean(r.is_sponsored),
             isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
             anomalyReason: r.anomaly_reason || undefined
@@ -961,6 +963,8 @@ export class DatabaseService {
           confidenceLevel: r.confidence_level || 'high',
           verificationStatus: r.verification_status || 'verified',
           lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+          lastVerifiedAt: r.last_verified_at ? new Date(r.last_verified_at).toISOString() : undefined,
+          region: r.region || undefined,
           isSponsored: Boolean(r.is_sponsored),
           isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
           anomalyReason: r.anomaly_reason || undefined
@@ -5215,6 +5219,8 @@ export class DatabaseService {
             confidenceLevel: r.confidence_level || 'high',
             verificationStatus: r.verification_status || 'verified',
             lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+            lastVerifiedAt: r.last_verified_at ? new Date(r.last_verified_at).toISOString() : undefined,
+            region: r.region || undefined,
             isSponsored: Boolean(r.is_sponsored),
             isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
             anomalyReason: r.anomaly_reason || undefined
