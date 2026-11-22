@@ -3,27 +3,22 @@ import {
   PriceObservation,
   Product,
   ProductOffer,
+  RetailerProductRecord,
   Store
 } from '../types.js';
 import { PriceComparisonService } from './PriceComparisonService.js';
 import { PriceHistoryService } from './PriceHistoryService.js';
+import {
+  buildCanonicalAliasIndex,
+  collectProductIdsForCanonical,
+  normalizeBarcodeCandidates,
+  normalizeStoreIdKey,
+  normalizeValidatedBarcodeCandidates,
+  resolveCanonicalProductId
+} from './ProductIdentityService.js';
+import { validateAndNormalizeBarcode } from './ProductNormalizationService.js';
 
-/**
- * Normalizează un cod de bare scanat / introdus manual și generează variante echivalente
- * (ex: UPC-A 12 cifre <-> EAN-13 cu prefix '0').
- */
-export function normalizeBarcodeCandidates(rawCode: string): string[] {
-  const digits = (rawCode || '').replace(/\D/g, '').trim();
-  if (digits.length < 6 || digits.length > 14) return [];
-
-  const candidates = new Set<string>([digits]);
-  if (digits.length === 12) {
-    candidates.add(`0${digits}`);
-  } else if (digits.length === 13 && digits.startsWith('0')) {
-    candidates.add(digits.slice(1));
-  }
-  return Array.from(candidates);
-}
+export { normalizeBarcodeCandidates, normalizeValidatedBarcodeCandidates, validateAndNormalizeBarcode };
 
 export function isValidBarcodeFormat(rawCode: string): boolean {
   const digits = (rawCode || '').replace(/\D/g, '').trim();
@@ -36,15 +31,21 @@ export function lookupProductByBarcode(params: {
   offers: ProductOffer[];
   stores: Store[];
   observations?: PriceObservation[];
+  retailerProducts?: RetailerProductRecord[];
+  aliasMap?: Map<string, string> | Record<string, string>;
 }): BarcodeLookupResult {
   const cleaned = (params.barcode || '').replace(/\D/g, '').trim();
-  const candidates = normalizeBarcodeCandidates(cleaned);
+  const validation = validateAndNormalizeBarcode(params.barcode);
+  const candidates = validation.normalizedEquivalentBarcodes.length > 0
+    ? validation.normalizedEquivalentBarcodes
+    : normalizeBarcodeCandidates(cleaned);
 
   if (candidates.length === 0) {
     return {
       found: false,
       searchedBarcode: cleaned || params.barcode,
       normalizedBarcodes: [],
+      barcodeValidation: validation,
       offers: [],
       lowestPrice: null,
       lowestStoreName: null,
@@ -53,17 +54,44 @@ export function lookupProductByBarcode(params: {
   }
 
   const candidateSet = new Set(candidates);
-  const matchedProduct = (params.products || []).find(p => {
+  const productsById = new Map<string, Product>();
+  for (const p of params.products || []) {
+    if (p?.id) productsById.set(p.id, p);
+  }
+  const aliasIndex = buildCanonicalAliasIndex(params.aliasMap ?? params.products ?? []);
+
+  let rawMatchedProduct = (params.products || []).find(p => {
     if (!p?.barcode) return false;
     const prodVariants = normalizeBarcodeCandidates(p.barcode);
     return prodVariants.some(v => candidateSet.has(v));
   });
+
+  if (!rawMatchedProduct && Array.isArray(params.retailerProducts)) {
+    const matchedRp = params.retailerProducts.find(rp => {
+      if (!rp?.barcode || !rp?.productId) return false;
+      const rpVariants = normalizeBarcodeCandidates(rp.barcode);
+      return rpVariants.some(v => candidateSet.has(v));
+    });
+    if (matchedRp?.productId) {
+      const resolvedFromRp = resolveCanonicalProductId(matchedRp.productId, aliasIndex) || matchedRp.productId;
+      rawMatchedProduct = productsById.get(resolvedFromRp) || productsById.get(matchedRp.productId);
+    }
+  }
+
+  let matchedProduct = rawMatchedProduct;
+  if (rawMatchedProduct) {
+    const canonicalId = resolveCanonicalProductId(rawMatchedProduct.id, aliasIndex);
+    if (canonicalId && productsById.has(canonicalId)) {
+      matchedProduct = productsById.get(canonicalId)!;
+    }
+  }
 
   if (!matchedProduct) {
     return {
       found: false,
       searchedBarcode: cleaned,
       normalizedBarcodes: candidates,
+      barcodeValidation: validation,
       offers: [],
       lowestPrice: null,
       lowestStoreName: null,
@@ -71,28 +99,47 @@ export function lookupProductByBarcode(params: {
     };
   }
 
+  const equivalentIds = new Set(collectProductIdsForCanonical(matchedProduct.id, aliasIndex));
+  equivalentIds.add(matchedProduct.id);
+
   const storeMap = new Map<string, Store>();
   for (const s of params.stores || []) {
     if (!s?.id || s.id === 'validation-only-retailer') continue;
     storeMap.set(s.id, s);
-    storeMap.set(s.id.toLowerCase().replace(/^store-/, '').replace(/-chain$/, ''), s);
+    storeMap.set(normalizeStoreIdKey(s.id), s);
+    if (s.slug) storeMap.set(normalizeStoreIdKey(s.slug), s);
   }
 
-  const validOffers = (params.offers || [])
-    .filter(o => o.productId === matchedProduct.id && PriceComparisonService.isOfferValid(o, matchedProduct))
-    .map(offer => {
-      const normKey = (offer.storeId || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '');
-      const store = storeMap.get(offer.storeId) || storeMap.get(normKey);
-      return store ? { offer, store } : null;
-    })
-    .filter((entry): entry is { offer: ProductOffer; store: Store } => entry !== null)
-    .sort((a, b) => a.offer.price - b.offer.price);
+  const bestOfferByStoreKey = new Map<string, { offer: ProductOffer; store: Store }>();
+  for (const offer of params.offers || []) {
+    const offerCanonId = resolveCanonicalProductId(offer.productId, aliasIndex) || offer.productId;
+    if (!equivalentIds.has(offer.productId) && offerCanonId !== matchedProduct.id) continue;
+    if (!PriceComparisonService.isOfferValid(offer, matchedProduct)) continue;
+    const normKey = normalizeStoreIdKey(offer.storeId);
+    const store = storeMap.get(offer.storeId) || storeMap.get(normKey);
+    if (!store) continue;
+    const canonStoreKey = normalizeStoreIdKey(store.slug || store.id);
+    const normalizedOffer: ProductOffer = {
+      ...offer,
+      productId: matchedProduct.id,
+      storeId: canonStoreKey || offer.storeId
+    };
+    const prev = bestOfferByStoreKey.get(canonStoreKey);
+    if (!prev || normalizedOffer.price < prev.offer.price) {
+      bestOfferByStoreKey.set(canonStoreKey, { offer: normalizedOffer, store });
+    }
+  }
+
+  const validOffers = Array.from(bestOfferByStoreKey.values()).sort(
+    (a, b) => a.offer.price - b.offer.price
+  );
 
   const lowestEntry = validOffers[0] || null;
   const fullStats = PriceHistoryService.getProductPriceStats(matchedProduct.id, {
     observations: params.observations || [],
     offers: validOffers.map(v => v.offer),
-    stores: params.stores
+    stores: params.stores,
+    aliasMap: params.aliasMap
   });
   const stats90 = fullStats.intervalStats[90];
 
@@ -100,6 +147,7 @@ export function lookupProductByBarcode(params: {
     found: true,
     searchedBarcode: cleaned,
     normalizedBarcodes: candidates,
+    barcodeValidation: validation,
     product: matchedProduct,
     offers: validOffers,
     lowestPrice: lowestEntry ? lowestEntry.offer.price : null,

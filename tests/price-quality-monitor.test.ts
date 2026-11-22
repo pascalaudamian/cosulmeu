@@ -148,7 +148,7 @@ async function runTests() {
     packageWeightOrVolume: 1,
     packageUnit: 'l',
     normalizedUnit: 'l',
-    barcode: '5941014002341',
+    barcode: '5941014002343',
     baseReferencePrice: 6.99
   };
 

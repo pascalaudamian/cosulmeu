@@ -11,7 +11,9 @@ import {
   ProductMatchCandidate,
   UserErrorReport,
   MatchAuditEntry,
-  Store
+  Store,
+  ShadowReviewDecisionRecord,
+  ShadowReviewAuditEntry
 } from '../types.js';
 import {
   PromotionRecord,
@@ -43,6 +45,11 @@ import {
   INITIAL_SYNC_RUNS,
   INITIAL_MATCH_CANDIDATES
 } from '../data/mockData.js';
+import {
+  buildCanonicalAliasIndex,
+  CanonicalAliasIndex,
+  resolveCanonicalProductId
+} from './ProductIdentityService.js';
 
 const KEYS = {
   SHOPPING_LISTS: 'cosul_meu_lists_v1',
@@ -74,7 +81,9 @@ const KEYS = {
   CATALOG_EXTRACTED_OFFERS: 'cosul_meu_catalog_extracted_offers_v1',
   CATALOG_IMPORT_ERRORS: 'cosul_meu_catalog_import_errors_v1',
   DELETED_PRODUCT_IDS: 'cosul_meu_deleted_product_ids_v1',
-  CUSTOM_STORES: 'cosul_meu_custom_stores_v1'
+  CUSTOM_STORES: 'cosul_meu_custom_stores_v1',
+  SHADOW_MATCH_REVIEWS: 'cosul_meu_shadow_match_reviews_v1',
+  SHADOW_REVIEW_AUDIT: 'cosul_meu_shadow_review_audit_v1'
 };
 
 
@@ -1220,6 +1229,134 @@ export class StorageService {
     this.saveQualityAnomalies([]);
     this.saveRecollectionQueue([]);
     this.saveDailyQualityReports([]);
+    this.saveShadowMatchReviews([]);
+    this.saveShadowReviewAuditLogs([]);
+  }
+
+  /**
+   * Actualizează idempotent toate referințele locale (liste, alerte, favorite, bonuri)
+   * de la aliasuri la ID-urile canonice corespunzătoare, fără a șterge niciun articol.
+   */
+  static normalizeLocalProductReferences(
+    aliasSource: CanonicalAliasIndex | Map<string, string> | Record<string, string> | Product[]
+  ): {
+    updated: boolean;
+    upgradedListItems: number;
+    upgradedAlerts: number;
+    upgradedTracked: number;
+    upgradedReceiptItems: number;
+  } {
+    const aliasIndex = buildCanonicalAliasIndex(aliasSource);
+    const resolveId = (rawId?: string): string | undefined => {
+      if (!rawId) return rawId;
+      return resolveCanonicalProductId(rawId, aliasIndex) || rawId;
+    };
+
+    let upgradedListItems = 0;
+    let upgradedAlerts = 0;
+    let upgradedTracked = 0;
+    let upgradedReceiptItems = 0;
+
+    // 1. Shopping Lists
+    const lists = this.getShoppingLists();
+    let listsChanged = false;
+    const nextLists = lists.map(list => {
+      let itemsChanged = false;
+      const nextItems = list.items.map(item => {
+        if (!item.productId) return item;
+        const resolved = resolveId(item.productId);
+        if (resolved && resolved !== item.productId) {
+          upgradedListItems++;
+          itemsChanged = true;
+          return { ...item, productId: resolved };
+        }
+        return item;
+      });
+      if (itemsChanged) {
+        listsChanged = true;
+        return { ...list, items: nextItems };
+      }
+      return list;
+    });
+    if (listsChanged) {
+      this.saveShoppingLists(nextLists);
+    }
+
+    // 2. Price Alerts (upgrade & dedupe collapsed keys keeping first/active entry)
+    const alerts = this.getPriceAlerts();
+    const seenAlertKeys = new Set<string>();
+    const nextAlerts: PriceAlert[] = [];
+    let alertsChanged = false;
+    for (const alert of alerts) {
+      const resolved = resolveId(alert.productId) || alert.productId;
+      if (resolved !== alert.productId) {
+        upgradedAlerts++;
+        alertsChanged = true;
+      }
+      const key = `${resolved}:${alert.alertType || 'below_target'}:${alert.intervalDays || ''}`;
+      if (seenAlertKeys.has(key)) {
+        alertsChanged = true;
+        continue;
+      }
+      seenAlertKeys.add(key);
+      nextAlerts.push(resolved !== alert.productId ? { ...alert, productId: resolved } : alert);
+    }
+    if (alertsChanged) {
+      this.savePriceAlerts(nextAlerts);
+    }
+
+    // 3. Tracked Products (Favorites)
+    const tracked = this.getTrackedProducts();
+    const nextTrackedSet = new Set<string>();
+    let trackedChanged = false;
+    for (const pid of tracked) {
+      const resolved = resolveId(pid) || pid;
+      if (resolved !== pid) {
+        upgradedTracked++;
+        trackedChanged = true;
+      }
+      if (nextTrackedSet.has(resolved)) {
+        trackedChanged = true;
+      } else {
+        nextTrackedSet.add(resolved);
+      }
+    }
+    if (trackedChanged) {
+      this.saveTrackedProducts(Array.from(nextTrackedSet));
+    }
+
+    // 4. Receipts matchedProductId
+    const receipts = this.getReceipts();
+    let receiptsChanged = false;
+    const nextReceipts = receipts.map(rec => {
+      let recItemsChanged = false;
+      const nextItems = rec.items.map(item => {
+        if (!item.matchedProductId) return item;
+        const resolved = resolveId(item.matchedProductId);
+        if (resolved && resolved !== item.matchedProductId) {
+          upgradedReceiptItems++;
+          recItemsChanged = true;
+          return { ...item, matchedProductId: resolved };
+        }
+        return item;
+      });
+      if (recItemsChanged) {
+        receiptsChanged = true;
+        return { ...rec, items: nextItems };
+      }
+      return rec;
+    });
+    if (receiptsChanged) {
+      this.saveReceipts(nextReceipts);
+    }
+
+    return {
+      updated: listsChanged || alertsChanged || trackedChanged || receiptsChanged,
+      upgradedListItems,
+      upgradedAlerts,
+      upgradedTracked,
+      upgradedReceiptItems
+    };
   }
 
   static exportDataAsJson(): string {
@@ -1238,5 +1375,45 @@ export class StorageService {
       trackedProducts: this.getTrackedProducts()
     };
     return JSON.stringify(exportObject, null, 2);
+  }
+
+  // FAZA 2: Human Review decisions & audit log (isolated from product_match_candidates & products)
+  static getShadowMatchReviews(): ShadowReviewDecisionRecord[] {
+    try {
+      const data = safeGetItem(KEYS.SHADOW_MATCH_REVIEWS);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveShadowMatchReviews(reviews: ShadowReviewDecisionRecord[]): void {
+    try {
+      safeSetItem(KEYS.SHADOW_MATCH_REVIEWS, JSON.stringify(reviews));
+    } catch (e) {
+      console.error('Eroare la salvarea deciziilor Shadow Review:', e);
+    }
+  }
+
+  static getShadowReviewAuditLogs(): ShadowReviewAuditEntry[] {
+    try {
+      const data = safeGetItem(KEYS.SHADOW_REVIEW_AUDIT);
+      return data ? JSON.parse(data) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static saveShadowReviewAuditLogs(entries: ShadowReviewAuditEntry[]): void {
+    try {
+      safeSetItem(KEYS.SHADOW_REVIEW_AUDIT, JSON.stringify(entries));
+    } catch (e) {
+      console.error('Eroare la salvarea auditului Shadow Review:', e);
+    }
+  }
+
+  static addShadowReviewAuditLog(entry: ShadowReviewAuditEntry): void {
+    const logs = this.getShadowReviewAuditLogs();
+    this.saveShadowReviewAuditLogs([entry, ...logs].slice(0, 2000));
   }
 }

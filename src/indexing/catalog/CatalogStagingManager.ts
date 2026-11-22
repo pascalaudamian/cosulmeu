@@ -21,6 +21,13 @@ import { STORES } from '../../data/mockData.js';
 import { CatalogSourceDiscovery } from './CatalogSourceDiscovery.js';
 import { validatePublicHttpUrl } from '../../utils/urlSecurity.js';
 import { PriceExtractor } from './PriceExtractor.js';
+import { resolveCanonicalProductId } from '../../services/ProductIdentityService.js';
+import {
+  normalizeBrand,
+  normalizeQuantityAndMultipack,
+  normalizeTitleAndVariants,
+  validateAndNormalizeBarcode
+} from '../../services/ProductNormalizationService.js';
 
 function sanitizeImageUrl(url?: string): string | undefined {
   if (!url || !url.trim()) return undefined;
@@ -407,21 +414,30 @@ export class CatalogStagingManager {
       const raw = parseRes.offers[idx];
       const offerId = `stg-${crypto.createHash('sha256').update(`${document.retailerId}:${document.id}:${runId}:${idx + 1}`).digest('hex').slice(0, 48)}`;
 
-      // Normalizare gramaj și calcul preț unitar în siguranță
+      // Normalizare gramaj, brand, titlu și barcode Faza 1A (păstrând valorile brute raw* intacte)
       const { unitPrice, unitPriceMeasure, packageUnit, packageWeight, weight, volume, packageSize } = this.normalizePackaging(
         raw.packageQuantity,
         raw.packageUnit,
         raw.rawTitle,
         raw.effectivePrice
       );
+      const brandNorm = normalizeBrand(raw.rawBrand, raw.rawTitle);
+      const titleNorm = normalizeTitleAndVariants(raw.rawTitle);
+      const pkgNorm = normalizeQuantityAndMultipack({
+        rawTitle: raw.rawTitle,
+        quantity: packageWeight,
+        unit: packageUnit,
+        barcode: raw.rawBarcode
+      });
+      const barcodeNorm = validateAndNormalizeBarcode(raw.rawBarcode);
 
       // Potrivire cu catalogul prin ProductMatcher
       const matchResult = ProductMatcher.matchProduct({
         rawName: raw.rawTitle,
         barcode: raw.rawBarcode,
         brand: raw.rawBrand,
-        packageWeightOrVolume: packageWeight,
-        packageUnit,
+        packageWeightOrVolume: pkgNorm.totalQuantity ?? packageWeight,
+        packageUnit: pkgNorm.totalUnit ?? packageUnit,
         category: raw.rawCategory
       }, productsForMatching);
 
@@ -485,6 +501,7 @@ export class CatalogStagingManager {
         rawTitle: raw.rawTitle,
         rawBrand: raw.rawBrand,
         rawBarcode: raw.rawBarcode,
+        retailerSku: raw.retailerSku,
         rawCategory: raw.rawCategory,
         normalPrice: raw.normalPrice,
         promoPrice: raw.promoPrice,
@@ -505,6 +522,9 @@ export class CatalogStagingManager {
         validFrom: raw.validFrom || document.validFrom,
         validUntil: raw.validUntil || document.validUntil,
         imageUrl: sanitizeImageUrl(raw.imageUrl),
+        catalogUrl: raw.catalogUrl,
+        sourcePageUrl: raw.sourcePageUrl || document.sourcePageUrl,
+        documentUrl: document.documentUrl,
         matchedProductId,
         matchedProductName,
         matchConfidence: matchResult.confidence,
@@ -514,6 +534,17 @@ export class CatalogStagingManager {
         priceValidationCode: priceCheck.code,
         priceProofType: raw.priceProofType,
         validationErrors: validationErrors.length > 0 ? validationErrors : undefined,
+        normalizedBrand: brandNorm.normalizedBrand,
+        brandQuality: brandNorm.brandQuality,
+        brandConfidence: brandNorm.confidence,
+        normalizedTitle: titleNorm.normalizedTitle,
+        packCount: pkgNorm.packCount,
+        unitPackageQuantity: pkgNorm.unitPackageQuantity,
+        unitPackageUnit: pkgNorm.unitPackageUnit,
+        packagingStructureKey: pkgNorm.packagingStructureKey,
+        barcodeQuality: barcodeNorm.quality,
+        barcodeEligibleForAutoMatch: barcodeNorm.isEligibleForAutoMatch,
+        isVariableWeight: pkgNorm.isVariableWeight,
         createdAt: nowIso,
         updatedAt: nowIso
       };
@@ -631,13 +662,26 @@ export class CatalogStagingManager {
       itemsWithoutPriceCount = targetOffers.filter(o => !o.effectivePrice || o.effectivePrice <= 0 || isNaN(o.effectivePrice)).length;
     }
 
-    const [existingProducts, existingOffers] = usePostgres
-      ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers()])
-      : [StorageService.getAllProducts(), StorageService.getProductOffers()];
+    const [existingProducts, existingOffers, aliasMap] = usePostgres
+      ? await Promise.all([
+          DatabaseService.getProducts(),
+          DatabaseService.getOffers(),
+          DatabaseService.getProductAliasMap()
+        ])
+      : [
+          StorageService.getAllProducts(),
+          StorageService.getProductOffers(),
+          new Map<string, string>(
+            StorageService.getAllProducts()
+              .filter(p => p.canonicalProductId)
+              .map(p => [p.id, p.canonicalProductId as string])
+          )
+        ];
 
-    const productsById = new Map(existingProducts.map(p => [p.id, p]));
+    const canonicalProducts = existingProducts.filter(p => !p.canonicalProductId);
+    const productsById = new Map(canonicalProducts.map(p => [p.id, p]));
     const productsByBarcode = new Map<string, Product>();
-    for (const prod of existingProducts) {
+    for (const prod of canonicalProducts) {
       if (prod.barcode && prod.barcode.trim().length >= 8) {
         productsByBarcode.set(prod.barcode.trim(), prod);
       }
@@ -660,7 +704,9 @@ export class CatalogStagingManager {
 
       let resolvedProduct: Product | undefined;
       if (item.matchedProductId) {
-        resolvedProduct = productsById.get(item.matchedProductId);
+        const resolvedCanonicalId =
+          resolveCanonicalProductId(item.matchedProductId, aliasMap) || item.matchedProductId;
+        resolvedProduct = productsById.get(resolvedCanonicalId);
       }
       if (!resolvedProduct && item.rawBarcode && item.rawBarcode.trim().length >= 8) {
         resolvedProduct = productsByBarcode.get(item.rawBarcode.trim());
@@ -675,7 +721,7 @@ export class CatalogStagingManager {
             packageUnit: item.packageUnit as UnitType,
             category: item.rawCategory
           },
-          existingProducts
+          canonicalProducts
         );
         if (matchRes.matchedProduct && matchRes.confidence >= 0.75) {
           resolvedProduct = matchRes.matchedProduct;
@@ -940,13 +986,21 @@ export class CatalogStagingManager {
     const publishedOfferIds: string[] = [];
     const perRetailerResults: Record<string, { published: number; errors: string[] }> = {};
     const existingOffers = StorageService.getProductOffers();
-    const productsForMatching = [...StorageService.getAllProducts()];
+    const allLocalProducts = StorageService.getAllProducts();
+    const productsForMatching = allLocalProducts.filter(p => !p.canonicalProductId);
+    const localAliasIndex = allLocalProducts;
     const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
 
     for (const item of toPublish) {
       const safeItemImageUrl = sanitizeImageUrl(item.imageUrl);
-      const persistedMatch = productsForMatching.find(product => product.id === item.matchedProductId);
+      const resolvedMatchId = item.matchedProductId
+        ? resolveCanonicalProductId(item.matchedProductId, localAliasIndex)
+        : undefined;
+      const persistedMatch = resolvedMatchId
+        ? productsForMatching.find(product => product.id === resolvedMatchId)
+        : undefined;
       if (persistedMatch) {
+        item.matchedProductId = persistedMatch.id;
         item.matchedProductName = persistedMatch.name;
         if (!persistedMatch.imageUrl && safeItemImageUrl) {
           persistedMatch.imageUrl = safeItemImageUrl;

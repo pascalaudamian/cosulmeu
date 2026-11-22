@@ -11,6 +11,13 @@ import { STORES } from '../data/mockData.js';
 import { StorageService } from './StorageService.js';
 import { BasketOptimizerService } from './BasketOptimizerService.js';
 import { PriceQualityClassifier } from './PriceQualityClassifier.js';
+import {
+  buildCanonicalAliasIndex,
+  CanonicalAliasIndex,
+  collectProductIdsForCanonical,
+  normalizeStoreIdKey,
+  resolveCanonicalProductId
+} from './ProductIdentityService.js';
 
 export interface PriceComparisonOptions {
   useLoyaltyCards?: boolean;
@@ -18,6 +25,7 @@ export interface PriceComparisonOptions {
   region?: string;
   includeStaleOffers?: boolean;
   maxOfferAgeDays?: number;
+  aliasMap?: Map<string, string> | Record<string, string> | CanonicalAliasIndex;
   now?: Date;
 }
 
@@ -71,8 +79,12 @@ export class PriceComparisonService {
   /**
    * Match a shopping list item with a catalog product using strict confidence rules
    */
-  static findProductForListItem(item: ShoppingListItem, allProducts: Product[]): Product | undefined {
-    const res = BasketOptimizerService.matchItemToProduct(item, allProducts);
+  static findProductForListItem(
+    item: ShoppingListItem,
+    allProducts: Product[],
+    aliasMap?: Map<string, string> | Record<string, string> | CanonicalAliasIndex
+  ): Product | undefined {
+    const res = BasketOptimizerService.matchItemToProduct(item, allProducts, aliasMap);
     return res.status === 'matched' ? res.product : undefined;
   }
 
@@ -123,12 +135,35 @@ export class PriceComparisonService {
     productId: string,
     includeExpired = false,
     customOffers?: ProductOffer[],
-    product?: Product
+    product?: Product,
+    aliasMap?: Map<string, string> | Record<string, string> | CanonicalAliasIndex
   ): ProductOffer[] {
     const allOffers = customOffers ?? StorageService.getProductOffers();
-    return allOffers.filter(
-      o => o.productId === productId && (includeExpired || this.isOfferValid(o, product))
-    );
+    const aliasIndex = buildCanonicalAliasIndex(aliasMap ?? StorageService.getAllProducts());
+    const canonicalId = resolveCanonicalProductId(productId, aliasIndex) || productId;
+    const equivalentIds = new Set(collectProductIdsForCanonical(canonicalId, aliasIndex));
+    equivalentIds.add(canonicalId);
+
+    const matching = allOffers.filter(o => {
+      const offerCanonId = resolveCanonicalProductId(o.productId, aliasIndex) || o.productId;
+      const matchesProd = equivalentIds.has(o.productId) || offerCanonId === canonicalId;
+      return matchesProd && (includeExpired || this.isOfferValid(o, product));
+    });
+
+    const dedupedByStore = new Map<string, ProductOffer>();
+    for (const offer of matching) {
+      const storeKey = normalizeStoreIdKey(offer.storeId) || offer.storeId;
+      const normalizedOffer: ProductOffer = {
+        ...offer,
+        productId: canonicalId,
+        storeId: storeKey
+      };
+      const prev = dedupedByStore.get(storeKey);
+      if (!prev || normalizedOffer.price < prev.price) {
+        dedupedByStore.set(storeKey, normalizedOffer);
+      }
+    }
+    return Array.from(dedupedByStore.values());
   }
 
   /**
@@ -202,7 +237,12 @@ export class PriceComparisonService {
 
     const now = options?.now || new Date();
     const allProducts = customProducts ?? StorageService.getAllProducts();
-    const allOffers = customOffers ?? StorageService.getProductOffers();
+    const rawOffers = customOffers ?? StorageService.getProductOffers();
+    const aliasIndex = buildCanonicalAliasIndex(options?.aliasMap ?? allProducts);
+    const allOffers = rawOffers.map(o => {
+      const canonId = resolveCanonicalProductId(o.productId, aliasIndex);
+      return canonId && canonId !== o.productId ? { ...o, productId: canonId } : o;
+    });
     const rawStores = customStores ?? STORES;
     const userProfile = StorageService.getUserProfile();
 
@@ -219,7 +259,7 @@ export class PriceComparisonService {
     // Match each item to catalog product & aggregate duplicate quantities for minQuantityForPromo checks
     const itemsWithProduct = items.map(item => ({
       item,
-      product: this.findProductForListItem(item, allProducts)
+      product: this.findProductForListItem(item, allProducts, aliasIndex)
     }));
 
     const aggregatedQtyByGroup = new Map<string, { totalBase: number; canonicalUnit: UnitType; count: number }>();
@@ -547,9 +587,14 @@ export class PriceComparisonService {
   }> {
     const now = options?.now || new Date();
     const canonicalStores = BasketOptimizerService.canonicalizeStores(customStores);
+    const aliasIndex = buildCanonicalAliasIndex(options?.aliasMap ?? customProducts);
+    const normalizedOffers = customOffers.map(o => {
+      const canonId = resolveCanonicalProductId(o.productId, aliasIndex);
+      return canonId && canonId !== o.productId ? { ...o, productId: canonId } : o;
+    });
 
     return items.map(item => {
-      const product = this.findProductForListItem(item, customProducts);
+      const product = this.findProductForListItem(item, customProducts, aliasIndex);
       if (!product) {
         return { item, savings: 0, loyaltyApplied: false, comparableStoresCount: 0 };
       }
@@ -566,7 +611,7 @@ export class PriceComparisonService {
         const evaluated = BasketOptimizerService.evaluateStoreOfferForProduct({
           product,
           store,
-          offers: customOffers,
+          offers: normalizedOffers,
           includeStaleOffers: options?.includeStaleOffers ?? true,
           maxOfferAgeDays: options?.maxOfferAgeDays,
           region: options?.region,
@@ -768,7 +813,8 @@ export class PriceComparisonService {
     productId: string,
     providedProduct?: Product,
     providedOffers?: ProductOffer[],
-    providedStores?: Store[]
+    providedStores?: Store[],
+    aliasMap?: Map<string, string> | Record<string, string> | CanonicalAliasIndex
   ): {
     product: Product;
     offers: Array<{
@@ -799,7 +845,17 @@ export class PriceComparisonService {
     lastCheckedDate: string;
     overallFreshnessStatus: 'very_recent' | 'recent' | 'stale' | 'expired';
   } | null {
-    const product = providedProduct || StorageService.getAllProducts().find(p => p.id === productId);
+    const localProducts = StorageService.getAllProducts();
+    const aliasIndex = buildCanonicalAliasIndex(aliasMap ?? localProducts);
+    const resolvedCanonicalId =
+      resolveCanonicalProductId(providedProduct?.id || productId, aliasIndex) ||
+      providedProduct?.id ||
+      productId;
+    const product =
+      (providedProduct && providedProduct.id === resolvedCanonicalId ? providedProduct : undefined) ||
+      localProducts.find(p => p.id === resolvedCanonicalId) ||
+      providedProduct ||
+      localProducts.find(p => p.id === productId);
     if (!product) return null;
 
     const allStores: Store[] = BasketOptimizerService.canonicalizeStores(
@@ -809,12 +865,11 @@ export class PriceComparisonService {
     for (const s of allStores) {
       storeMap.set(s.id, s);
       storeMap.set(`store-${s.id}`, s);
+      storeMap.set(normalizeStoreIdKey(s.id), s);
     }
 
-    // Oferte valide neexpirate prin clasificatorul centralizat
-    const rawOffers = providedOffers
-      ? providedOffers.filter(o => o.productId === productId && this.isOfferValid(o, product))
-      : this.getOffersForProduct(productId, false, undefined, product);
+    // Oferte valide neexpirate prin clasificatorul centralizat (agregate inclusiv din aliasuri și deduplicate per magazin canonic)
+    const rawOffers = this.getOffersForProduct(product.id, false, providedOffers, product, aliasIndex);
 
     if (rawOffers.length === 0) {
       return {
@@ -841,8 +896,10 @@ export class PriceComparisonService {
     let latestVerifiedDate = '';
 
     const detailedOffers = sortedOffers.map(offer => {
-      const store = storeMap.get(offer.storeId) || {
-        id: offer.storeId,
+      const store =
+        storeMap.get(offer.storeId) ||
+        storeMap.get(normalizeStoreIdKey(offer.storeId)) || {
+          id: offer.storeId,
         name: offer.storeId.toUpperCase(),
         slug: offer.storeId,
         chain: offer.storeId,

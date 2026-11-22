@@ -5,11 +5,13 @@ import * as cheerio from 'cheerio';
 import { CatalogFormat } from './catalogTypes.js';
 import { validatePublicHttpUrl } from '../../utils/urlSecurity.js';
 import { PriceExtractor, PriceProofType } from './PriceExtractor.js';
+import { normalizeBrand } from '../../services/ProductNormalizationService.js';
 
 export interface RawParsedOffer {
   rawTitle: string;
   rawBrand?: string;
   rawBarcode?: string;
+  retailerSku?: string;
   rawCategory?: string;
   normalPrice: number;
   promoPrice?: number;
@@ -486,13 +488,16 @@ export class CatalogParserEngine {
       kauflandTiles.each((_, el) => {
         try {
           const tile = $(el);
-          const subtitle = tile.find('.k-product-tile__subtitle').first().text().trim();
-          const mainTitle = tile.find('.k-product-tile__title').first().text().trim();
+          const subtitle = tile.find('.k-product-tile__subtitle').first().text().replace(/\s+/g, ' ').trim();
+          const mainTitle = tile.find('.k-product-tile__title').first().text().replace(/\s+/g, ' ').trim();
           const rawTitle = subtitle && mainTitle && !mainTitle.toLowerCase().startsWith(subtitle.toLowerCase())
             ? `${subtitle} ${mainTitle}`.trim()
             : (mainTitle || subtitle).trim();
 
           if (!rawTitle || PriceExtractor.isNoiseOrNonProductTitle(rawTitle)) return;
+
+          const subtitleBrandCheck = normalizeBrand(subtitle && mainTitle ? subtitle : undefined, rawTitle);
+          const cleanKauflandBrand = subtitleBrandCheck.normalizedBrand || undefined;
 
           // Excludem explicit .k-product-tile__unit-price din prețuri; îl folosim strict pentru gramaj/ambalaj!
           const unitInfoText = tile.find('.k-product-tile__unit-price, .k-product-tile__base-price').first().text().trim();
@@ -516,7 +521,7 @@ export class CatalogParserEngine {
               seenKaufland.add(pKey);
               products.push({
                 rawTitle,
-                rawBrand: subtitle && mainTitle ? subtitle : undefined,
+                rawBrand: cleanKauflandBrand,
                 packageQuantity: pkg.packageQuantity,
                 packageUnit: pkg.packageUnit,
                 imageUrl: this.extractCardImageUrl($, tile, baseUrl || 'https://www.kaufland.ro'),
@@ -565,7 +570,7 @@ export class CatalogParserEngine {
 
           offers.push({
             rawTitle,
-            rawBrand: subtitle && mainTitle && subtitle.length <= 40 ? subtitle : undefined,
+            rawBrand: cleanKauflandBrand,
             normalPrice,
             promoPrice,
             loyaltyPrice,

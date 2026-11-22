@@ -51,8 +51,21 @@ export interface Product {
   isSoldByWeight?: boolean;
   isIndivisiblePackage?: boolean;
   baseReferencePrice: number;
+  canonicalProductId?: string | null;
   subcategory?: string;
   description?: string;
+}
+
+export interface RetailerProductRecord {
+  id: string;
+  retailerId: string;
+  productId?: string | null;
+  externalSku?: string;
+  url?: string;
+  scrapedName: string;
+  scrapedBrand?: string;
+  barcode?: string;
+  status?: string;
 }
 
 export interface ProductOffer {
@@ -155,6 +168,11 @@ export interface ProductMatchCandidate {
   matchMethod: 'gtin_exact' | 'name_brand_similarity' | 'manual';
   status: 'auto_approved' | 'pending_confirmation' | 'rejected';
   createdAt: string;
+  sourceProductId?: string;
+  sourceRetailer?: string;
+  targetRetailer?: string;
+  decisionCategory?: ShadowMatchDecisionCategory;
+  shadowMetadata?: Record<string, unknown>;
 }
 
 export interface ShoppingListItem {
@@ -1171,6 +1189,7 @@ export interface BarcodeLookupResult {
   found: boolean;
   searchedBarcode: string;
   normalizedBarcodes: string[];
+  barcodeValidation?: import('./services/ProductNormalizationService.js').BarcodeValidationResult;
   product?: Product;
   offers: Array<{
     offer: ProductOffer;
@@ -1269,6 +1288,238 @@ export interface ShoppingAssistantResponse {
   error?: string;
 }
 
+// =========================================================================
+// FAZA 1B: Shadow Matching & Duplicate Detection (Read-Only Analysis)
+// =========================================================================
 
+export type ShadowMatchDecisionCategory =
+  | 'HIGH_CONFIDENCE'
+  | 'REVIEW'
+  | 'BLOCKED'
+  | 'LOW_CONFIDENCE';
 
+export type ShadowMatchMethod =
+  | 'gs1_exact'
+  | 'brand_title_packaging'
+  | 'title_packaging'
+  | 'variant_conflict_blocked'
+  | 'quantity_conflict_blocked'
+  | 'brand_conflict_blocked'
+  | 'packaging_structure_blocked'
+  | 'insufficient_identity_blocked';
 
+export type ShadowRecommendedAction =
+  | 'review_high_confidence_candidate'
+  | 'manual_review_needed'
+  | 'keep_separate_different_packaging_structure'
+  | 'block_incompatible_candidates'
+  | 'no_action_low_confidence';
+
+export type ShadowHardGuardCode =
+  | 'GUARD_INSUFFICIENT_TITLE'
+  | 'GUARD_VARIABLE_WEIGHT'
+  | 'GUARD_SUSPICIOUS_MULTIPACK'
+  | 'GUARD_NONFOOD_UNIT_CONTRADICTION'
+  | 'GUARD_INCOMPATIBLE_BRAND'
+  | 'GUARD_PRIVATE_LABEL_CROSS_RETAILER'
+  | 'GUARD_AMBIGUOUS_BRAND_PLACEHOLDER'
+  | 'GUARD_INCOMPATIBLE_VARIANT'
+  | 'GUARD_INCOMPATIBLE_UNIT_FAMILY'
+  | 'GUARD_INCOMPATIBLE_QUANTITY'
+  | 'GUARD_PACKAGING_STRUCTURE_MISMATCH';
+
+export interface ShadowHardGuardResult {
+  code: ShadowHardGuardCode;
+  passed: boolean;
+  severity: 'hard_block' | 'soft_warning';
+  reason: string;
+}
+
+export interface ShadowMatchEvidence {
+  code: string;
+  label: string;
+  weight?: number;
+  detail: string;
+}
+
+export interface ShadowScoreBreakdown {
+  gtinScore: number;
+  brandScore: number;
+  titleScore: number;
+  packagingScore: number;
+  variantCategoryScore: number;
+  penalties: number;
+  cappedByMissingBrand: boolean;
+  cappedByInsufficientTitle: boolean;
+  cappedByHardGuard: boolean;
+}
+
+export interface ShadowMatchCandidate {
+  candidateId: string;
+  sourceProductId: string;
+  targetProductId: string;
+  sourceRetailer: string;
+  targetRetailer: string;
+  sourceTitle: string;
+  targetTitle: string;
+  normalizedSourceTitle?: string;
+  normalizedTargetTitle?: string;
+  sourceBrand: string | null;
+  targetBrand: string | null;
+  sourceBarcode: string | null;
+  targetBarcode: string | null;
+  sourceQuantity: string | null;
+  targetQuantity: string | null;
+  sourceUnit?: string | null;
+  targetUnit?: string | null;
+  sourcePackagingStructure: string | null;
+  targetPackagingStructure: string | null;
+  variantAttributes: {
+    source: Record<string, unknown>;
+    target: Record<string, unknown>;
+    compatible: boolean;
+    conflictReasons: string[];
+  };
+  matchingScore: number;
+  scoreBreakdown?: ShadowScoreBreakdown;
+  matchingMethod: ShadowMatchMethod;
+  hardGuardResults: {
+    allPassed: boolean;
+    failedGuards: ShadowHardGuardCode[];
+    checks: ShadowHardGuardResult[];
+  };
+  positiveEvidence: ShadowMatchEvidence[];
+  negativeEvidence: ShadowMatchEvidence[];
+  decisionCategory: ShadowMatchDecisionCategory;
+  recommendedAction: ShadowRecommendedAction;
+  explanation: string;
+  normalizationVersion: string;
+  generatedAt: string;
+  differentStructureSameTotal: boolean;
+  falsePositiveRisk: 'low' | 'medium' | 'high';
+  sourceCategory?: ProductCategory;
+  targetCategory?: ProductCategory;
+}
+
+// =========================================================================
+// FAZA 2: Human Review Panel Types (Strictly Non-Destructive, No Merge)
+// =========================================================================
+
+export type ShadowReviewStatus =
+  | 'pending_review'
+  | 'confirmed_same_product'
+  | 'confirmed_different_product'
+  | 'needs_more_information'
+  | 'dismissed';
+
+export interface ShadowReviewDecisionRecord {
+  candidateId: string;
+  status: ShadowReviewStatus;
+  reviewerId: string;
+  reviewerEmail: string;
+  authSource: 'admin_bearer_token' | 'supabase_admin_session';
+  reason: string;
+  notes?: string | null;
+  reviewedAt: string | null;
+  updatedAt: string;
+  version: number;
+  decisionCategorySnapshot: ShadowMatchDecisionCategory;
+  matchingScoreSnapshot: number;
+}
+
+export interface ShadowReviewAuditEntry {
+  id: string;
+  candidateId: string;
+  previousStatus: ShadowReviewStatus;
+  newStatus: ShadowReviewStatus;
+  reviewerId: string;
+  reviewerEmail: string;
+  reason: string;
+  notes?: string | null;
+  timestamp: string;
+  version: number;
+}
+
+export interface ShadowReviewOverviewStats {
+  totalInspectableCount: number;
+  totalPending: number;
+  highConfidenceCount: number;
+  reviewCount: number;
+  blockedCount: number;
+  lowConfidenceCount: number;
+  confirmedSameProductCount: number;
+  confirmedDifferentProductCount: number;
+  needsMoreInformationCount: number;
+  dismissedCount: number;
+}
+
+export interface ShadowReviewCandidateView {
+  candidate: ShadowMatchCandidate;
+  review: ShadowReviewDecisionRecord;
+}
+
+export interface ShadowMatchingReport {
+  generatedAt: string;
+  normalizationVersion: string;
+  dataSource: 'postgresql' | 'supabase_readonly' | 'storage_service' | 'custom_dataset';
+  readOnlyVerified: boolean;
+  autoMergeExecuted: false;
+  durationMs: number;
+  summary: {
+    totalProductsAnalyzed: number;
+    canonicalProductsCount: number;
+    aliasProductsSkippedCount: number;
+    totalCandidatePairsGeneratedByBlocking: number;
+    totalCandidatePairsEvaluated: number;
+    highConfidenceCount: number;
+    reviewCount: number;
+    blockedCount: number;
+    lowConfidenceCount: number;
+    gs1ExactMatchesCount: number;
+    brandBasedMatchesCount: number;
+    titleBasedMatchesCount: number;
+    quantityBasedMatchesCount: number;
+    variantBasedMatchesCount: number;
+    brandConflictsCount: number;
+    quantityConflictsCount: number;
+    multipackConflictsCount: number;
+    differentStructureSameTotalCount: number;
+    variantConflictsCount: number;
+    insufficientIdentityProductsCount: number;
+    falsePositiveRiskBreakdown: {
+      low: number;
+      medium: number;
+      high: number;
+    };
+  };
+  byRetailer: Record<
+    string,
+    {
+      productsCount: number;
+      candidatePairsCount: number;
+      highConfidenceCount: number;
+      reviewCount: number;
+      blockedCount: number;
+      lowConfidenceCount: number;
+    }
+  >;
+  byRetailerPair: Record<
+    string,
+    {
+      totalPairs: number;
+      highConfidenceCount: number;
+      reviewCount: number;
+      blockedCount: number;
+      lowConfidenceCount: number;
+    }
+  >;
+  byMethod: Record<ShadowMatchMethod, number>;
+  samples: {
+    highConfidence: ShadowMatchCandidate[];
+    review: ShadowMatchCandidate[];
+    blocked: ShadowMatchCandidate[];
+    lowConfidence: ShadowMatchCandidate[];
+    differentStructureSameTotal: ShadowMatchCandidate[];
+  };
+  candidates: ShadowMatchCandidate[];
+}

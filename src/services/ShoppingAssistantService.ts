@@ -12,6 +12,12 @@ import {
 import { BasketOptimizerService } from './BasketOptimizerService.js';
 import { PriceComparisonService } from './PriceComparisonService.js';
 import { ProductAlternativesService, computeNormalizedUnitPrice } from './ProductAlternativesService.js';
+import {
+  CanonicalAliasIndex,
+  buildCanonicalAliasIndex,
+  normalizeProductReferences,
+  resolveProductReferenceMap
+} from './ProductIdentityService.js';
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -114,6 +120,7 @@ export class ShoppingAssistantService {
     allProducts: Product[];
     allOffers: ProductOffer[];
     allStores: Store[];
+    aliasMap?: Map<string, string> | Record<string, string> | CanonicalAliasIndex;
     useLoyaltyCards?: boolean;
     budgetSummary?: BudgetStatusSummary | null;
   }): ShoppingAssistantDeterministicPlan {
@@ -139,27 +146,35 @@ export class ShoppingAssistantService {
     }
     const resolveStore = (id: string) => storeMap.get(id) || storeMap.get(normalizeStoreKey(id)) || null;
 
-    const productById = new Map<string, Product>();
-    for (const p of params.allProducts || []) {
-      if (p?.id) productById.set(p.id, p);
+    const aliasIndex = buildCanonicalAliasIndex(params.aliasMap ?? params.allProducts ?? []);
+    const productRefMap = resolveProductReferenceMap(params.allProducts || [], aliasIndex);
+    const canonicalProductsMap = new Map<string, Product>();
+    for (const prod of productRefMap.values()) {
+      canonicalProductsMap.set(prod.id, prod);
     }
+    const canonicalProducts = Array.from(canonicalProductsMap.values());
+    const normalizedOffers = normalizeProductReferences(params.allOffers || [], aliasIndex, {
+      fields: ['productId'],
+      knownProductIds: new Set(canonicalProducts.map(p => p.id))
+    });
 
     const bestOfferByProduct = new Map<string, BestValidProductEntry>();
     const validOffersByProduct = new Map<string, BestValidProductEntry[]>();
     let validOffersCount = 0;
 
-    for (const offer of params.allOffers || []) {
-      const product = productById.get(offer.productId);
+    for (const offer of normalizedOffers) {
+      const product = productRefMap.get(offer.productId);
       if (!product) continue;
-      const store = resolveStore(offer.storeId);
+      const canonicalOffer = offer.productId !== product.id ? { ...offer, productId: product.id } : offer;
+      const store = resolveStore(canonicalOffer.storeId);
       if (!store) continue;
-      if (!PriceComparisonService.isOfferValid(offer, product)) continue;
+      if (!PriceComparisonService.isOfferValid(canonicalOffer, product)) continue;
 
       validOffersCount += 1;
-      const calc = computeNormalizedUnitPrice(offer, product, useLoyaltyCards);
+      const calc = computeNormalizedUnitPrice(canonicalOffer, product, useLoyaltyCards);
       const entry: BestValidProductEntry = {
         product,
-        offer,
+        offer: canonicalOffer,
         store,
         price: calc.price,
         unitPrice: calc.unitPrice,
@@ -176,7 +191,7 @@ export class ShoppingAssistantService {
     }
 
     const limitations: string[] = [];
-    const catalogAvailableCount = (params.allProducts || []).length;
+    const catalogAvailableCount = canonicalProducts.length;
 
     // Empty catalog / zero valid offers safeguard
     if (catalogAvailableCount === 0 || validOffersCount === 0) {
@@ -215,8 +230,9 @@ export class ShoppingAssistantService {
           items: listItems,
           options: { useLoyaltyCards, maxStores: 3, transportCostPerExtraStore: 0 },
           products: params.allProducts,
-          offers: params.allOffers,
-          stores: params.allStores
+          offers: normalizedOffers,
+          stores: params.allStores,
+          aliasMap: aliasIndex
         });
 
         const preferredPlan =
@@ -316,7 +332,7 @@ export class ShoppingAssistantService {
         let unmatchedCount = 0;
         let promoSavingsSum = 0;
         for (const listItem of listItems) {
-          const match = BasketOptimizerService.matchItemToProduct(listItem, params.allProducts);
+          const match = BasketOptimizerService.matchItemToProduct(listItem, params.allProducts, aliasIndex);
           if (match.status !== 'matched' || !match.product) {
             unmatchedCount += 1;
             continue;
@@ -361,11 +377,12 @@ export class ShoppingAssistantService {
       }
     } else if (intent === 'cheaper_alternatives') {
       const targetProducts: Product[] = [];
-      if (params.selectedProductId && productById.has(params.selectedProductId)) {
-        targetProducts.push(productById.get(params.selectedProductId)!);
+      const selectedCanonical = params.selectedProductId ? productRefMap.get(params.selectedProductId) : undefined;
+      if (selectedCanonical) {
+        targetProducts.push(selectedCanonical);
       }
       for (const li of params.activeList?.items || []) {
-        const match = BasketOptimizerService.matchItemToProduct(li, params.allProducts);
+        const match = BasketOptimizerService.matchItemToProduct(li, params.allProducts, aliasIndex);
         if (match.status === 'matched' && match.product && !targetProducts.some(p => p.id === match.product!.id)) {
           targetProducts.push(match.product);
         }
@@ -377,8 +394,8 @@ export class ShoppingAssistantService {
         for (const target of targetProducts.slice(0, 8)) {
           const altResult = ProductAlternativesService.getAlternatives({
             targetProduct: target,
-            allProducts: params.allProducts,
-            allOffers: params.allOffers,
+            allProducts: canonicalProducts,
+            allOffers: normalizedOffers,
             stores: params.allStores,
             useLoyaltyCards,
             limitPerGroup: 3

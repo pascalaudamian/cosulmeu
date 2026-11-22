@@ -51,7 +51,8 @@ import {
   Pencil,
   Plus,
   PlusCircle,
-  Trash2
+  Trash2,
+  GitCompare
 } from 'lucide-react';
 import {
   DataSource,
@@ -80,6 +81,7 @@ import { AdminKpiDrilldownModal, DrilldownType } from './AdminKpiDrilldownModal.
 import { AdminStagingOfferDrawer } from './AdminStagingOfferDrawer.tsx';
 import { AdminPriceAuditTab } from './AdminPriceAuditTab.tsx';
 import { AdminGdprRequestsTab } from './AdminGdprRequestsTab.tsx';
+import { AdminShadowReviewTab } from './AdminShadowReviewTab.tsx';
 
 interface AdminSourcesViewProps {
   onRefreshAll?: () => void;
@@ -92,6 +94,7 @@ export type AdminTabId =
   | 'catalog'
   | 'offers'
   | 'price-audit'
+  | 'shadow-review'
   | 'staging'
   | 'logs'
   | 'gdpr'
@@ -105,6 +108,7 @@ const TABS: { id: AdminTabId; label: string; icon: React.FC<{ className?: string
   { id: 'catalog', label: 'Catalog și produse', icon: Package },
   { id: 'offers', label: 'Oferte și prețuri', icon: Tag },
   { id: 'price-audit', label: 'Audit Prețuri', icon: ShieldAlert },
+  { id: 'shadow-review', label: 'Review Duplicate', icon: GitCompare },
   { id: 'staging', label: 'Validare și publicare', icon: CheckCheck },
   { id: 'logs', label: 'Jurnal și erori', icon: FileText },
   { id: 'gdpr', label: 'Solicitări GDPR', icon: ShieldCheck },
@@ -2204,6 +2208,13 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       {/* ========================================================================= */}
       {activeTab === 'price-audit' && (
         <AdminPriceAuditTab adminToken={adminToken} onRefreshAll={loadDashboard} />
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 5.6: HUMAN REVIEW SHADOW MATCHING (FAZA 2)                            */}
+      {/* ========================================================================= */}
+      {activeTab === 'shadow-review' && (
+        <AdminShadowReviewTab adminToken={adminToken} />
       )}
 
       {/* ========================================================================= */}

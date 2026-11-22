@@ -55,6 +55,11 @@ import { StorageService } from '../services/StorageService.js';
 import { STORES, PRODUCTS } from '../data/mockData.js';
 import { getSafeProductImageSrc } from '../utils/urlSecurity.js';
 import { ProductPriceTrend } from './ProductPriceTrend.js';
+import {
+  buildCanonicalAliasIndex,
+  collectProductIdsForCanonical,
+  resolveCanonicalProductId
+} from '../services/ProductIdentityService.js';
 
 interface ProductDetailViewProps {
   productId: string;
@@ -161,9 +166,19 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
       });
 
     function fallbackLocalData() {
-      const comparison = PriceComparisonService.getProductComparisonDetails(productId);
+      const localProducts = StorageService.getAllProducts();
+      const aliasIndex = buildCanonicalAliasIndex(localProducts);
+      const canonicalProductId = resolveCanonicalProductId(productId, aliasIndex) || productId;
+      const comparison = PriceComparisonService.getProductComparisonDetails(
+        canonicalProductId,
+        undefined,
+        undefined,
+        undefined,
+        aliasIndex
+      );
       if (comparison) {
-        const obs = StorageService.getPriceObservations().filter(o => o.productId === productId);
+        const equivalentIds = new Set(collectProductIdsForCanonical(comparison.product.id, aliasIndex));
+        const obs = StorageService.getPriceObservations().filter(o => equivalentIds.has(o.productId));
         setData({
           product: comparison.product,
           comparison,
@@ -190,7 +205,15 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         } else {
           const allProductsRaw = StorageService.getAllProducts();
           const allProducts = allProductsRaw.length > 0 ? allProductsRaw : PRODUCTS;
-          const targetProduct = allProducts.find(p => p.id === productId);
+          const aliasIndex = buildCanonicalAliasIndex(allProducts);
+          const aliasMap = new Map<string, string>();
+          for (const [k, v] of aliasIndex.parentById.entries()) {
+            if (v) aliasMap.set(k, v);
+          }
+          const canonicalProductId = resolveCanonicalProductId(productId, aliasIndex) || productId;
+          const targetProduct =
+            allProducts.find(p => p.id === canonicalProductId) ||
+            allProducts.find(p => p.id === productId);
           if (targetProduct) {
             const allOffers = StorageService.getProductOffers();
             setAlternativesData(
@@ -199,7 +222,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 allProducts,
                 allOffers,
                 stores: STORES,
-                useLoyaltyCards
+                useLoyaltyCards,
+                aliasMap
               })
             );
           } else {
@@ -211,7 +235,15 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         if (!isMounted) return;
         const allProductsRaw = StorageService.getAllProducts();
         const allProducts = allProductsRaw.length > 0 ? allProductsRaw : PRODUCTS;
-        const targetProduct = allProducts.find(p => p.id === productId);
+        const aliasIndex = buildCanonicalAliasIndex(allProducts);
+        const aliasMap = new Map<string, string>();
+        for (const [k, v] of aliasIndex.parentById.entries()) {
+          if (v) aliasMap.set(k, v);
+        }
+        const canonicalProductId = resolveCanonicalProductId(productId, aliasIndex) || productId;
+        const targetProduct =
+          allProducts.find(p => p.id === canonicalProductId) ||
+          allProducts.find(p => p.id === productId);
         if (targetProduct) {
           const allOffers = StorageService.getProductOffers();
           setAlternativesData(
@@ -220,7 +252,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               allProducts,
               allOffers,
               stores: STORES,
-              useLoyaltyCards
+              useLoyaltyCards,
+              aliasMap
             })
           );
         } else {

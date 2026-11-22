@@ -78,7 +78,7 @@ async function runTests() {
   // 2.4 Potrivire exactă GTIN / Barcode
   const matchExactGtin = ProductMatcher.matchProduct({
     rawName: 'Orice Denumire Deformată',
-    barcode: '5941014002341' // Barcode lapte Napolact
+    barcode: '5941014002343' // Barcode lapte Napolact
   });
   assert.strictEqual(matchExactGtin.confidence, 1.0);
   assert.strictEqual(matchExactGtin.matchMethod, 'gtin_exact');

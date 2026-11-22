@@ -14,6 +14,16 @@ import {
   UserPriceObservation
 } from '../types.js';
 import { STORES } from '../data/mockData.js';
+import {
+  buildCanonicalAliasIndex,
+  CanonicalAliasIndex,
+  resolveCanonicalProductId
+} from './ProductIdentityService.js';
+import {
+  areVariantAttributesCompatible,
+  normalizeTitleAndVariants,
+  validateAndNormalizeBarcode
+} from './ProductNormalizationService.js';
 
 export interface ReceiptOcrQualityInput {
   isBlurry?: boolean;
@@ -182,24 +192,8 @@ export function parseRomanianDecimal(raw: unknown): number | null {
  * Prevents internal store PLUs or random numbers from being misclassified as EANs.
  */
 export function isValidEanBarcode(candidate?: string | null): boolean {
-  if (!candidate) return false;
-  const digits = candidate.replace(/\D/g, '');
-  if (![8, 12, 13, 14].includes(digits.length)) return false;
-  // Reject trivial repeating digits like 00000000 or 11111111
-  if (/^(\d)\1+$/.test(digits)) return false;
-
-  const body = digits.slice(0, -1);
-  const checkDigit = Number(digits.slice(-1));
-  let sum = 0;
-
-  // GS1 weights from right to left (excluding check digit): 3, 1, 3, 1, ...
-  for (let i = body.length - 1, pos = 0; i >= 0; i--, pos++) {
-    const d = Number(body[i]);
-    sum += d * (pos % 2 === 0 ? 3 : 1);
-  }
-
-  const expectedCheck = (10 - (sum % 10)) % 10;
-  return expectedCheck === checkDigit;
+  const res = validateAndNormalizeBarcode(candidate);
+  return res.isValidFormat && res.isValidCheckDigit && !res.isSuspicious;
 }
 
 export function expandRomanianReceiptAbbreviation(rawName: string): string {
@@ -1043,7 +1037,8 @@ export function computeReceiptConfidence(
  */
 export function matchReceiptItemsToCatalog(
   items: ReceiptItem[],
-  catalogProducts: Product[]
+  catalogProducts: Product[],
+  aliasSource?: CanonicalAliasIndex | Map<string, string> | Record<string, string>
 ): ReceiptItem[] {
   const stopWords = new Set(['de', 'la', 'si', 'in', 'cu', 'fara', 'buc', 'kg', 'g', 'l', 'ml']);
   const tokenize = (text: string): string[] =>
@@ -1051,6 +1046,19 @@ export function matchReceiptItemsToCatalog(
       .replace(/[^a-z0-9%.\s]/g, ' ')
       .split(/\s+/)
       .filter(t => t.length > 1 && !stopWords.has(t));
+
+  const aliasIndex = buildCanonicalAliasIndex(aliasSource ?? catalogProducts);
+  const productsById = new Map(catalogProducts.map(p => [p.id, p]));
+  const toCanonical = (prod: Product): Product => {
+    const cid = resolveCanonicalProductId(prod.id, aliasIndex);
+    return cid && productsById.has(cid) ? productsById.get(cid)! : prod;
+  };
+  const canonicalCatalogProducts = catalogProducts.filter(p => {
+    if (p.canonicalProductId) return false;
+    const cid = resolveCanonicalProductId(p.id, aliasIndex);
+    return !cid || cid === p.id;
+  });
+  const scorePool = canonicalCatalogProducts.length > 0 ? canonicalCatalogProducts : catalogProducts;
 
   return items.map(item => {
     if (item.isSgr || item.isCouponOrDiscountLine) {
@@ -1061,53 +1069,58 @@ export function matchReceiptItemsToCatalog(
       };
     }
 
-    // Preserve explicit manual selection if present
+    // Preserve explicit manual selection if present (promoting any alias to canonical root)
     if (item.provenance?.matchedProductId === 'manual' && item.matchedProductId) {
-      const manualProduct = catalogProducts.find(p => p.id === item.matchedProductId);
+      const canonManualId = resolveCanonicalProductId(item.matchedProductId, aliasIndex) || item.matchedProductId;
+      const manualProduct = productsById.get(canonManualId) || productsById.get(item.matchedProductId);
       if (manualProduct) {
+        const canonical = toCanonical(manualProduct);
         return {
           ...item,
-          matchedProductName: manualProduct.name,
+          matchedProductId: canonical.id,
+          matchedProductName: canonical.name,
           matchStatus: 'matched'
         };
       }
     }
 
-    // 1. Strict valid EAN match
+    // 1. Strict valid EAN match (searching all products including aliases, promoting to canonical parent)
     if (item.eanCode && isValidEanBarcode(item.eanCode)) {
       const exactEan = catalogProducts.find(
         p => p.barcode && p.barcode.replace(/\D/g, '') === item.eanCode!.replace(/\D/g, '')
       );
       if (exactEan) {
+        const canonicalEan = toCanonical(exactEan);
         const cand: ReceiptMatchCandidate = {
-          productId: exactEan.id,
-          productName: exactEan.name,
-          brand: exactEan.brand,
-          packageWeightOrVolume: exactEan.packageWeightOrVolume,
-          packageUnit: exactEan.packageUnit,
+          productId: canonicalEan.id,
+          productName: canonicalEan.name,
+          brand: canonicalEan.brand,
+          packageWeightOrVolume: canonicalEan.packageWeightOrVolume,
+          packageUnit: canonicalEan.packageUnit,
           score: 1.0,
           matchMethod: 'ean_exact'
         };
         return {
           ...item,
-          matchedProductId: exactEan.id,
-          matchedProductName: exactEan.name,
+          matchedProductId: canonicalEan.id,
+          matchedProductName: canonicalEan.name,
           matchStatus: 'matched',
           matchCandidates: [cand]
         };
       }
     }
 
-    // 2. Normalized name + brand + quantity/unit scoring
+    // 2. Normalized name + brand + quantity/unit scoring (strictly over canonical products)
     const expanded = item.normalizedName || expandRomanianReceiptAbbreviation(item.rawName);
     const itemTokens = tokenize(`${item.rawName} ${expanded}`);
     const itemPkg = extractInlinePackage(item.rawName);
     const itemNorm = stripDiacritics(`${item.rawName} ${expanded}`);
+    const itemVariantMeta = normalizeTitleAndVariants(`${item.rawName} ${expanded}`);
 
     const scored: ReceiptMatchCandidate[] = [];
 
-    for (const product of catalogProducts) {
-      // Variant guards: fat percentage / zero / bread type
+    for (const product of scorePool) {
+      // Variant guards: fat percentage, zero/diet, lactose-free, coffee form, alcohol-free, flavors
       const itemPct = itemNorm.match(/(\d+(?:[.,]\d+)?)\s*%/)?.[1]?.replace(',', '.');
       const prodPct = stripDiacritics(product.name).match(/(\d+(?:[.,]\d+)?)\s*%/)?.[1]?.replace(',', '.');
       if (itemPct && prodPct && itemPct !== prodPct) continue;
@@ -1116,6 +1129,11 @@ export function matchReceiptItemsToCatalog(
       const itemZero = /\b(?:zero|diet|light|fara\s+zahar)\b/.test(itemNorm);
       const prodZero = /\b(?:zero|diet|light|fara\s+zahar)\b/.test(prodNorm);
       if (itemZero !== prodZero) continue;
+
+      const prodVariantMeta = normalizeTitleAndVariants(product.name);
+      if (!areVariantAttributesCompatible(itemVariantMeta.variantAttributes, prodVariantMeta.variantAttributes).compatible) {
+        continue;
+      }
 
       const prodTokens = tokenize(`${product.name} ${product.brand}`);
       if (itemTokens.length === 0 || prodTokens.length === 0) continue;
@@ -1150,12 +1168,13 @@ export function matchReceiptItemsToCatalog(
 
       const finalScore = Math.min(0.99, round3(tokenScore * 0.5 + coverage * 0.32 + brandBonus + pkgScore));
       if (finalScore >= 0.42) {
+        const canonical = toCanonical(product);
         scored.push({
-          productId: product.id,
-          productName: product.name,
-          brand: product.brand,
-          packageWeightOrVolume: product.packageWeightOrVolume,
-          packageUnit: product.packageUnit,
+          productId: canonical.id,
+          productName: canonical.name,
+          brand: canonical.brand,
+          packageWeightOrVolume: canonical.packageWeightOrVolume,
+          packageUnit: canonical.packageUnit,
           score: finalScore,
           matchMethod: 'name_brand_quantity'
         });
@@ -1163,9 +1182,16 @@ export function matchReceiptItemsToCatalog(
     }
 
     scored.sort((a, b) => b.score - a.score);
-    const topCandidates = scored.slice(0, 4);
+    const dedupedCandidates: ReceiptMatchCandidate[] = [];
+    const seenCanonIds = new Set<string>();
+    for (const c of scored) {
+      if (seenCanonIds.has(c.productId)) continue;
+      seenCanonIds.add(c.productId);
+      dedupedCandidates.push(c);
+      if (dedupedCandidates.length >= 4) break;
+    }
 
-    if (topCandidates.length === 0) {
+    if (dedupedCandidates.length === 0) {
       return {
         ...item,
         matchedProductId: undefined,
@@ -1175,8 +1201,8 @@ export function matchReceiptItemsToCatalog(
       };
     }
 
-    const best = topCandidates[0];
-    const second = topCandidates[1];
+    const best = dedupedCandidates[0];
+    const second = dedupedCandidates[1];
     const clearWinner = best.score >= 0.72 && (!second || best.score - second.score >= 0.12);
 
     if (clearWinner) {
@@ -1185,7 +1211,7 @@ export function matchReceiptItemsToCatalog(
         matchedProductId: best.productId,
         matchedProductName: best.productName,
         matchStatus: 'matched',
-        matchCandidates: topCandidates
+        matchCandidates: dedupedCandidates
       };
     }
 
@@ -1195,7 +1221,7 @@ export function matchReceiptItemsToCatalog(
       matchedProductId: undefined,
       matchedProductName: undefined,
       matchStatus: 'ambiguous',
-      matchCandidates: topCandidates
+      matchCandidates: dedupedCandidates
     };
   });
 }

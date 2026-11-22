@@ -21,6 +21,13 @@ import type {
 } from '../types.js';
 import { supabase } from '../lib/supabase.js';
 import { buildUserPriceObservations, computeReceiptFingerprint } from './ReceiptParserEngine.js';
+import {
+  buildCanonicalAliasIndex,
+  CanonicalAliasIndex,
+  collectProductIdsForCanonical,
+  normalizeStoreIdKey,
+  resolveCanonicalProductDetail
+} from './ProductIdentityService.js';
 
 interface DatabaseRow {
   [key: string]: any;
@@ -112,7 +119,8 @@ function mapProduct(row: DatabaseRow): Product {
     imageUrl: stringValue(row.image_url) || undefined,
     isBio: Boolean(row.is_bio),
     isRomanianProduct: Boolean(row.is_romanian_product),
-    baseReferencePrice: numberValue(row.base_reference_price)
+    baseReferencePrice: numberValue(row.base_reference_price),
+    canonicalProductId: stringValue(row.canonical_product_id) || null
   };
 }
 
@@ -415,23 +423,139 @@ async function updateProfilePreferences(userId: string, patch: DatabaseRow): Pro
   return nextPreferences;
 }
 
+export interface SupabaseCanonicalContext {
+  aliasIndex: CanonicalAliasIndex;
+  canonicalByRequestedId: Map<string, string>;
+  canonicalIds: string[];
+  allRelatedIds: string[];
+}
+
+export async function resolveSupabaseCanonicalProductIds(
+  productIds: string[]
+): Promise<Map<string, string>> {
+  const ctx = await resolveSupabaseCanonicalContext(productIds);
+  return ctx.canonicalByRequestedId;
+}
+
+export async function resolveSupabaseCanonicalContext(
+  productIds: string[]
+): Promise<SupabaseCanonicalContext> {
+  const requestedIds = Array.from(new Set((productIds || []).map(id => (id || '').trim()).filter(Boolean)));
+  if (requestedIds.length === 0) {
+    return {
+      aliasIndex: buildCanonicalAliasIndex([]),
+      canonicalByRequestedId: new Map(),
+      canonicalIds: [],
+      allRelatedIds: []
+    };
+  }
+
+  const nodeMap = new Map<string, { id: string; canonicalProductId: string | null }>();
+
+  // 1. Mers ascendent multi-hop (max 16 niveluri) pentru a găsi rădăcinile canonice
+  let upFrontier = [...requestedIds];
+  for (let hop = 0; hop < 16 && upFrontier.length > 0; hop++) {
+    const nextFrontier: string[] = [];
+    for (const batch of chunks(upFrontier, 200)) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, canonical_product_id')
+        .in('id', batch);
+      if (error) {
+        // Fallback sigur dacă coloana canonical_product_id lipsește dintr-un mediu minimal
+        const fallbackRes = await supabase.from('products').select('id').in('id', batch);
+        for (const r of fallbackRes.data || []) {
+          const rid = stringValue(r.id);
+          if (rid && !nodeMap.has(rid)) nodeMap.set(rid, { id: rid, canonicalProductId: null });
+        }
+        break;
+      }
+      for (const r of data || []) {
+        const rid = stringValue(r.id);
+        const parentId = stringValue(r.canonical_product_id) || null;
+        if (rid && !nodeMap.has(rid)) {
+          nodeMap.set(rid, { id: rid, canonicalProductId: parentId });
+        }
+        if (parentId && !nodeMap.has(parentId)) {
+          nextFrontier.push(parentId);
+        }
+      }
+    }
+    upFrontier = Array.from(new Set(nextFrontier));
+  }
+
+  const upIndex = buildCanonicalAliasIndex(Array.from(nodeMap.values()));
+  const canonicalByRequestedId = new Map<string, string>();
+  const canonicalIdsSet = new Set<string>();
+
+  for (const reqId of requestedIds) {
+    const res = resolveCanonicalProductDetail(reqId, upIndex);
+    if (res.found && res.canonicalId && !res.cycleDetected) {
+      canonicalByRequestedId.set(reqId, res.canonicalId);
+      canonicalIdsSet.add(res.canonicalId);
+    }
+  }
+
+  // 2. Mers descendent multi-hop pentru a colecta toate aliasurile produselor canonice țintă
+  let downFrontier = Array.from(canonicalIdsSet);
+  for (let hop = 0; hop < 16 && downFrontier.length > 0; hop++) {
+    const nextChildren: string[] = [];
+    for (const batch of chunks(downFrontier, 200)) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, canonical_product_id')
+        .in('canonical_product_id', batch);
+      if (error) break;
+      for (const r of data || []) {
+        const cid = stringValue(r.id);
+        const pid = stringValue(r.canonical_product_id) || null;
+        if (cid && !nodeMap.has(cid)) {
+          nodeMap.set(cid, { id: cid, canonicalProductId: pid });
+          nextChildren.push(cid);
+        }
+      }
+    }
+    downFrontier = Array.from(new Set(nextChildren));
+  }
+
+  const fullIndex = buildCanonicalAliasIndex(Array.from(nodeMap.values()));
+  const allRelatedSet = new Set<string>(canonicalIdsSet);
+  for (const cid of canonicalIdsSet) {
+    for (const relId of collectProductIdsForCanonical(cid, fullIndex)) {
+      allRelatedSet.add(relId);
+    }
+  }
+
+  return {
+    aliasIndex: fullIndex,
+    canonicalByRequestedId,
+    canonicalIds: Array.from(canonicalIdsSet),
+    allRelatedIds: Array.from(allRelatedSet)
+  };
+}
+
 async function loadPublicCatalog(productIds: string[]): Promise<{
   products: Product[];
   productOffers: ProductOffer[];
   stores: Store[];
+  canonicalByRequestedId: Map<string, string>;
 }> {
   const uniqueIds = Array.from(new Set(productIds.filter(Boolean)));
+  const canonicalCtx = await resolveSupabaseCanonicalContext(uniqueIds);
+  const canonicalIdsToLoad = canonicalCtx.canonicalIds.length > 0 ? canonicalCtx.canonicalIds : uniqueIds;
+  const offerProductIdsToLoad = canonicalCtx.allRelatedIds.length > 0 ? canonicalCtx.allRelatedIds : uniqueIds;
   const today = new Date().toISOString().slice(0, 10);
+
   const [productsResult, offersResult, storesResult] = await Promise.all([
-    uniqueIds.length
+    canonicalIdsToLoad.length
       ? supabase.from('products').select(
-          'id,name,brand,category,default_unit,package_weight_or_volume,package_unit,normalized_unit,barcode,image_url,is_bio,is_romanian_product,base_reference_price'
-        ).in('id', uniqueIds)
+          'id,name,brand,category,default_unit,package_weight_or_volume,package_unit,normalized_unit,barcode,image_url,is_bio,is_romanian_product,base_reference_price,canonical_product_id'
+        ).in('id', canonicalIdsToLoad)
       : Promise.resolve({ data: [], error: null }),
-    uniqueIds.length
+    offerProductIdsToLoad.length
       ? supabase.from('product_offers').select(
           'id,product_id,store_id,source_id,price,original_price,normal_price,promo_price,loyalty_price,unit_price,unit_price_measure,is_promo,promo_details,loyalty_card_required,loyalty_card_name,valid_until,observation_date,source,confidence_level,verification_status,last_checked,is_sponsored,raw_record_id,region,batch_id,freshness_score,quality_score,freshness_status,last_collected_at,last_verified_at,is_flagged_anomaly,anomaly_reason'
-        ).in('product_id', uniqueIds).eq('verification_status', 'verified').eq('is_flagged_anomaly', false)
+        ).in('product_id', offerProductIdsToLoad).eq('verification_status', 'verified').eq('is_flagged_anomaly', false)
           .or(`valid_until.is.null,valid_until.gte.${today}`).order('last_checked', { ascending: false })
       : Promise.resolve({ data: [], error: null }),
     supabase.from('stores').select(
@@ -443,16 +567,13 @@ async function loadPublicCatalog(productIds: string[]): Promise<{
   throwIfError(offersResult.error, 'Nu am putut prelua ofertele curente');
   throwIfError(storesResult.error, 'Nu am putut prelua magazinele');
 
-  const normalizeStoreKey = (value: string): string =>
-    (value || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
-
   const storesByKey = new Map<string, Store>();
   for (const row of (storesResult.data || [])) {
     const mapped = mapStore(row);
     if (!mapped?.id || mapped.id === 'validation-only-retailer' || mapped.slug === 'validation-only-retailer') {
       continue;
     }
-    const key = normalizeStoreKey(mapped.slug || mapped.id);
+    const key = normalizeStoreIdKey(mapped.slug || mapped.id);
     if (!key) continue;
     const existing = storesByKey.get(key);
     if (!existing || (existing.id !== key && mapped.id === key)) {
@@ -468,18 +589,30 @@ async function loadPublicCatalog(productIds: string[]): Promise<{
     }
   }
 
-  const offersById = new Map<string, ProductOffer>();
+  const offersByCanonStore = new Map<string, ProductOffer>();
   for (const row of (offersResult.data || [])) {
     const mapped = mapOffer(row);
-    if (mapped?.id && !offersById.has(mapped.id)) {
-      offersById.set(mapped.id, mapped);
+    if (!mapped?.id) continue;
+    const canonProdId = canonicalCtx.canonicalByRequestedId.get(mapped.productId)
+      || (productsById.has(mapped.productId) ? mapped.productId : undefined)
+      || mapped.productId;
+    const normStoreId = normalizeStoreIdKey(mapped.storeId) || mapped.storeId;
+    const normalizedOffer: ProductOffer = {
+      ...mapped,
+      productId: canonProdId,
+      storeId: normStoreId
+    };
+    const key = `${canonProdId}::${normStoreId}`;
+    if (!offersByCanonStore.has(key)) {
+      offersByCanonStore.set(key, normalizedOffer);
     }
   }
 
   return {
     products: Array.from(productsById.values()),
-    productOffers: Array.from(offersById.values()),
-    stores: Array.from(storesByKey.values())
+    productOffers: Array.from(offersByCanonStore.values()),
+    stores: Array.from(storesByKey.values()),
+    canonicalByRequestedId: canonicalCtx.canonicalByRequestedId
   };
 }
 
@@ -665,13 +798,23 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
   }
 
   const preferences = recordValue(profileResult.data?.preferences);
-  const trackedProductIds = getTrackedIds(preferences);
+  const rawTrackedProductIds = getTrackedIds(preferences);
+  const storeById = new Map<string, Store>();
+  const rawReceipts = (receiptsResult.data || []).map(row => mapReceipt(row, storeById));
+  const receiptMatchedIds = rawReceipts.flatMap(r => r.items.map(it => it.matchedProductId || ''));
   const productIds = [
-    ...trackedProductIds,
+    ...rawTrackedProductIds,
     ...(alertsResult.data || []).map(row => stringValue(row.product_id)),
-    ...(itemsResult.data || []).map(row => stringValue(row.product_id))
+    ...(itemsResult.data || []).map(row => stringValue(row.product_id)),
+    ...receiptMatchedIds
   ];
-  const catalog = await loadPublicCatalog(productIds);
+  const { canonicalByRequestedId, ...catalog } = await loadPublicCatalog(productIds);
+  const resolveCanonId = (pid?: string): string =>
+    pid ? (canonicalByRequestedId.get(pid) || pid) : '';
+
+  const trackedProductIds = Array.from(
+    new Set(rawTrackedProductIds.map(id => resolveCanonId(id)).filter(Boolean))
+  );
   const productsById = new Map(catalog.products.map(product => [product.id, product]));
   const storesById = new Map(catalog.stores.map(store => [store.id, store]));
   const itemsByListId = new Map<string, ShoppingListItem[]>();
@@ -679,7 +822,18 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
   for (const row of itemsResult.data || []) {
     const listId = stringValue(row.list_id);
     const items = itemsByListId.get(listId) || [];
-    items.push(mapShoppingItem(row, productsById));
+    const mappedItem = mapShoppingItem(row, productsById);
+    if (mappedItem.productId) {
+      const canonPid = resolveCanonId(mappedItem.productId);
+      mappedItem.productId = canonPid || mappedItem.productId;
+      const prod = productsById.get(mappedItem.productId);
+      if (prod) {
+        mappedItem.brand = mappedItem.brand || prod.brand;
+        mappedItem.referencePrice = mappedItem.referencePrice ?? prod.baseReferencePrice;
+        mappedItem.estimatedPrice = mappedItem.estimatedPrice ?? prod.baseReferencePrice;
+      }
+    }
+    items.push(mappedItem);
     itemsByListId.set(listId, items);
   }
 
@@ -724,7 +878,7 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
   const priceAlerts: PriceAlert[] = (alertsResult.data || []).map(row => {
     const rawRow = row as Record<string, unknown>;
     const id = stringValue(row.id);
-    const productId = stringValue(row.product_id);
+    const productId = resolveCanonId(stringValue(row.product_id));
     const currentOffer = (offersByProduct.get(productId) || []).reduce<ProductOffer | null>(
       (best, offer) => !best || offer.price < best.price ? offer : best,
       null
@@ -769,8 +923,17 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
     };
   });
 
-  const storeById = storesById;
-  const receipts = (receiptsResult.data || []).map(row => mapReceipt(row, storeById));
+  const receipts = (receiptsResult.data || []).map(row => {
+    const rec = mapReceipt(row, storesById);
+    return {
+      ...rec,
+      items: rec.items.map(it =>
+        it.matchedProductId
+          ? { ...it, matchedProductId: resolveCanonId(it.matchedProductId) || it.matchedProductId }
+          : it
+      )
+    };
+  });
 
   return {
     receipts,
@@ -854,41 +1017,53 @@ export async function saveReceiptForUser(
   const purchasedAt = timestampForReceipt(enrichedReceipt);
   const observations = buildUserPriceObservations(enrichedReceipt, userId);
 
-  // Attempt atomic v2 RPC first (when migration 010 is applied in Supabase)
+  const requestedMatchedIds = enrichedReceipt.items.map(it => it.matchedProductId || '').filter(Boolean);
+  const canonicalMatchMap = await resolveSupabaseCanonicalProductIds(requestedMatchedIds);
+  const validCanonicalSet = new Set(canonicalMatchMap.values());
+
+  const resolvedReceiptItems = enrichedReceipt.items.map(it => {
+    const resolvedPid = it.matchedProductId ? canonicalMatchMap.get(it.matchedProductId) : undefined;
+    return resolvedPid && resolvedPid !== it.matchedProductId
+      ? { ...it, matchedProductId: resolvedPid }
+      : it;
+  });
+  const upgradedReceipt: Receipt = {
+    ...enrichedReceipt,
+    items: resolvedReceiptItems
+  };
+  const upgradedPayload = receiptExtractedData(upgradedReceipt);
+  const upgradedObservations = buildUserPriceObservations(upgradedReceipt, userId);
+
   const rpcReceiptJson = {
     id,
     store_id: storeId,
     image_path: uploadedPaths[0] || null,
-    merchant_name: enrichedReceipt.storeName,
+    merchant_name: upgradedReceipt.storeName,
     purchased_at: purchasedAt,
-    total_amount: enrichedReceipt.total,
+    total_amount: upgradedReceipt.total,
     currency: 'RON',
-    extracted_data: extractedPayload,
-    status: enrichedReceipt.verifiedStatus === 'confirmed' ? 'processed' : 'uploaded',
-    receipt_number: enrichedReceipt.receiptNumber || null,
-    payment_method: enrichedReceipt.paymentMethod || null,
-    sgr_total: enrichedReceipt.sgrTotal ?? 0,
-    coupons_total: enrichedReceipt.couponsTotal ?? 0,
-    vat_total: enrichedReceipt.vatTotal ?? null,
-    printed_total: enrichedReceipt.printedTotal ?? enrichedReceipt.total,
-    calculated_total: enrichedReceipt.calculatedTotal ?? enrichedReceipt.total,
-    discrepancy_amount: enrichedReceipt.discrepancyAmount ?? 0,
-    validation_status: enrichedReceipt.validationStatus || 'VALID',
-    validation_reasons: enrichedReceipt.validationReasons || [],
-    confidence_scores: enrichedReceipt.confidenceScores || {},
-    raw_ocr_text: enrichedReceipt.rawOcrText || null,
-    original_extracted_data: enrichedReceipt.originalExtractedData || null,
-    user_corrections: enrichedReceipt.userCorrections || null,
+    extracted_data: upgradedPayload,
+    status: upgradedReceipt.verifiedStatus === 'confirmed' ? 'processed' : 'uploaded',
+    receipt_number: upgradedReceipt.receiptNumber || null,
+    payment_method: upgradedReceipt.paymentMethod || null,
+    sgr_total: upgradedReceipt.sgrTotal ?? 0,
+    coupons_total: upgradedReceipt.couponsTotal ?? 0,
+    vat_total: upgradedReceipt.vatTotal ?? null,
+    printed_total: upgradedReceipt.printedTotal ?? upgradedReceipt.total,
+    calculated_total: upgradedReceipt.calculatedTotal ?? upgradedReceipt.total,
+    discrepancy_amount: upgradedReceipt.discrepancyAmount ?? 0,
+    validation_status: upgradedReceipt.validationStatus || 'VALID',
+    validation_reasons: upgradedReceipt.validationReasons || [],
+    confidence_scores: upgradedReceipt.confidenceScores || {},
+    raw_ocr_text: upgradedReceipt.rawOcrText || null,
+    original_extracted_data: upgradedReceipt.originalExtractedData || null,
+    user_corrections: upgradedReceipt.userCorrections || null,
     image_paths: uploadedPaths,
     content_fingerprint: fingerprint
   };
 
-  const validMatchedIds = await validProductIds(
-    enrichedReceipt.items.map(it => it.matchedProductId || '')
-  );
-
-  const rpcItemsJson = enrichedReceipt.items.map(it => ({
-    product_id: validMatchedIds.has(it.matchedProductId || '') ? it.matchedProductId : null,
+  const rpcItemsJson = resolvedReceiptItems.map(it => ({
+    product_id: validCanonicalSet.has(it.matchedProductId || '') ? it.matchedProductId : null,
     raw_name: it.rawName,
     normalized_name: it.normalizedName || null,
     ean_code: it.eanCode || null,
@@ -909,8 +1084,8 @@ export async function saveReceiptForUser(
     raw_line_text: it.rawLineText || null
   }));
 
-  const rpcObsJson = observations.map(obs => ({
-    product_id: validMatchedIds.has(obs.productId || '') ? obs.productId : null,
+  const rpcObsJson = upgradedObservations.map(obs => ({
+    product_id: validCanonicalSet.has(obs.productId || '') ? obs.productId : null,
     product_name: obs.productName,
     store_id: storeId,
     store_name: obs.storeName,
@@ -1040,12 +1215,8 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-async function validProductIds(productIds: string[]): Promise<Set<string>> {
-  const ids = Array.from(new Set(productIds.filter(Boolean)));
-  if (!ids.length) return new Set();
-  const { data, error } = await supabase.from('products').select('id').in('id', ids);
-  throwIfError(error, 'Nu am putut valida produsele din catalog');
-  return new Set((data || []).map(row => stringValue(row.id)));
+async function validProductIds(productIds: string[]): Promise<Map<string, string>> {
+  return resolveSupabaseCanonicalProductIds(productIds);
 }
 
 export async function saveShoppingListsForUser(
@@ -1054,10 +1225,14 @@ export async function saveShoppingListsForUser(
   nextLists: ShoppingList[]
 ): Promise<ShoppingList[]> {
   const normalized = await normalizeShoppingLists(userId, nextLists);
-  const productIds = await validProductIds(normalized.flatMap(list => list.items.map(item => item.productId || '')));
+  const canonicalMap = await validProductIds(normalized.flatMap(list => list.items.map(item => item.productId || '')));
   const safeLists = normalized.map(list => ({
     ...list,
-    items: list.items.map(item => productIds.has(item.productId || '') ? item : { ...item, productId: undefined })
+    items: list.items.map(item => {
+      if (!item.productId) return item;
+      const canonId = canonicalMap.get(item.productId);
+      return canonId ? { ...item, productId: canonId } : { ...item, productId: undefined };
+    })
   }));
 
   // Do not allow viewer collaborators to persist mutations; preserve their existing items untouched
@@ -1134,16 +1309,22 @@ export async function savePriceAlertsForUser(
   currentAlerts: PriceAlert[],
   nextAlerts: PriceAlert[]
 ): Promise<PriceAlert[]> {
+  const canonicalMap = await validProductIds(nextAlerts.map(alert => alert.productId));
   const normalized: PriceAlert[] = [];
+  const seenKeys = new Set<string>();
   for (const alert of nextAlerts) {
+    const resolvedProductId = canonicalMap.get(alert.productId);
+    if (!resolvedProductId) {
+      throw new Error('Unul dintre produsele alertei nu există în catalogul Supabase.');
+    }
+    const dedupeKey = `${resolvedProductId}:${alert.alertType || 'below_target'}:${alert.intervalDays || ''}`;
+    if (seenKeys.has(dedupeKey)) continue;
+    seenKeys.add(dedupeKey);
     normalized.push({
       ...alert,
+      productId: resolvedProductId,
       id: isUuid(alert.id) ? alert.id : await stableUuid(userId, 'price-alert', alert.id)
     });
-  }
-  const validIds = await validProductIds(normalized.map(alert => alert.productId));
-  if (normalized.some(alert => !validIds.has(alert.productId))) {
-    throw new Error('Unul dintre produsele alertei nu există în catalogul Supabase.');
   }
 
   const extendedRows = normalized.map(alert => ({
@@ -1288,13 +1469,14 @@ export async function markAlertNotificationsReadForUser(
 }
 
 export async function saveTrackedProductsForUser(userId: string, productIds: string[]): Promise<string[]> {
-  const uniqueIds = Array.from(new Set(productIds.filter(Boolean)));
-  const validIds = await validProductIds(uniqueIds);
-  if (uniqueIds.some(id => !validIds.has(id))) {
+  const rawUniqueIds = Array.from(new Set(productIds.filter(Boolean)));
+  const canonicalMap = await validProductIds(rawUniqueIds);
+  if (rawUniqueIds.some(id => !canonicalMap.has(id))) {
     throw new Error('Unul dintre produsele urmărite nu există în catalogul Supabase.');
   }
-  await updateProfilePreferences(userId, { trackedProductIds: uniqueIds });
-  return uniqueIds;
+  const canonicalUniqueIds = Array.from(new Set(rawUniqueIds.map(id => canonicalMap.get(id)!)));
+  await updateProfilePreferences(userId, { trackedProductIds: canonicalUniqueIds });
+  return canonicalUniqueIds;
 }
 
 export async function importLocalDashboardData(
@@ -1308,11 +1490,21 @@ export async function importLocalDashboardData(
   const localProductIds = [
     ...snapshot.trackedProductIds,
     ...snapshot.priceAlerts.map(alert => alert.productId),
-    ...snapshot.shoppingLists.flatMap(list => list.items.map(item => item.productId || ''))
+    ...snapshot.shoppingLists.flatMap(list => list.items.map(item => item.productId || '')),
+    ...snapshot.receipts.flatMap(rec => rec.items.map(it => it.matchedProductId || ''))
   ];
-  const productIds = await validProductIds(localProductIds);
+  const canonicalMap = await validProductIds(localProductIds);
 
-  const receiptRows = await Promise.all(snapshot.receipts.map(async receipt => ({
+  const upgradedReceipts = snapshot.receipts.map(receipt => ({
+    ...receipt,
+    items: receipt.items.map(it => {
+      if (!it.matchedProductId) return it;
+      const canon = canonicalMap.get(it.matchedProductId);
+      return canon ? { ...it, matchedProductId: canon } : it;
+    })
+  }));
+
+  const receiptRows = await Promise.all(upgradedReceipts.map(async receipt => ({
     id: await stableUuid(userId, 'imported-receipt', receipt.id),
     user_id: userId,
     store_id: resolveStoreId(receipt.storeId || receipt.storeName, stores),
@@ -1347,7 +1539,7 @@ export async function importLocalDashboardData(
   const itemRows = normalizedLists.flatMap(list => list.items.map(item => ({
     id: item.id,
     list_id: list.id,
-    product_id: productIds.has(item.productId || '') ? item.productId : null,
+    product_id: item.productId ? (canonicalMap.get(item.productId) || null) : null,
     product_name: item.name,
     quantity: item.quantity,
     unit: item.unit,
@@ -1361,13 +1553,20 @@ export async function importLocalDashboardData(
     throwIfError(error, 'Nu am putut importa produsele din liste');
   }
 
-  const importableAlerts = snapshot.priceAlerts.filter(alert =>
-    productIds.has(alert.productId) && numberValue(alert.targetPrice) > 0
-  );
+  const seenImportAlerts = new Set<string>();
+  const importableAlerts: Array<PriceAlert & { resolvedProductId: string }> = [];
+  for (const alert of snapshot.priceAlerts) {
+    const resolvedProductId = canonicalMap.get(alert.productId);
+    if (!resolvedProductId || numberValue(alert.targetPrice) <= 0) continue;
+    const key = `${resolvedProductId}:${alert.alertType || 'below_target'}:${alert.intervalDays || ''}`;
+    if (seenImportAlerts.has(key)) continue;
+    seenImportAlerts.add(key);
+    importableAlerts.push({ ...alert, resolvedProductId });
+  }
   const alertRows = await Promise.all(importableAlerts.map(async alert => ({
     id: await stableUuid(userId, 'imported-alert', alert.id),
     user_id: userId,
-    product_id: alert.productId,
+    product_id: alert.resolvedProductId,
     target_price: alert.targetPrice,
     is_active: alert.isActive,
     created_at: alert.createdAt || new Date().toISOString()
@@ -1377,7 +1576,9 @@ export async function importLocalDashboardData(
     throwIfError(error, 'Nu am putut importa alertele locale');
   }
 
-  const importedTrackedProductIds = snapshot.trackedProductIds.filter(id => productIds.has(id));
+  const importedTrackedProductIds = Array.from(
+    new Set(snapshot.trackedProductIds.map(id => canonicalMap.get(id)).filter((id): id is string => Boolean(id)))
+  );
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
     .select('preferences')
@@ -1400,7 +1601,7 @@ export async function importLocalDashboardData(
     alerts: alertRows.length,
     trackedProducts: importedTrackedProductIds.length,
     skippedAlerts: snapshot.priceAlerts.length - importableAlerts.length,
-    skippedTrackedProducts: snapshot.trackedProductIds.length - importedTrackedProductIds.length,
+    skippedTrackedProducts: snapshot.trackedProductIds.filter(id => !canonicalMap.has(id)).length,
     imagesLeftOnDevice: counts.receiptsWithImages
   };
 }

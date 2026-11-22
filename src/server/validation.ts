@@ -598,3 +598,81 @@ export const assistantQueryRequestSchema = z.object({
   useLoyaltyCards: z.boolean().default(true)
 });
 
+// =========================================================================
+// FAZA 1B: Shadow Matching Admin Validation Schemas
+// =========================================================================
+
+export const shadowMatchingQuerySchema = z.object({
+  sampleLimit: z.coerce.number().int().min(3).max(50).default(15),
+  maxCandidatesPerProduct: z.coerce.number().int().min(1).max(50).default(10),
+  maxReportCandidates: z.coerce.number().int().min(10).max(2000).default(300),
+  includeLowConfidence: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform(v => v === 'true'),
+  includeSameRetailer: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform(v => v === 'true')
+});
+
+export const shadowMatchingPersistSchema = z.object({
+  allowCategories: z
+    .array(z.enum(['HIGH_CONFIDENCE', 'REVIEW']))
+    .min(1)
+    .max(2)
+    .default(['HIGH_CONFIDENCE', 'REVIEW']),
+  maxCandidates: z.coerce.number().int().min(1).max(500).default(200)
+});
+
+// =========================================================================
+// FAZA 2: Human Review Panel Admin Validation Schemas
+// =========================================================================
+
+export const shadowReviewStatusFilterSchema = z.enum([
+  'all',
+  'pending_review',
+  'confirmed_same_product',
+  'confirmed_different_product',
+  'needs_more_information',
+  'dismissed'
+]);
+
+export const shadowReviewCategoryFilterSchema = z.enum([
+  'inspectable',
+  'HIGH_CONFIDENCE',
+  'REVIEW',
+  'BLOCKED',
+  'LOW_CONFIDENCE',
+  'all'
+]);
+
+export const shadowReviewListQuerySchema = z.object({
+  decisionCategory: shadowReviewCategoryFilterSchema.default('inspectable'),
+  reviewStatus: shadowReviewStatusFilterSchema.default('all'),
+  retailer: z.string().trim().max(64).default('all'),
+  category: z.string().trim().max(80).default('all'),
+  search: z.string().trim().max(200).default(''),
+  sort: z.enum(['score_desc', 'score_asc', 'generated_desc']).default('score_desc'),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25)
+});
+
+export const shadowReviewDecisionSchema = z.object({
+  status: z.enum([
+    'confirmed_same_product',
+    'confirmed_different_product',
+    'needs_more_information',
+    'dismissed',
+    'pending_review'
+  ]),
+  reason: z.string().trim().min(3, 'Motivul deciziei este obligatoriu (minim 3 caractere).').max(600),
+  notes: z.string().trim().max(1500).optional().nullable(),
+  expectedVersion: z.coerce.number().int().min(0).max(1_000_000).optional()
+});
+
+export const shadowReviewAuditQuerySchema = z.object({
+  candidateId: z.string().trim().max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50)
+});
+

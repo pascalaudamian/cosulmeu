@@ -137,6 +137,17 @@ export interface CatalogExtractedOffer {
   priceValidationCode?: string;
   priceProofType?: string;
   validationErrors?: string[];
+  normalizedBrand?: string | null;
+  brandQuality?: 'verified_brand' | 'extracted_from_title' | 'placeholder' | 'corrupt_or_non_brand' | 'missing';
+  brandConfidence?: number;
+  normalizedTitle?: string;
+  packCount?: number;
+  unitPackageQuantity?: number | null;
+  unitPackageUnit?: string | null;
+  packagingStructureKey?: string | null;
+  barcodeQuality?: string;
+  barcodeEligibleForAutoMatch?: boolean;
+  isVariableWeight?: boolean;
   reviewedBy?: string;
   reviewedAt?: string;
   rejectionReason?: string;

@@ -30,6 +30,9 @@ export interface SafePackagingResult {
   weight?: number;
   volume?: number;
   packageSize?: string;
+  packCount?: number;
+  unitPackageQuantity?: number;
+  unitPackageUnit?: UnitType;
 }
 
 export interface OfferPriceValidationResult {
@@ -296,41 +299,51 @@ export class PriceExtractor {
    * Extrage în siguranță cantitatea și unitatea de ambalare fără a corupe codurile de produs (ex: 55UA73003LA, A800SE-4G, 160 g/m²).
    */
   static extractPackagingSafely(text: string): SafePackagingResult {
-    const raw = (text || '').replace(/\u00a0/g, ' ').trim();
+    const raw = (text || '').replace(/\u00a0/g, ' ').replace(/[\r\n\t]+/g, ' ').trim();
     if (!raw) return {};
 
-    // Eliminăm întâi specificațiile non-ambalaj (g/m², 4G/5G, dimensiuni ecrane/hârtie, rezoluții)
+    // Eliminăm întâi specificațiile non-ambalaj (g/m², dimensiuni cm/mm/m, 4G/5G, rezoluții, lame/capete)
     const cleaned = raw
+      .replace(/\b\d+(?:[.,]\d+)?(?:\s*[x×]\s*\d+(?:[.,]\d+)?){1,3}\s*(?:cm|mm|m|inch|")\b/gi, ' ')
       .replace(/\b\d+(?:[.,]\d+)?\s*g\/m[²2]\b/gi, ' ')
       .replace(/\b\d+(?:[.,]\d+)?\s*g\/mp\b/gi, ' ')
       .replace(/\b[A-Z0-9]+-[2345]G\b/gi, ' ')
-      .replace(/\b(?:3G|4G|5G|2\.4G|5\.0G)\b/gi, ' ')
-      .replace(/\b\d{2,3}[A-Z]{2}\d+[A-Z0-9]*\b/g, ' ');
+      .replace(/\b(?:2\.4G|5\.0G)\b/gi, ' ')
+      .replace(/(?<![\d.,-])\b(?:3G|4G|5G)\b/gi, ' ')
+      .replace(/\b\d{2,3}[A-Z]{2}\d+[A-Z0-9]*\b/g, ' ')
+      .replace(/\b(?:cu\s+)?\d+\s+(?:lame|capete|viteze|trepte|programe|straturi|culori)\b/gi, ' ');
 
     // 1. Multipack: ex. "6 x 0,33 l", "4x125 g", "2 x 1 L"
     const multiMatch = cleaned.match(
-      /(?<![a-zA-Z0-9\-/])(\d{1,2})\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*(kg|gr|g|ml|cl|l)\b(?![a-zA-Z0-9/²\-])/i
+      /(?<![a-zA-Z0-9\-/])(\d{1,2})\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*(kg|gr|g|ml|cl|dl|l)\b(?![a-zA-Z0-9/²\-])/i
     );
     if (multiMatch) {
       const count = Number.parseInt(multiMatch[1], 10);
       const perUnitRaw = Number.parseFloat(multiMatch[2].replace(',', '.'));
       let unitRaw = multiMatch[3].toLowerCase();
       if (unitRaw === 'gr') unitRaw = 'g';
-      if (Number.isFinite(count) && count > 0 && Number.isFinite(perUnitRaw) && perUnitRaw > 0) {
-        let totalQty = count * perUnitRaw;
+      if (Number.isFinite(count) && count > 0 && count <= 48 && Number.isFinite(perUnitRaw) && perUnitRaw > 0) {
+        let perUnitNormalized = perUnitRaw;
         let finalUnit: UnitType = unitRaw as UnitType;
         if (unitRaw === 'cl') {
-          totalQty = count * perUnitRaw * 10;
+          perUnitNormalized = perUnitRaw * 10;
+          finalUnit = 'ml';
+        } else if (unitRaw === 'dl') {
+          perUnitNormalized = perUnitRaw * 100;
           finalUnit = 'ml';
         }
-        totalQty = Number(totalQty.toFixed(3));
-        return PriceExtractor.buildPackagingResult(totalQty, finalUnit, `${count}x${multiMatch[2]} ${multiMatch[3]}`);
+        const totalQty = Number((count * perUnitNormalized).toFixed(3));
+        const res = PriceExtractor.buildPackagingResult(totalQty, finalUnit, `${count}x${multiMatch[2]} ${multiMatch[3]}`);
+        res.packCount = count;
+        res.unitPackageQuantity = Number(perUnitNormalized.toFixed(3));
+        res.unitPackageUnit = finalUnit;
+        return res;
       }
     }
 
     // 2. Cantitate simplă: ex. "0,33 L", "250 ml", "100 g", "1,5 kg", "6 buc"
     const singleMatch = cleaned.match(
-      /(?<![a-zA-Z0-9\-/])(\d+(?:[.,]\d+)?)\s*(kg|gr|g|ml|cl|l|buc(?:ăți|ati|\.)?|pachet|role)\b(?![a-zA-Z0-9/²\-])/i
+      /(?<![a-zA-Z0-9\-/])(\d+(?:[.,]\d+)?)\s*(kg|gr|g|ml|cl|dl|l|buc(?:ăți|ati|\.)?|pachet|role)\b(?![a-zA-Z0-9/²\-])/i
     );
     if (singleMatch) {
       const qty = Number.parseFloat(singleMatch[1].replace(',', '.'));
@@ -345,6 +358,9 @@ export class PriceExtractor {
         if (unitRaw === 'cl') {
           normalizedQty = Number((qty * 10).toFixed(2));
           finalUnit = 'ml';
+        } else if (unitRaw === 'dl') {
+          normalizedQty = Number((qty * 100).toFixed(2));
+          finalUnit = 'ml';
         }
 
         // Guard împotriva numerelor absurde extrase greșit drept grame/litri (ex: > 25000g / 100L)
@@ -355,7 +371,11 @@ export class PriceExtractor {
           return {};
         }
 
-        return PriceExtractor.buildPackagingResult(normalizedQty, finalUnit, `${singleMatch[1]} ${singleMatch[2]}`);
+        const res = PriceExtractor.buildPackagingResult(normalizedQty, finalUnit, `${singleMatch[1]} ${singleMatch[2]}`);
+        res.packCount = 1;
+        res.unitPackageQuantity = normalizedQty;
+        res.unitPackageUnit = finalUnit;
+        return res;
       }
     }
 

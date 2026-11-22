@@ -75,7 +75,7 @@ async function runIndexerSchedulerTests() {
   console.log('\n--- 3. Invocare CollectionWorker prin IndexerScheduler ---');
   RetailerRegistry.resetToDefault();
 
-  const sampleLidlCsv = `denumire,pret,gramaj,unitate,marca,cod_bare\nLapte proaspat Napolact 1.5% 1L,6.49,1,l,Napolact,5941014002341`;
+  const sampleLidlCsv = `denumire,pret,gramaj,unitate,marca,cod_bare\nLapte proaspat Napolact 1.5% 1L,6.49,1,l,Napolact,5941014002343`;
 
   const triggerResult = await IndexerScheduler.triggerNow({
     dryRun: true,

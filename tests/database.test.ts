@@ -163,7 +163,7 @@ async function runDatabaseTests() {
   assert(historyRes.body.observations?.length > 0, `Istoricul produsului returnează ${historyRes.body.observations?.length} observații`);
 
   // Testare server-side import endpoint cu token
-  const importCsvPayload = `denumire,pret,gramaj,unitate,marca,cod_bare\nLapte proaspat 1.5% 1L,6.29,1,l,Napolact,5941014002341`;
+  const importCsvPayload = `denumire,pret,gramaj,unitate,marca,cod_bare\nLapte proaspat 1.5% 1L,6.29,1,l,Napolact,5941014002343`;
   const serverImportRes = await makeRequest('POST', '/api/admin/sources/src-lidl-file/import', {
     headers: {
       'Authorization': `Bearer ${ADMIN_API_KEY}`,

@@ -9,6 +9,11 @@ import {
   Receipt
 } from '../types.js';
 import { mapRetailerCategoryToStandard } from '../data/categories.js';
+import {
+  CanonicalAliasIndex,
+  buildCanonicalAliasIndex,
+  resolveCanonicalProductId
+} from './ProductIdentityService.js';
 
 const MONTHS_RO = [
   'Ian', 'Feb', 'Mar', 'Apr', 'Mai', 'Iun',
@@ -89,13 +94,19 @@ function resolveItemCategory(
   rawName: string,
   explicitCategory: string | undefined,
   matchedProductId: string | undefined,
-  productCategoryMap: Map<string, ProductCategory>
+  productCategoryMap: Map<string, ProductCategory>,
+  aliasIndex?: CanonicalAliasIndex
 ): string {
   if (explicitCategory && explicitCategory !== 'Alte produse') {
     return explicitCategory;
   }
-  if (matchedProductId && productCategoryMap.has(matchedProductId)) {
-    return productCategoryMap.get(matchedProductId)!;
+  if (matchedProductId) {
+    const canonicalId = aliasIndex
+      ? resolveCanonicalProductId(matchedProductId, aliasIndex)
+      : matchedProductId;
+    if (canonicalId && productCategoryMap.has(canonicalId)) {
+      return productCategoryMap.get(canonicalId)!;
+    }
   }
   if (explicitCategory) {
     return explicitCategory;
@@ -110,6 +121,7 @@ export class BudgetService {
     receipts: Receipt[];
     settings?: Partial<PersonalBudgetSettings> | null;
     catalogProducts?: Product[];
+    aliasMap?: Map<string, string> | Record<string, string> | CanonicalAliasIndex;
     referenceDate?: Date;
   }): BudgetStatusSummary {
     const now = params.referenceDate ? new Date(params.referenceDate) : new Date();
@@ -136,10 +148,16 @@ export class BudgetService {
       alertThresholdPct: thresholdPct
     };
 
+    const aliasIndex = buildCanonicalAliasIndex(params.aliasMap ?? params.catalogProducts ?? []);
     const productCategoryMap = new Map<string, ProductCategory>();
     for (const p of params.catalogProducts || []) {
       if (p?.id && p?.category) {
-        productCategoryMap.set(p.id, p.category);
+        const canonicalId = resolveCanonicalProductId(p.id, aliasIndex);
+        if (!canonicalId) continue;
+        // Nu suprascriem categoria rădăcinii canonice dacă am văzut deja rădăcina explicită
+        if (!productCategoryMap.has(canonicalId) || canonicalId === p.id) {
+          productCategoryMap.set(canonicalId, p.category);
+        }
       }
     }
 

@@ -26,6 +26,11 @@ import type {
 } from '../types.js';
 import { PRODUCTS, PRODUCT_OFFERS, STORES } from '../data/mockData.js';
 import { PriceQualityClassifier } from './PriceQualityClassifier.js';
+import {
+  buildCanonicalAliasIndex,
+  CanonicalAliasIndex,
+  resolveCanonicalProductId
+} from './ProductIdentityService.js';
 
 function normalizeStoreKey(value: string): string {
   return (value || '')
@@ -405,7 +410,8 @@ export class BasketOptimizerService {
    */
   static matchItemToProduct(
     item: ShoppingListItem,
-    products: Product[]
+    products: Product[],
+    aliasSource?: CanonicalAliasIndex | Map<string, string> | Record<string, string>
   ): {
     status: 'matched' | 'unconfident';
     product?: Product;
@@ -413,6 +419,13 @@ export class BasketOptimizerService {
     reasonRo?: string;
     candidates?: Array<{ id: string; name: string; brand: string }>;
   } {
+    const aliasIndex = buildCanonicalAliasIndex(aliasSource ?? products);
+    const byIdMap = new Map(products.map(p => [p.id, p]));
+    const promoteCanonical = (prod: Product): Product => {
+      const canonId = resolveCanonicalProductId(prod.id, aliasIndex);
+      return canonId && byIdMap.has(canonId) ? byIdMap.get(canonId)! : prod;
+    };
+
     // 1. Exact EAN / GTIN (incl. normalized digits)
     if (item.barcode && item.barcode.trim()) {
       const cleanBarcode = item.barcode.trim();
@@ -428,15 +441,16 @@ export class BasketOptimizerService {
         return false;
       });
       if (byBarcode) {
-        return { status: 'matched', product: byBarcode, confidence: 'exact_ean' };
+        return { status: 'matched', product: promoteCanonical(byBarcode), confidence: 'exact_ean' };
       }
     }
 
-    // 2. Exact internal ID
+    // 2. Exact internal ID (with multi-hop canonical alias resolution)
     if (item.productId) {
-      const byId = products.find(p => p.id === item.productId);
+      const resolvedId = resolveCanonicalProductId(item.productId, aliasIndex);
+      const byId = (resolvedId ? byIdMap.get(resolvedId) : undefined) || byIdMap.get(item.productId);
       if (byId) {
-        return { status: 'matched', product: byId, confidence: 'exact_id' };
+        return { status: 'matched', product: promoteCanonical(byId), confidence: 'exact_id' };
       }
     }
 
@@ -874,6 +888,7 @@ export class BasketOptimizerService {
     products?: Product[];
     offers?: ProductOffer[];
     stores?: Store[];
+    aliasMap?: Map<string, string> | Record<string, string> | CanonicalAliasIndex;
     options?: BasketOptimizationOptions;
   }): BasketOptimizationResult {
     const now = params.options?.now || new Date();
@@ -887,7 +902,12 @@ export class BasketOptimizerService {
     const transportCostPerExtraStore = Math.max(0, Number(params.options?.transportCostPerExtraStore ?? 0) || 0);
 
     const allProducts = params.products && params.products.length > 0 ? params.products : PRODUCTS;
-    const allOffers = params.offers !== undefined ? params.offers : PRODUCT_OFFERS;
+    const aliasIndex = buildCanonicalAliasIndex(params.aliasMap ?? allProducts);
+    const rawOffers = params.offers !== undefined ? params.offers : PRODUCT_OFFERS;
+    const allOffers = rawOffers.map(o => {
+      const canonId = resolveCanonicalProductId(o.productId, aliasIndex);
+      return canonId && canonId !== o.productId ? { ...o, productId: canonId } : o;
+    });
     const rawStores = params.stores && params.stores.length > 0 ? params.stores : STORES;
     const canonicalStores = this.canonicalizeStores(rawStores);
 
@@ -907,7 +927,7 @@ export class BasketOptimizerService {
     let duplicateLinesMergedCount = 0;
 
     for (const item of itemsToProcess) {
-      const match = this.matchItemToProduct(item, allProducts);
+      const match = this.matchItemToProduct(item, allProducts, aliasIndex);
       if (match.status !== 'matched' || !match.product || !match.confidence) {
         unconfidentMatches.push({
           item,

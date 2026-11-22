@@ -10,6 +10,11 @@ import {
 import { StorageService } from './StorageService.js';
 import { STORES } from '../data/mockData.js';
 import { PriceComparisonService } from './PriceComparisonService.js';
+import {
+  buildCanonicalAliasIndex,
+  collectProductIdsForCanonical,
+  resolveCanonicalProductId
+} from './ProductIdentityService.js';
 
 export interface PriceTimelinePoint {
   date: string;
@@ -186,6 +191,7 @@ export class PriceHistoryService {
       observations?: PriceObservation[];
       stores?: Store[];
       receipts?: Receipt[];
+      aliasMap?: Map<string, string> | Record<string, string>;
       now?: Date;
     }
   ): ProductPriceStats {
@@ -194,19 +200,27 @@ export class PriceHistoryService {
     const allObservations = options?.observations ?? StorageService.getPriceObservations();
     const allOffers = options?.offers ?? StorageService.getProductOffers();
     const receipts = options?.receipts ?? StorageService.getReceipts();
+    const aliasIndex = buildCanonicalAliasIndex(options?.aliasMap ?? StorageService.getAllProducts());
+    const canonicalProductId = resolveCanonicalProductId(productId, aliasIndex) || productId;
+    const equivalentIds = new Set(collectProductIdsForCanonical(canonicalProductId, aliasIndex));
+    equivalentIds.add(canonicalProductId);
 
     const productObservations = allObservations.filter(
       obs =>
-        obs.productId === productId &&
+        (equivalentIds.has(obs.productId) ||
+          resolveCanonicalProductId(obs.productId, aliasIndex) === canonicalProductId) &&
         Number.isFinite(obs.price) &&
         obs.price > 0 &&
         obs.source !== 'demo' &&
         obs.source !== 'estimated'
     );
 
-    // Ofertele valide curente (exclus demo, expired, anomalies)
+    // Ofertele valide curente (exclus demo, expired, anomalies), incluzând ofertele de pe aliasuri
     const currentOffers = allOffers.filter(
-      o => o.productId === productId && PriceComparisonService.isOfferValid(o)
+      o =>
+        (equivalentIds.has(o.productId) ||
+          resolveCanonicalProductId(o.productId, aliasIndex) === canonicalProductId) &&
+        PriceComparisonService.isOfferValid(o)
     );
 
     let currentLowestPrice = Infinity;
@@ -255,7 +269,12 @@ export class PriceHistoryService {
     let lastPaidPrice: number | undefined;
     let lastPaidStoreName: string | undefined;
     for (const rec of receipts) {
-      const match = rec.items.find(i => i.matchedProductId === productId);
+      const match = rec.items.find(
+        i =>
+          Boolean(i.matchedProductId) &&
+          (equivalentIds.has(i.matchedProductId!) ||
+            resolveCanonicalProductId(i.matchedProductId!, aliasIndex) === canonicalProductId)
+      );
       if (match) {
         lastPaidPrice = match.unitPrice;
         lastPaidStoreName = rec.storeName;
@@ -281,7 +300,7 @@ export class PriceHistoryService {
     }
 
     return {
-      productId,
+      productId: canonicalProductId,
       currentLowestPrice,
       currentLowestStoreId,
       currentLowestStoreName,

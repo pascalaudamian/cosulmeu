@@ -9,7 +9,10 @@ import {
   SourceSyncRun,
   ProductMatchCandidate,
   AdminAuditLog,
-  OperationalDashboardData
+  OperationalDashboardData,
+  RetailerProductRecord,
+  ShadowMatchCandidate,
+  ShadowMatchingReport
 } from '../types.ts';
 import {
   CatalogSource,
@@ -32,6 +35,25 @@ import { ProductMatcher } from '../services/ProductMatcher.ts';
 import { mapRetailerCategoryToStandard } from '../data/categories.ts';
 import { supabase } from '../lib/supabase.ts';
 import { PriceExtractor } from '../indexing/catalog/PriceExtractor.ts';
+import {
+  buildCanonicalAliasIndex,
+  buildCanonicalExternalSku,
+  collectProductIdsForCanonical,
+  normalizeBarcodeCandidates,
+  normalizeStoreIdKey,
+  pickRetailerProductUrl,
+  resolveCanonicalProductDetail,
+  resolveCanonicalProductId
+} from '../services/ProductIdentityService.ts';
+import {
+  CatalogDataQualityReport,
+  generateCatalogQualityReport,
+  normalizeQuantityAndMultipack
+} from '../services/ProductNormalizationService.ts';
+import {
+  ProductShadowMatchingService,
+  type ShadowMatchingOptions
+} from '../services/ProductShadowMatchingService.ts';
 
 const { Pool } = pg;
 
@@ -678,6 +700,145 @@ export class DatabaseService {
     return PRODUCTS;
   }
 
+  /**
+   * Returnează harta completă alias_id -> canonical_product_id (rezolvată tranzitiv, fără cicluri).
+   */
+  static async getProductAliasMap(): Promise<Map<string, string>> {
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      const all = StorageService.getAllProducts();
+      const index = buildCanonicalAliasIndex(all);
+      const out = new Map<string, string>();
+      for (const p of all) {
+        if (!p.canonicalProductId) continue;
+        const resolved = resolveCanonicalProductId(p.id, index);
+        if (resolved && resolved !== p.id) {
+          out.set(p.id, resolved);
+        }
+      }
+      return out;
+    }
+
+    const pool = getPool();
+    if (pool) {
+      try {
+        const res = await pool.query('SELECT id, canonical_product_id FROM products');
+        const index = buildCanonicalAliasIndex(res.rows);
+        const out = new Map<string, string>();
+        for (const r of res.rows) {
+          if (!r.canonical_product_id) continue;
+          const resolved = resolveCanonicalProductId(r.id, index);
+          if (resolved && resolved !== r.id) {
+            out.set(r.id, resolved);
+          }
+        }
+        return out;
+      } catch (err: any) {
+        console.warn('Postgres pool getProductAliasMap failed, falling back to Supabase:', err.message);
+      }
+    }
+
+    try {
+      const { data, error } = await fetchAllSupabaseRows((from, to) =>
+        supabase.from('products').select('id, canonical_product_id').range(from, to)
+      );
+      if (!error && Array.isArray(data) && data.length > 0) {
+        const index = buildCanonicalAliasIndex(data);
+        const out = new Map<string, string>();
+        for (const r of data) {
+          if (!r.canonical_product_id) continue;
+          const resolved = resolveCanonicalProductId(r.id, index);
+          if (resolved && resolved !== r.id) {
+            out.set(r.id, resolved);
+          }
+        }
+        return out;
+      }
+    } catch {
+      // Fallback fără aliasuri
+    }
+
+    return new Map<string, string>();
+  }
+
+  /**
+   * Returnează mapările retailer_products cu coduri de bare (rezolvate canonic) pentru scanerul de coduri de bare.
+   */
+  static async getRetailerProductsWithBarcodes(): Promise<RetailerProductRecord[]> {
+    const readLocalRetailerProducts = async (): Promise<RetailerProductRecord[]> => {
+      const [{ StorageService }, aliasMap] = await Promise.all([
+        import('../services/StorageService.ts'),
+        this.getProductAliasMap()
+      ]);
+      return StorageService.getRetailerProducts()
+        .filter(r => Boolean(r?.barcode && r?.productId))
+        .map(r => ({
+          ...r,
+          productId: r.productId ? (resolveCanonicalProductId(String(r.productId), aliasMap) || String(r.productId)) : null
+        }));
+    };
+
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      return readLocalRetailerProducts();
+    }
+    const pool = getPool();
+    if (pool) {
+      try {
+        const [rpRes, aliasMap] = await Promise.all([
+          pool.query(
+            `SELECT id, retailer_id, product_id, external_sku, url, scraped_name, scraped_brand, barcode, status
+             FROM retailer_products
+             WHERE barcode IS NOT NULL AND product_id IS NOT NULL`
+          ),
+          this.getProductAliasMap()
+        ]);
+        return rpRes.rows.map(r => ({
+          id: String(r.id),
+          retailerId: String(r.retailer_id),
+          productId: r.product_id ? (resolveCanonicalProductId(String(r.product_id), aliasMap) || String(r.product_id)) : null,
+          externalSku: r.external_sku || undefined,
+          url: r.url || undefined,
+          scrapedName: r.scraped_name || 'Produs',
+          scrapedBrand: r.scraped_brand || undefined,
+          barcode: r.barcode || undefined,
+          status: r.status || 'active'
+        }));
+      } catch (err: any) {
+        console.warn('Postgres pool getRetailerProductsWithBarcodes failed:', err.message);
+      }
+    }
+
+    try {
+      const [rpRes, aliasMap] = await Promise.all([
+        fetchAllSupabaseRows((from, to) =>
+          supabase
+            .from('retailer_products')
+            .select('id, retailer_id, product_id, external_sku, url, scraped_name, scraped_brand, barcode, status')
+            .not('barcode', 'is', null)
+            .not('product_id', 'is', null)
+            .range(from, to)
+        ),
+        this.getProductAliasMap()
+      ]);
+      if (!rpRes.error && Array.isArray(rpRes.data)) {
+        return rpRes.data.map(r => ({
+          id: String(r.id),
+          retailerId: String(r.retailer_id),
+          productId: r.product_id ? (resolveCanonicalProductId(String(r.product_id), aliasMap) || String(r.product_id)) : null,
+          externalSku: r.external_sku || undefined,
+          url: r.url || undefined,
+          scrapedName: r.scraped_name || 'Produs',
+          scrapedBrand: r.scraped_brand || undefined,
+          barcode: r.barcode || undefined,
+          status: r.status || 'active'
+        }));
+      }
+    } catch {
+      // Non-blocking fallback
+    }
+    return readLocalRetailerProducts();
+  }
+
   static async insertProduct(product: Product): Promise<boolean> {
     const pool = getPool();
     if (pool) {
@@ -1174,20 +1335,43 @@ export class DatabaseService {
     const pool = getPool();
     if (pool) {
       try {
-        const query = productId
-  ? 'SELECT * FROM price_observations WHERE product_id = $1 OR product_id IN (SELECT id FROM products WHERE canonical_product_id = $1) ORDER BY date ASC, created_at ASC'
-  : 'SELECT * FROM price_observations ORDER BY date DESC, created_at DESC LIMIT 200';
-        const params = productId ? [productId] : [];
-        const res = await pool.query(query, params);
+        if (productId) {
+          const allNodesRes = await pool.query('SELECT id, canonical_product_id FROM products');
+          const aliasIndex = buildCanonicalAliasIndex(allNodesRes.rows);
+          const resolvedDetail = resolveCanonicalProductDetail(productId, aliasIndex);
+          if (resolvedDetail.cycleDetected || !resolvedDetail.found || !resolvedDetail.canonicalId) {
+            return [];
+          }
+          const canonicalProductId = resolvedDetail.canonicalId;
+          const allEquivalentIds = collectProductIdsForCanonical(canonicalProductId, aliasIndex);
+          const res = await pool.query(
+            `SELECT * FROM price_observations
+             WHERE product_id = ANY($1::varchar[])
+             ORDER BY date ASC, created_at ASC`,
+            [allEquivalentIds]
+          );
+          return res.rows.map(r => ({
+            id: r.id,
+            productId: canonicalProductId,
+            storeId: normalizeStoreIdKey(r.store_id),
+            sourceId: r.source_id || undefined,
+            price: parseFloat(r.price),
+            date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
+            receiptId: r.receipt_id || undefined,
+            loyaltyCardUsed: r.loyalty_card_used,
+            source: r.source
+          }));
+        }
 
+        const res = await pool.query('SELECT * FROM price_observations ORDER BY date DESC, created_at DESC LIMIT 200');
         if (res.rows.length > 0) {
           return res.rows.map(r => ({
-  id: r.id,
-  productId: productId || r.product_id,
-  storeId: r.store_id,
-  sourceId: r.source_id || undefined,
-  price: parseFloat(r.price),
-  date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
+            id: r.id,
+            productId: r.product_id,
+            storeId: r.store_id,
+            sourceId: r.source_id || undefined,
+            price: parseFloat(r.price),
+            date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
             receiptId: r.receipt_id || undefined,
             loyaltyCardUsed: r.loyalty_card_used,
             source: r.source
@@ -1199,26 +1383,32 @@ export class DatabaseService {
     }
 
     try {
-  let query = supabase.from('price_observations').select('*');
-  if (productId) {
-  const { data: aliases } = await supabase
-  .from('products')
-  .select('id')
-  .eq('canonical_product_id', productId);
-  const productIds = [productId, ...(aliases || []).map(alias => alias.id)];
-  query = query.in('product_id', productIds).order('date', { ascending: true });
-  } else {
+      let query = supabase.from('price_observations').select('*');
+      let resolvedCanonicalId: string | undefined = productId;
+      if (productId) {
+        const { data: prodNodes } = await fetchAllSupabaseRows((from, to) =>
+          supabase.from('products').select('id, canonical_product_id').range(from, to)
+        );
+        const aliasIndex = buildCanonicalAliasIndex(prodNodes || []);
+        const resolvedDetail = resolveCanonicalProductDetail(productId, aliasIndex);
+        if (resolvedDetail.cycleDetected || (prodNodes && prodNodes.length > 0 && (!resolvedDetail.found || !resolvedDetail.canonicalId))) {
+          return [];
+        }
+        resolvedCanonicalId = resolvedDetail.canonicalId || productId;
+        const productIds = collectProductIdsForCanonical(resolvedCanonicalId, aliasIndex);
+        query = query.in('product_id', productIds.length > 0 ? productIds : [resolvedCanonicalId]).order('date', { ascending: true });
+      } else {
         query = query.order('date', { ascending: false }).limit(200);
       }
       const { data, error } = await query;
       if (!error && data && data.length > 0) {
         return data.map(r => ({
-  id: r.id,
-  productId: productId || r.product_id,
-  storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
-  sourceId: r.source_id || undefined,
-  price: parseFloat(r.price),
-  date: r.date ? String(r.date).slice(0, 10) : '',
+          id: r.id,
+          productId: resolvedCanonicalId || r.product_id,
+          storeId: normalizeStoreIdKey(r.store_id),
+          sourceId: r.source_id || undefined,
+          price: parseFloat(r.price),
+          date: r.date ? String(r.date).slice(0, 10) : '',
           receiptId: r.receipt_id || undefined,
           loyaltyCardUsed: Boolean(r.loyalty_card_used),
           source: r.source || 'verified'
@@ -1307,6 +1497,351 @@ export class DatabaseService {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Corectează manual asocierea unui candidat către un produs canonic valid.
+   * Rulează atomic în tranzacție PG (sau fallback Supabase / StorageService),
+   * fără a șterge sau modifica istoricul imutabil `price_observations` și fără auto-merging.
+   */
+  static async correctProductMatch(params: {
+    candidateId: string;
+    correctedProductId: string;
+    reason: string;
+    performedBy?: string;
+    ipAddress?: string;
+  }): Promise<{
+    success: boolean;
+    statusCode: number;
+    error?: string;
+    candidateId: string;
+    previousProductId?: string;
+    correctedProductId?: string;
+    auditId?: string;
+    persistedIn?: 'postgresql' | 'supabase' | 'memory';
+  }> {
+    const candidateId = (params.candidateId || '').trim();
+    const requestedTargetId = (params.correctedProductId || '').trim();
+    const reason = (params.reason || '').trim();
+    const performedBy = (params.performedBy || 'admin').trim() || 'admin';
+    const ipAddress = (params.ipAddress || 'unknown').trim().slice(0, 64);
+
+    if (!candidateId || !requestedTargetId || !reason) {
+      return {
+        success: false,
+        statusCode: 400,
+        error: 'Câmpurile candidateId, correctedProductId și reason sunt obligatorii.',
+        candidateId
+      };
+    }
+
+    const isIsolated = process.env.COSUL_MEU_ISOLATED_TEST === '1';
+    const pool = isIsolated ? null : getPool();
+
+    if (pool) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+
+        const candRes = await client.query(
+          `SELECT id, source_raw_name, matched_product_id, matched_product_name, status
+           FROM product_match_candidates
+           WHERE id = $1
+           FOR UPDATE`,
+          [candidateId]
+        );
+        if (candRes.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return {
+            success: false,
+            statusCode: 404,
+            error: `Candidatul '${candidateId}' nu există.`,
+            candidateId
+          };
+        }
+
+        const cand = candRes.rows[0];
+        const prodRes = await client.query(
+          'SELECT id, name, canonical_product_id FROM products'
+        );
+        const prodNodes = prodRes.rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          canonicalProductId: r.canonical_product_id || null
+        }));
+        const resolution = resolveCanonicalProductDetail(requestedTargetId, prodNodes);
+
+        if (resolution.cycleDetected) {
+          await client.query('ROLLBACK');
+          return {
+            success: false,
+            statusCode: 409,
+            error: `Referință circulară detectată pentru produsul '${requestedTargetId}'.`,
+            candidateId
+          };
+        }
+
+        if (!resolution.found || !resolution.canonicalId) {
+          await client.query('ROLLBACK');
+          return {
+            success: false,
+            statusCode: 404,
+            error: `Produsul țintă '${requestedTargetId}' nu există în catalogul canonic.`,
+            candidateId
+          };
+        }
+
+        const canonicalTarget = prodNodes.find(p => p.id === resolution.canonicalId);
+        if (!canonicalTarget) {
+          await client.query('ROLLBACK');
+          return {
+            success: false,
+            statusCode: 404,
+            error: `Produsul canonic '${resolution.canonicalId}' nu există în catalog.`,
+            candidateId
+          };
+        }
+
+        const canonicalProductId = canonicalTarget.id;
+        const previousProductId = cand.matched_product_id;
+
+        await client.query(
+          `UPDATE product_match_candidates
+           SET matched_product_id = $1,
+               matched_product_name = $2,
+               status = 'auto_approved'
+           WHERE id = $3`,
+          [canonicalProductId, canonicalTarget.name, candidateId]
+        );
+
+        const matchRowId = `pm-${crypto.randomUUID().slice(0, 16)}`;
+        await client.query(
+          `INSERT INTO product_matches (
+            id, candidate_id, raw_name, product_id, retailer_id,
+            confidence, match_type, status, reviewed_by, reviewed_at
+          ) VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, NOW())`,
+          [
+            matchRowId,
+            candidateId,
+            cand.source_raw_name,
+            canonicalProductId,
+            1.0,
+            'manual_correction',
+            'approved',
+            performedBy
+          ]
+        );
+
+        const auditId = `audit-${crypto.randomUUID().slice(0, 16)}`;
+        await client.query(
+          `INSERT INTO admin_audit_logs (
+            id, user_email, action, target_type, target_id, details, ip_address, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+          [
+            auditId,
+            performedBy,
+            'match_correction',
+            'product_match_candidate',
+            candidateId,
+            JSON.stringify({
+              candidateId,
+              rawName: cand.source_raw_name,
+              previousProductId,
+              requestedProductId: requestedTargetId,
+              correctedProductId: canonicalProductId,
+              action: previousProductId === canonicalProductId ? 'approved' : 'reassigned',
+              reason
+            }),
+            ipAddress
+          ]
+        );
+
+        await client.query('COMMIT');
+        invalidateCatalogOptimizationCache();
+
+        return {
+          success: true,
+          statusCode: 200,
+          candidateId,
+          previousProductId,
+          correctedProductId: canonicalProductId,
+          auditId,
+          persistedIn: 'postgresql'
+        };
+      } catch (err: any) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // ignore rollback error
+        }
+        return {
+          success: false,
+          statusCode: 500,
+          error: err?.message || 'Eroare internă la salvarea corecției de asociere.',
+          candidateId
+        };
+      } finally {
+        client.release();
+      }
+    }
+
+    // Fallback Supabase (dacă nu există PG pool direct și nu suntem în mod izolat)
+    if (!isIsolated && supabase) {
+      try {
+        const { data: candRow, error: candErr } = await supabase
+          .from('product_match_candidates')
+          .select('id, source_raw_name, matched_product_id, matched_product_name, status')
+          .eq('id', candidateId)
+          .maybeSingle();
+
+        if (!candErr && candRow) {
+          const { data: prodRows, error: prodErr } = await fetchAllSupabaseRows((from, to) =>
+            supabase.from('products').select('id, name, canonical_product_id').range(from, to)
+          );
+          if (!prodErr && prodRows.length > 0) {
+            const prodNodes = prodRows.map((r: any) => ({
+              id: r.id,
+              name: r.name,
+              canonicalProductId: r.canonical_product_id || null
+            }));
+            const resolution = resolveCanonicalProductDetail(requestedTargetId, prodNodes);
+            if (resolution.cycleDetected) {
+              return {
+                success: false,
+                statusCode: 409,
+                error: `Referință circulară detectată pentru produsul '${requestedTargetId}'.`,
+                candidateId
+              };
+            }
+            if (!resolution.found || !resolution.canonicalId) {
+              return {
+                success: false,
+                statusCode: 404,
+                error: `Produsul țintă '${requestedTargetId}' nu există în catalog.`,
+                candidateId
+              };
+            }
+            const canonicalTarget = prodNodes.find((p: any) => p.id === resolution.canonicalId);
+            const canonicalId = canonicalTarget?.id || resolution.canonicalId;
+
+            const { error: updErr } = await supabase
+              .from('product_match_candidates')
+              .update({
+                matched_product_id: canonicalId,
+                matched_product_name: canonicalTarget?.name || candRow.matched_product_name,
+                status: 'auto_approved'
+              })
+              .eq('id', candidateId);
+
+            if (updErr) {
+              return {
+                success: false,
+                statusCode: 500,
+                error: updErr.message,
+                candidateId
+              };
+            }
+
+            const auditId = `audit-${crypto.randomUUID().slice(0, 16)}`;
+            await supabase.from('product_matches').insert({
+              id: `pm-${crypto.randomUUID().slice(0, 16)}`,
+              candidate_id: candidateId,
+              raw_name: candRow.source_raw_name,
+              product_id: canonicalId,
+              retailer_id: null,
+              confidence: 1.0,
+              match_type: 'manual_correction',
+              status: 'approved',
+              reviewed_by: performedBy,
+              reviewed_at: new Date().toISOString()
+            });
+            await supabase.from('admin_audit_logs').insert({
+              id: auditId,
+              user_email: performedBy,
+              action: 'match_correction',
+              target_type: 'product_match_candidate',
+              target_id: candidateId,
+              details: {
+                candidateId,
+                rawName: candRow.source_raw_name,
+                previousProductId: candRow.matched_product_id,
+                requestedProductId: requestedTargetId,
+                correctedProductId: canonicalId,
+                reason
+              },
+              ip_address: ipAddress,
+              created_at: new Date().toISOString()
+            });
+
+            invalidateCatalogOptimizationCache();
+            return {
+              success: true,
+              statusCode: 200,
+              candidateId,
+              previousProductId: candRow.matched_product_id,
+              correctedProductId: canonicalId,
+              auditId,
+              persistedIn: 'supabase'
+            };
+          }
+        }
+      } catch {
+        // Fallback spre StorageService dacă nu s-a putut rezolva prin Supabase
+      }
+    }
+
+    // Fallback StorageService (mod demo/local sau teste de integrare fără PG)
+    const { StorageService } = await import('../services/StorageService.ts');
+    const allLocalProducts = StorageService.getAllProducts();
+    const resolution = resolveCanonicalProductDetail(requestedTargetId, allLocalProducts);
+    if (resolution.cycleDetected) {
+      return {
+        success: false,
+        statusCode: 409,
+        error: `Referință circulară detectată pentru produsul '${requestedTargetId}'.`,
+        candidateId
+      };
+    }
+    if (!resolution.found || !resolution.canonicalId) {
+      return {
+        success: false,
+        statusCode: 404,
+        error: `Produsul țintă '${requestedTargetId}' nu există în catalog.`,
+        candidateId
+      };
+    }
+
+    const candidates = StorageService.getMatchCandidates();
+    const existingCand = candidates.find(c => c.id === candidateId);
+    if (!existingCand) {
+      return {
+        success: false,
+        statusCode: 404,
+        error: `Candidatul '${candidateId}' nu există.`,
+        candidateId
+      };
+    }
+
+    const previousProductId = existingCand.matchedProductId;
+    const ok = StorageService.correctProductMatch(candidateId, resolution.canonicalId, reason, performedBy);
+    if (!ok) {
+      return {
+        success: false,
+        statusCode: 404,
+        error: `Nu s-a putut actualiza candidatul '${candidateId}'.`,
+        candidateId
+      };
+    }
+    invalidateCatalogOptimizationCache();
+
+    return {
+      success: true,
+      statusCode: 200,
+      candidateId,
+      previousProductId,
+      correctedProductId: resolution.canonicalId,
+      persistedIn: 'memory'
+    };
   }
 
   // --- SYNC RUNS ---
@@ -1863,22 +2398,44 @@ export class DatabaseService {
       );
       const dbSourceId = sourceRes.rows[0]?.id || null;
 
-      // Preluăm toate produsele existente pentru potrivire fuzzy de rezervă
+      // Preluăm produsele canonice (canonical_product_id IS NULL) și indexul complet de aliasuri
       const existingProductsRes = await client.query('SELECT * FROM products');
-      const dbProducts: Product[] = existingProductsRes.rows.map(r => ({
-        id: r.id,
-        name: r.name,
-        brand: r.brand,
-        category: r.category as any,
-        defaultUnit: r.default_unit,
-        packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
-        packageUnit: r.package_unit,
-        normalizedUnit: r.normalized_unit,
-        barcode: r.barcode || undefined,
-        imageUrl: r.image_url || undefined,
-        baseReferencePrice: parseFloat(r.base_reference_price),
-        isRomanianProduct: r.is_romanian_product
-      }));
+      const aliasIndex = buildCanonicalAliasIndex(existingProductsRes.rows);
+      const dbProducts: Product[] = [];
+      const canonicalProductsById = new Map<string, Product>();
+      const allProductBarcodes = new Map<string, string>(); // barcode -> resolved canonical ID
+
+      for (const r of existingProductsRes.rows) {
+        const mappedProd: Product = {
+          id: r.id,
+          name: r.name,
+          brand: r.brand,
+          category: r.category as any,
+          defaultUnit: r.default_unit,
+          packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
+          packageUnit: r.package_unit,
+          normalizedUnit: r.normalized_unit,
+          barcode: r.barcode || undefined,
+          imageUrl: r.image_url || undefined,
+          baseReferencePrice: parseFloat(r.base_reference_price),
+          isRomanianProduct: r.is_romanian_product,
+          canonicalProductId: r.canonical_product_id || null
+        };
+        if (!r.canonical_product_id) {
+          dbProducts.push(mappedProd);
+          canonicalProductsById.set(mappedProd.id, mappedProd);
+        }
+        if (mappedProd.barcode && mappedProd.barcode.trim().length >= 8) {
+          const resolvedRootId = resolveCanonicalProductId(mappedProd.id, aliasIndex);
+          if (resolvedRootId) {
+            for (const bc of normalizeBarcodeCandidates(mappedProd.barcode)) {
+              if (!allProductBarcodes.has(bc) || !r.canonical_product_id) {
+                allProductBarcodes.set(bc, resolvedRootId);
+              }
+            }
+          }
+        }
+      }
 
       const publishedDocumentIds = new Set<string>();
 
@@ -1922,63 +2479,81 @@ export class DatabaseService {
           continue;
         }
 
+        const deterministicSku = buildCanonicalExternalSku({
+          retailerId: params.retailerId,
+          retailerSku: item.retailerSku,
+          barcode: item.rawBarcode,
+          catalogUrl: item.catalogUrl,
+          sourcePageUrl: item.sourcePageUrl,
+          documentUrl: item.documentUrl,
+          title: item.rawTitle,
+          packageQuantity: item.packageQuantity,
+          packageUnit: item.packageUnit
+        });
+        const productPageUrl = pickRetailerProductUrl({
+          catalogUrl: item.catalogUrl,
+          sourcePageUrl: item.sourcePageUrl,
+          documentUrl: item.documentUrl
+        });
+        const barcodeVariants = item.rawBarcode ? normalizeBarcodeCandidates(item.rawBarcode) : [];
+
         let canonicalProduct: Product | undefined = undefined;
 
-        // Pas 1: Căutare produs canonic
+        // Pas 1: Căutare produs canonic (rezolvând strict eventualele aliasuri până la rădăcina canonică)
         // 1.1 După matchedProductId dacă este specificat
         if (item.matchedProductId) {
-          const directMatch = dbProducts.find(p => p.id === item.matchedProductId);
-          if (directMatch) canonicalProduct = directMatch;
-        }
-
-        // 1.2 După cod de bare (GTIN / EAN)
-        if (!canonicalProduct && item.rawBarcode && item.rawBarcode.trim().length >= 8) {
-          const barcodeMatch = dbProducts.find(p => p.barcode && p.barcode.trim() === item.rawBarcode?.trim());
-          if (barcodeMatch) canonicalProduct = barcodeMatch;
-        }
-
-        // 1.3 După retailer_products mapping
-        if (!canonicalProduct) {
-          const sku = item.rawBarcode || item.id;
-          const mapRes = await client.query(
-            `SELECT p.* FROM retailer_products rp 
-             JOIN products p ON p.id = rp.product_id 
-             WHERE rp.retailer_id = $1 AND (rp.external_sku = $2 OR (rp.barcode = $3 AND $3 IS NOT NULL)) 
-             LIMIT 1`,
-            [params.retailerId, sku, item.rawBarcode || null]
-          );
-          if (mapRes.rows.length > 0) {
-            const r = mapRes.rows[0];
-            canonicalProduct = {
-              id: r.id,
-              name: r.name,
-              brand: r.brand,
-              category: r.category,
-              defaultUnit: r.default_unit,
-              packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
-              packageUnit: r.package_unit,
-              normalizedUnit: r.normalized_unit,
-              barcode: r.barcode || undefined,
-              imageUrl: r.image_url || undefined,
-              baseReferencePrice: parseFloat(r.base_reference_price),
-              isRomanianProduct: r.is_romanian_product
-            };
+          const resolvedId = resolveCanonicalProductId(item.matchedProductId, aliasIndex);
+          if (resolvedId) {
+            canonicalProduct = canonicalProductsById.get(resolvedId);
           }
         }
 
-        // 1.4 După similaritate text & atribute prin ProductMatcher
+        // 1.2 După cod de bare (GTIN / EAN, inclusiv variante UPC-A/EAN-13 și aliasuri)
+        if (!canonicalProduct && barcodeVariants.length > 0) {
+          for (const bc of barcodeVariants) {
+            const matchedRootId = allProductBarcodes.get(bc);
+            if (matchedRootId && canonicalProductsById.has(matchedRootId)) {
+              canonicalProduct = canonicalProductsById.get(matchedRootId);
+              break;
+            }
+          }
+        }
+
+        // 1.3 După retailer_products mapping (rezolvând orice alias spre rădăcina canonică)
         if (!canonicalProduct) {
-  const matchResult = ProductMatcher.matchProduct({
-  rawName: item.rawTitle,
-  barcode: item.rawBarcode,
-  brand: item.rawBrand,
-  packageWeightOrVolume: item.packageQuantity,
-  packageUnit: item.packageUnit as any,
-  category: item.rawCategory
-  }, dbProducts);
+          const mapRes = await client.query(
+            `SELECT rp.product_id
+             FROM retailer_products rp
+             WHERE rp.retailer_id = $1
+               AND rp.product_id IS NOT NULL
+               AND (
+                 rp.external_sku = $2
+                 OR ($3::text[] IS NOT NULL AND rp.barcode = ANY($3::text[]))
+               )
+             LIMIT 1`,
+            [params.retailerId, deterministicSku, barcodeVariants.length > 0 ? barcodeVariants : null]
+          );
+          if (mapRes.rows.length > 0 && mapRes.rows[0].product_id) {
+            const resolvedFromRp = resolveCanonicalProductId(String(mapRes.rows[0].product_id), aliasIndex);
+            if (resolvedFromRp) {
+              canonicalProduct = canonicalProductsById.get(resolvedFromRp);
+            }
+          }
+        }
+
+        // 1.4 După similaritate text & atribute prin ProductMatcher (strict pe produse canonice)
+        if (!canonicalProduct) {
+          const matchResult = ProductMatcher.matchProduct({
+            rawName: item.rawTitle,
+            barcode: item.rawBarcode,
+            brand: item.rawBrand,
+            packageWeightOrVolume: item.packageQuantity,
+            packageUnit: item.packageUnit as any,
+            category: item.rawCategory
+          }, dbProducts);
 
           if (matchResult.matchedProduct && matchResult.confidence >= 0.75) {
-            canonicalProduct = dbProducts.find(p => p.id === matchResult.matchedProduct!.id);
+            canonicalProduct = canonicalProductsById.get(matchResult.matchedProduct.id);
           }
         }
 
@@ -1993,6 +2568,9 @@ export class DatabaseService {
               canonicalProduct.barcode,
               canonicalProduct.id
             ]);
+            for (const bc of normalizeBarcodeCandidates(canonicalProduct.barcode)) {
+              allProductBarcodes.set(bc, canonicalProduct.id);
+            }
             updated = true;
           }
           if (!canonicalProduct.imageUrl && item.imageUrl) {
@@ -2038,7 +2616,8 @@ export class DatabaseService {
             barcode: safeBarcode || undefined,
             imageUrl: item.imageUrl || undefined,
             baseReferencePrice: item.normalPrice || item.effectivePrice,
-            isRomanianProduct: true
+            isRomanianProduct: true,
+            canonicalProductId: null
           };
 
           const insertResult = await client.query(
@@ -2068,6 +2647,13 @@ export class DatabaseService {
             stats.newProductsCount++;
             canonicalProduct = newProd;
             dbProducts.push(newProd);
+            canonicalProductsById.set(newProd.id, newProd);
+            aliasIndex.parentById.set(newProd.id, null);
+            if (safeBarcode) {
+              for (const bc of normalizeBarcodeCandidates(safeBarcode)) {
+                allProductBarcodes.set(bc, newProd.id);
+              }
+            }
           } else {
             const existingIdentity = await client.query(
               `SELECT * FROM products
@@ -2094,7 +2680,8 @@ export class DatabaseService {
               barcode: existing.barcode || undefined,
               imageUrl: existing.image_url || undefined,
               baseReferencePrice: parseFloat(existing.base_reference_price),
-              isRomanianProduct: existing.is_romanian_product
+              isRomanianProduct: existing.is_romanian_product,
+              canonicalProductId: null
             };
             stats.identifiedExistingCount++;
             if (!canonicalProduct.imageUrl && item.imageUrl) {
@@ -2107,7 +2694,11 @@ export class DatabaseService {
             } else {
               stats.unchangedProductsCount++;
             }
-            dbProducts.push(canonicalProduct);
+            if (!canonicalProductsById.has(canonicalProduct.id)) {
+              dbProducts.push(canonicalProduct);
+              canonicalProductsById.set(canonicalProduct.id, canonicalProduct);
+              aliasIndex.parentById.set(canonicalProduct.id, null);
+            }
           }
         }
 
@@ -2115,41 +2706,84 @@ export class DatabaseService {
         item.matchedProductId = canonicalId;
         item.matchedProductName = canonicalProduct.name;
 
-        // Pas 2: Asociere în retailer_products
-        const rawSku = (item.rawBarcode || item.id || `sku-${Date.now()}`).trim();
-        const externalSku = rawSku.slice(0, 100);
+        // Pas 2: Asociere idempotentă în retailer_products (external_sku determinist + url produs)
+        const externalSku = deterministicSku.slice(0, 120);
         const skuSlug = externalSku.replace(/[^a-zA-Z0-9_\-]/g, '').slice(0, 40) || 'item';
-        const retProdId = `rp-${params.retailerId}-${skuSlug}`.slice(0, 60);
+        const fallbackRpId = `rp-${params.retailerId}-${skuSlug}`.slice(0, 60);
 
         const safeScrapedName = (item.rawTitle || 'Produs fără nume').trim().slice(0, 250);
         const safeScrapedBrand = item.rawBrand ? item.rawBrand.trim().slice(0, 120) : null;
         const safeScrapedUnit = item.packageUnit ? String(item.packageUnit).slice(0, 16) : null;
         const safeScrapedBarcode = item.rawBarcode ? item.rawBarcode.trim().slice(0, 60) : null;
 
-        await client.query(
-          `INSERT INTO retailer_products (
-            id, retailer_id, product_id, external_sku, scraped_name,
-            scraped_brand, scraped_package_weight_or_volume, scraped_package_unit,
-            barcode, last_scraped_at, status
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), 'active')
-          ON CONFLICT (id) DO UPDATE SET
-            product_id = EXCLUDED.product_id,
-            scraped_name = EXCLUDED.scraped_name,
-            barcode = COALESCE(EXCLUDED.barcode, retailer_products.barcode),
-            last_scraped_at = NOW(),
-            updated_at = NOW()`,
-          [
-            retProdId,
-            params.retailerId,
-            canonicalId,
-            externalSku,
-            safeScrapedName,
-            safeScrapedBrand,
-            item.packageQuantity || null,
-            safeScrapedUnit,
-            safeScrapedBarcode
-          ]
+        const existingRpRes = await client.query(
+          `SELECT id FROM retailer_products
+           WHERE retailer_id = $1
+             AND (
+               external_sku = $2
+               OR ($3::varchar IS NOT NULL AND barcode = $3)
+             )
+           ORDER BY last_scraped_at DESC
+           LIMIT 1`,
+          [params.retailerId, externalSku, safeScrapedBarcode]
         );
+
+        if (existingRpRes.rows.length > 0) {
+          await client.query(
+            `UPDATE retailer_products
+             SET product_id = $2,
+                 external_sku = COALESCE($3, external_sku),
+                 url = COALESCE($4, url),
+                 scraped_name = $5,
+                 scraped_brand = COALESCE($6, scraped_brand),
+                 scraped_package_weight_or_volume = COALESCE($7, scraped_package_weight_or_volume),
+                 scraped_package_unit = COALESCE($8, scraped_package_unit),
+                 barcode = COALESCE($9, barcode),
+                 last_scraped_at = NOW(),
+                 updated_at = NOW()
+             WHERE id = $1`,
+            [
+              existingRpRes.rows[0].id,
+              canonicalId,
+              externalSku,
+              productPageUrl || null,
+              safeScrapedName,
+              safeScrapedBrand,
+              item.packageQuantity || null,
+              safeScrapedUnit,
+              safeScrapedBarcode
+            ]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO retailer_products (
+              id, retailer_id, product_id, external_sku, url, scraped_name,
+              scraped_brand, scraped_package_weight_or_volume, scraped_package_unit,
+              barcode, last_scraped_at, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), 'active')
+            ON CONFLICT (id) DO UPDATE SET
+              product_id = EXCLUDED.product_id,
+              external_sku = COALESCE(EXCLUDED.external_sku, retailer_products.external_sku),
+              url = COALESCE(EXCLUDED.url, retailer_products.url),
+              scraped_name = EXCLUDED.scraped_name,
+              scraped_brand = COALESCE(EXCLUDED.scraped_brand, retailer_products.scraped_brand),
+              barcode = COALESCE(EXCLUDED.barcode, retailer_products.barcode),
+              last_scraped_at = NOW(),
+              updated_at = NOW()`,
+            [
+              fallbackRpId,
+              params.retailerId,
+              canonicalId,
+              externalSku,
+              productPageUrl || null,
+              safeScrapedName,
+              safeScrapedBrand,
+              item.packageQuantity || null,
+              safeScrapedUnit,
+              safeScrapedBarcode
+            ]
+          );
+        }
 
         // Pas 3: Verificare ofertă curentă în product_offers
         const curOfferRes = await client.query(
@@ -3190,19 +3824,21 @@ export class DatabaseService {
         );
         const targetIds = Array.from(new Set([...productIds, ...allIdsRes.rows.map(r => r.id)]));
 
-        // Ștergere date corelate
+        // Ștergere date corelate (inclusiv product_match_candidates cu coloana matched_product_id și product_matches)
         await client.query(`DELETE FROM price_observations WHERE product_id = ANY($1)`, [targetIds]);
         await client.query(`DELETE FROM product_offers WHERE product_id = ANY($1)`, [targetIds]);
         await client.query(`DELETE FROM promotions WHERE product_id = ANY($1)`, [targetIds]);
         await client.query(`DELETE FROM retailer_products WHERE product_id = ANY($1)`, [targetIds]);
-        await client.query(`DELETE FROM product_match_candidates WHERE target_product_id = ANY($1)`, [targetIds]);
+        await client.query(`DELETE FROM product_match_candidates WHERE matched_product_id = ANY($1)`, [targetIds]);
+        await client.query(`DELETE FROM product_matches WHERE product_id = ANY($1)`, [targetIds]);
 
         // Ștergere aliasuri și apoi produse principale
         await client.query(`DELETE FROM products WHERE canonical_product_id = ANY($1)`, [productIds]);
         const delRes = await client.query(`DELETE FROM products WHERE id = ANY($1)`, [productIds]);
 
         await client.query('COMMIT');
-        return { deletedCount: delRes.rowCount || productIds.length };
+        invalidateCatalogOptimizationCache();
+        return { deletedCount: delRes.rowCount || 0 };
       } catch (err: any) {
         await client.query('ROLLBACK');
         console.error('Eroare la ștergerea produselor din PostgreSQL:', err.message);
@@ -3216,8 +3852,12 @@ export class DatabaseService {
       await supabase.from('price_observations').delete().in('product_id', productIds);
       await supabase.from('product_offers').delete().in('product_id', productIds);
       await supabase.from('promotions').delete().in('product_id', productIds);
+      await supabase.from('retailer_products').delete().in('product_id', productIds);
+      await supabase.from('product_match_candidates').delete().in('matched_product_id', productIds);
+      await supabase.from('product_matches').delete().in('product_id', productIds);
       await supabase.from('products').delete().in('canonical_product_id', productIds);
       const { data } = await supabase.from('products').delete().in('id', productIds).select('id');
+      invalidateCatalogOptimizationCache();
       return { deletedCount: data?.length || productIds.length };
     } catch (err: any) {
       console.warn('Eroare Supabase deleteProducts:', err.message);
@@ -3232,21 +3872,36 @@ export class DatabaseService {
   }
 
   /**
-   * Returnează datele complete pentru un produs canonic (istoric, oferte, mapări retailer)
+   * Returnează datele complete pentru un produs canonic (istoric, oferte, mapări retailer),
+   * rezolvând multi-hop și sigur împotriva ciclurilor orice alias până la produsul canonic rădăcină.
    */
   static async getProductDetailById(productId: string): Promise<any> {
     if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
       const { StorageService } = await import('../services/StorageService.ts');
-      const prod = StorageService.getAllProducts().find(p => p.id === productId);
+      const allProducts = StorageService.getAllProducts();
+      const aliasIndex = buildCanonicalAliasIndex(allProducts);
+      const resolved = resolveCanonicalProductDetail(productId, aliasIndex);
+      if (!resolved.found || !resolved.canonicalId || resolved.cycleDetected) {
+        return null;
+      }
+      const canonicalId = resolved.canonicalId;
+      const prod = allProducts.find(p => p.id === canonicalId && !p.canonicalProductId) || allProducts.find(p => p.id === canonicalId);
       if (!prod) return null;
-      const validOffers = StorageService.getProductOffers().filter(
-        o =>
-          o.productId === productId &&
-          o.price > 0 &&
-          !o.isFlaggedAnomaly &&
-          !['demo', 'isolated', 'rejected'].includes(o.verificationStatus || 'verified')
+      const equivalentIds = new Set(collectProductIdsForCanonical(canonicalId, aliasIndex));
+      const validOffers = latestCanonicalOffers(
+        StorageService.getProductOffers()
+          .filter(
+            o =>
+              equivalentIds.has(o.productId) &&
+              o.price > 0 &&
+              !o.isFlaggedAnomaly &&
+              !['demo', 'isolated', 'rejected'].includes(o.verificationStatus || 'verified')
+          )
+          .map(o => ({ ...o, productId: canonicalId }))
       );
-      const priceHistory = StorageService.getPriceObservations().filter(obs => obs.productId === productId);
+      const priceHistory = StorageService.getPriceObservations()
+        .filter(obs => equivalentIds.has(obs.productId))
+        .map(obs => ({ ...obs, productId: canonicalId }));
       return {
         product: prod,
         offers: validOffers,
@@ -3255,45 +3910,120 @@ export class DatabaseService {
         promotions: []
       };
     }
+
     const pool = getPool();
     if (pool) {
       try {
-  const prodRes = await pool.query(
-  'SELECT * FROM products WHERE id = COALESCE((SELECT canonical_product_id FROM products WHERE id = $1), $1)',
-  [productId]
-  );
-  if (prodRes.rows.length > 0) {
-  const product = prodRes.rows[0];
-  const canonicalProductId = product.id;
+        // Rezolvare multi-hop sigură împotriva ciclurilor către rădăcina canonică (canonical_product_id IS NULL)
+        const prodRes = await pool.query(
+          `WITH RECURSIVE chain AS (
+             SELECT id, canonical_product_id, ARRAY[id]::varchar[] AS path, 0 AS depth
+             FROM products
+             WHERE id = $1
+             UNION ALL
+             SELECT p.id, p.canonical_product_id, (c.path || p.id)::varchar[], c.depth + 1
+             FROM products p
+             JOIN chain c ON c.canonical_product_id = p.id
+             WHERE c.canonical_product_id IS NOT NULL
+               AND NOT (p.id = ANY(c.path))
+               AND c.depth < 16
+           )
+           SELECT p.*
+           FROM chain c
+           JOIN products p ON p.id = c.id
+           WHERE c.canonical_product_id IS NULL
+           ORDER BY c.depth ASC
+           LIMIT 1`,
+          [productId]
+        );
 
-  const offersRes = await pool.query(`
-  SELECT DISTINCT ON (po.store_id) po.*, s.name AS store_name, s.brand_color AS store_brand_color, s.logo_url AS store_logo_url
-  FROM product_offers po
-  LEFT JOIN stores s ON s.id = po.store_id
-  WHERE (po.product_id = $1 OR po.product_id IN (SELECT id FROM products WHERE canonical_product_id = $1))
-    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
-    AND COALESCE(po.is_flagged_anomaly, false) = false
-    AND po.price > 0
-  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
-  `, [canonicalProductId]);
+        if (prodRes.rows.length > 0) {
+          const product = prodRes.rows[0];
+          const canonicalProductId = String(product.id);
 
-  const historyRes = await pool.query(`
-  SELECT * FROM price_observations
-  WHERE product_id = $1 OR product_id IN (SELECT id FROM products WHERE canonical_product_id = $1)
-  ORDER BY date DESC, created_at DESC
-  LIMIT 500
-  `, [canonicalProductId]);
+          // Colectare tranzitivă a tuturor aliasurilor descendente (protecție împotriva ciclurilor)
+          const descRes = await pool.query(
+            `WITH RECURSIVE descendants AS (
+               SELECT id, ARRAY[id]::varchar[] AS path
+               FROM products
+               WHERE id = $1
+               UNION ALL
+               SELECT p.id, (d.path || p.id)::varchar[]
+               FROM products p
+               JOIN descendants d ON p.canonical_product_id = d.id
+               WHERE NOT (p.id = ANY(d.path))
+                 AND array_length(d.path, 1) < 16
+             )
+             SELECT id FROM descendants`,
+            [canonicalProductId]
+          );
+          const allEquivalentIds = Array.from(
+            new Set([canonicalProductId, ...descRes.rows.map(r => String(r.id))])
+          );
 
-  const retailerMappingRes = await pool.query(`
-  SELECT * FROM retailer_products
-  WHERE product_id = $1 OR product_id IN (SELECT id FROM products WHERE canonical_product_id = $1)
-  `, [canonicalProductId]);
+          const [offersRes, historyRes, retailerMappingRes, promosRes] = await Promise.all([
+            pool.query(
+              `SELECT po.*, s.name AS store_name, s.brand_color AS store_brand_color, s.logo_url AS store_logo_url
+               FROM product_offers po
+               LEFT JOIN stores s ON s.id = po.store_id
+               WHERE po.product_id = ANY($1::varchar[])
+                 AND po.source != 'demo'
+                 AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+                 AND COALESCE(po.is_flagged_anomaly, false) = false
+                 AND po.price > 0
+               ORDER BY po.observation_date ASC, po.last_checked ASC`,
+              [allEquivalentIds]
+            ),
+            pool.query(
+              `SELECT * FROM price_observations
+               WHERE product_id = ANY($1::varchar[])
+               ORDER BY date DESC, created_at DESC
+               LIMIT 500`,
+              [allEquivalentIds]
+            ),
+            pool.query(
+              `SELECT * FROM retailer_products
+               WHERE product_id = ANY($1::varchar[])`,
+              [allEquivalentIds]
+            ),
+            pool.query(
+              `SELECT * FROM promotions
+               WHERE product_id = ANY($1::varchar[])
+               ORDER BY ends_at DESC NULLS LAST`,
+              [allEquivalentIds]
+            )
+          ]);
 
-  const promosRes = await pool.query(`
-  SELECT * FROM promotions
-  WHERE product_id = $1 OR product_id IN (SELECT id FROM products WHERE canonical_product_id = $1)
-  ORDER BY ends_at DESC NULLS LAST
-  `, [canonicalProductId]);
+          const normalizedOffers: ProductOffer[] = latestCanonicalOffers(
+            offersRes.rows.map(r => ({
+              id: r.id,
+              productId: canonicalProductId,
+              storeId: normalizeStoreIdKey(r.store_id),
+              sourceId: r.source_id || undefined,
+              price: parseFloat(r.price),
+              originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+              normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
+              promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+              loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
+              unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
+              unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+              isPromo: Boolean(r.is_promo),
+              promoDetails: r.promo_details || undefined,
+              loyaltyCardRequired: Boolean(r.loyalty_card_required),
+              loyaltyCardName: r.loyalty_card_name || undefined,
+              validUntil: r.valid_until ? (r.valid_until.toISOString?.().split('T')[0] || String(r.valid_until).slice(0, 10)) : undefined,
+              observationDate: r.observation_date ? (r.observation_date.toISOString?.().split('T')[0] || String(r.observation_date).slice(0, 10)) : new Date().toISOString().split('T')[0],
+              source: r.source || 'verified',
+              confidenceLevel: r.confidence_level || 'high',
+              verificationStatus: r.verification_status || 'verified',
+              lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+              lastVerifiedAt: r.last_verified_at ? new Date(r.last_verified_at).toISOString() : undefined,
+              region: r.region || undefined,
+              isSponsored: Boolean(r.is_sponsored),
+              isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
+              anomalyReason: r.anomaly_reason || undefined
+            }))
+          );
 
           return {
             product: {
@@ -3309,71 +4039,69 @@ export class DatabaseService {
               imageUrl: product.image_url || undefined,
               isBio: Boolean(product.is_bio),
               isRomanianProduct: Boolean(product.is_romanian_product),
-              baseReferencePrice: parseFloat(product.base_reference_price) || 0
+              baseReferencePrice: parseFloat(product.base_reference_price) || 0,
+              canonicalProductId: null
             },
-            offers: offersRes.rows.map(r => ({
-              id: r.id,
-              productId: r.product_id,
-              storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
-              price: parseFloat(r.price),
-              originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
-              unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
-              unitPriceMeasure: r.unit_price_measure || 'lei/buc',
-              isPromo: Boolean(r.is_promo),
-              promoDetails: r.promo_details || undefined,
-              loyaltyCardRequired: Boolean(r.loyalty_card_required),
-              loyaltyCardName: r.loyalty_card_name || undefined,
-              validUntil: r.valid_until ? (r.valid_until.toISOString?.().split('T')[0] || String(r.valid_until).slice(0, 10)) : undefined,
-              observationDate: r.observation_date ? (r.observation_date.toISOString?.().split('T')[0] || String(r.observation_date).slice(0, 10)) : new Date().toISOString().split('T')[0],
-              source: r.source || 'verified',
-              confidenceLevel: r.confidence_level || 'high',
-              verificationStatus: r.verification_status || 'verified',
-              lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
-              isSponsored: Boolean(r.is_sponsored)
-            })),
-  priceHistory: historyRes.rows.map(h => ({
-  id: h.id,
-  productId: canonicalProductId,
-              storeId: h.store_id ? h.store_id.replace(/^store-/, '') : '',
+            offers: normalizedOffers,
+            priceHistory: historyRes.rows.map(h => ({
+              id: h.id,
+              productId: canonicalProductId,
+              storeId: normalizeStoreIdKey(h.store_id),
+              sourceId: h.source_id || undefined,
               price: parseFloat(h.price),
               date: h.date ? (h.date.toISOString?.().split('T')[0] || String(h.date).slice(0, 10)) : '',
+              receiptId: h.receipt_id || undefined,
+              loyaltyCardUsed: Boolean(h.loyalty_card_used),
               source: h.source || 'verified'
             })),
             retailerMappings: retailerMappingRes.rows,
             promotions: promosRes.rows
           };
         }
+        return null;
       } catch (err: any) {
         console.warn('Postgres pool getProductDetailById failed, falling back to Supabase:', err.message);
       }
     }
 
     try {
-      let { data: prodData, error: prodErr } = await supabase
-        .from('products')
-        .select('*')
-        .eq('id', productId)
-        .maybeSingle();
+      // Rezolvare iterativă multi-hop cu protecție de ciclu în Supabase fallback
+      const visited = new Set<string>([productId]);
+      let currentId = productId;
+      let prodData: any = null;
 
-      if (prodErr || !prodData) {
-        return null;
-      }
-
-      if (prodData.canonical_product_id) {
-        const canonicalResult = await supabase
+      for (let hop = 0; hop < 16; hop++) {
+        const { data, error } = await supabase
           .from('products')
           .select('*')
-          .eq('id', prodData.canonical_product_id)
+          .eq('id', currentId)
           .maybeSingle();
-        prodData = canonicalResult.data;
+
+        if (error || !data) {
+          return null;
+        }
+
+        if (!data.canonical_product_id) {
+          prodData = data;
+          break;
+        }
+
+        const nextId = String(data.canonical_product_id).trim();
+        if (!nextId || visited.has(nextId)) {
+          return null;
+        }
+        visited.add(nextId);
+        currentId = nextId;
       }
 
       if (!prodData) return null;
-      const { data: aliases } = await supabase
-        .from('products')
-        .select('id')
-        .eq('canonical_product_id', prodData.id);
-      const linkedProductIds = [prodData.id, ...(aliases || []).map(alias => alias.id)];
+
+      const { data: allProdNodes } = await fetchAllSupabaseRows((from, to) =>
+        supabase.from('products').select('id, canonical_product_id').range(from, to)
+      );
+      const aliasIndex = buildCanonicalAliasIndex(allProdNodes || []);
+      const linkedProductIds = collectProductIdsForCanonical(prodData.id, aliasIndex);
+      const queryProductIds = linkedProductIds.length > 0 ? linkedProductIds : [prodData.id];
 
       const product: Product = {
         id: prodData.id,
@@ -3388,13 +4116,14 @@ export class DatabaseService {
         imageUrl: prodData.image_url || undefined,
         isBio: Boolean(prodData.is_bio),
         isRomanianProduct: Boolean(prodData.is_romanian_product),
-        baseReferencePrice: parseFloat(prodData.base_reference_price) || 0
+        baseReferencePrice: parseFloat(prodData.base_reference_price) || 0,
+        canonicalProductId: null
       };
 
       const { data: rawOffersData } = await supabase
         .from('product_offers')
         .select('*')
-        .in('product_id', linkedProductIds)
+        .in('product_id', queryProductIds)
         .neq('source', 'demo')
         .not('verification_status', 'in', '("demo","isolated","rejected")')
         .gt('price', 0)
@@ -3406,17 +4135,20 @@ export class DatabaseService {
       const { data: historyData } = await supabase
         .from('price_observations')
         .select('*')
-        .in('product_id', linkedProductIds)
+        .in('product_id', queryProductIds)
         .order('date', { ascending: false })
         .limit(500);
 
       const offers: ProductOffer[] = latestCanonicalOffers(offersData.map(r => ({
         id: r.id,
         productId: product.id,
-        storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+        storeId: normalizeStoreIdKey(r.store_id),
         sourceId: r.source_id || undefined,
         price: parseFloat(r.price),
         originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+        normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
+        promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+        loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
         unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
         unitPriceMeasure: r.unit_price_measure || 'lei/buc',
         isPromo: Boolean(r.is_promo),
@@ -3435,7 +4167,7 @@ export class DatabaseService {
       const priceHistory: PriceObservation[] = (historyData || []).map(h => ({
         id: h.id,
         productId: product.id,
-        storeId: h.store_id ? h.store_id.replace(/^store-/, '') : '',
+        storeId: normalizeStoreIdKey(h.store_id),
         sourceId: h.source_id || undefined,
         price: parseFloat(h.price),
         date: h.date ? String(h.date).slice(0, 10) : '',
@@ -5127,40 +5859,64 @@ export class DatabaseService {
     const allHaveDirectIdsOrEan = (items || []).length > 0 && activeIdentifiers.length === items.length;
     const pool = getPool();
 
-    // Fast path: 100% of items carry productId or barcode AND Postgres pool is available -> 2 targeted batch SQL queries (Zero N+1)
+    // Fast path: 100% of items carry productId or barcode AND Postgres pool is available -> batch SQL queries with multi-hop cycle-safe CTE
     if (allHaveDirectIdsOrEan && pool) {
       try {
         const productIds = Array.from(new Set(items.map(i => i.productId?.trim()).filter((v): v is string => Boolean(v))));
-        const barcodes = Array.from(new Set(items.map(i => i.barcode?.trim()).filter((v): v is string => Boolean(v))));
+        const barcodes = Array.from(
+          new Set(
+            items.flatMap(i => (i.barcode?.trim() ? normalizeBarcodeCandidates(i.barcode.trim()) : []))
+          )
+        );
 
         const [storesRes, prodRes] = await Promise.all([
           getCachedStores(),
           pool.query(
-            `SELECT * FROM products
-             WHERE ($1::text[] IS NOT NULL AND (id = ANY($1::text[]) OR canonical_product_id = ANY($1::text[])))
-                OR ($2::text[] IS NOT NULL AND barcode = ANY($2::text[]))`,
+            `WITH RECURSIVE upward AS (
+               SELECT id, canonical_product_id, ARRAY[id]::text[] AS path, 0 AS depth
+               FROM products
+               WHERE ($1::text[] IS NOT NULL AND id = ANY($1::text[]))
+                  OR ($2::text[] IS NOT NULL AND (
+                        barcode = ANY($2::text[])
+                        OR id IN (
+                          SELECT rp.product_id
+                          FROM retailer_products rp
+                          WHERE rp.barcode = ANY($2::text[]) AND rp.product_id IS NOT NULL
+                        )
+                      ))
+               UNION ALL
+               SELECT parent.id, parent.canonical_product_id, u.path || parent.id, u.depth + 1
+               FROM products parent
+               JOIN upward u ON u.canonical_product_id = parent.id
+               WHERE u.depth < 16 AND NOT (parent.id = ANY(u.path))
+             ),
+             roots AS (
+               SELECT DISTINCT id
+               FROM upward
+               WHERE canonical_product_id IS NULL
+             ),
+             family AS (
+               SELECT id, ARRAY[id]::text[] AS path, 0 AS depth
+               FROM roots
+               UNION ALL
+               SELECT child.id, f.path || child.id, f.depth + 1
+               FROM products child
+               JOIN family f ON child.canonical_product_id = f.id
+               WHERE f.depth < 16 AND NOT (child.id = ANY(f.path))
+             )
+             SELECT p.*
+             FROM products p
+             JOIN (SELECT DISTINCT id FROM family) fam ON fam.id = p.id`,
             [productIds.length > 0 ? productIds : null, barcodes.length > 0 ? barcodes : null]
           )
         ]);
 
         if (prodRes.rows.length > 0) {
-          const matchedCanonicalIds = Array.from(
-            new Set(
-              prodRes.rows.flatMap(r => [r.id, r.canonical_product_id].filter(Boolean))
-            )
-          ) as string[];
-
-          // Ensure canonical parent products are loaded if matched via alias
-          const missingCanonicalIds = matchedCanonicalIds.filter(
-            cid => !prodRes.rows.some(r => r.id === cid)
+          const allProdRows = prodRes.rows;
+          const aliasIndex = buildCanonicalAliasIndex(
+            allProdRows.map(r => ({ id: r.id, canonicalProductId: r.canonical_product_id || null }))
           );
-          let extraCanonicalRows: any[] = [];
-          if (missingCanonicalIds.length > 0) {
-            const extraRes = await pool.query('SELECT * FROM products WHERE id = ANY($1::text[])', [missingCanonicalIds]);
-            extraCanonicalRows = extraRes.rows;
-          }
 
-          const allProdRows = [...prodRes.rows, ...extraCanonicalRows];
           const canonicalProducts: Product[] = [];
           const seenProdIds = new Set<string>();
           for (const r of allProdRows) {
@@ -5179,16 +5935,16 @@ export class DatabaseService {
               imageUrl: r.image_url || undefined,
               isBio: Boolean(r.is_bio),
               isRomanianProduct: Boolean(r.is_romanian_product),
-              baseReferencePrice: parseFloat(r.base_reference_price) || 0
+              baseReferencePrice: parseFloat(r.base_reference_price) || 0,
+              canonicalProductId: null
             });
           }
 
           const allTargetProductIds = Array.from(new Set(allProdRows.map(r => r.id)));
           const offersRes = await pool.query(
-            `SELECT po.*, COALESCE(p.canonical_product_id, p.id) AS canonical_product_id
+            `SELECT po.*
              FROM product_offers po
-             JOIN products p ON p.id = po.product_id
-             WHERE (po.product_id = ANY($1::text[]) OR p.canonical_product_id = ANY($1::text[]))
+             WHERE po.product_id = ANY($1::text[])
                AND po.source != 'demo'
                AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
                AND COALESCE(po.is_flagged_anomaly, false) = false
@@ -5199,8 +5955,8 @@ export class DatabaseService {
 
           const mappedOffers: ProductOffer[] = offersRes.rows.map(r => ({
             id: r.id,
-            productId: r.canonical_product_id || r.product_id,
-            storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+            productId: resolveCanonicalProductId(r.product_id, aliasIndex) || r.product_id,
+            storeId: normalizeStoreIdKey(r.store_id),
             sourceId: r.source_id || undefined,
             price: parseFloat(r.price),
             originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
@@ -5267,6 +6023,399 @@ export class DatabaseService {
       stores: storesRes.stores,
       cacheHit: hit && storesRes.hit,
       batchQueryMode: 'cached_catalog'
+    };
+  }
+
+  /**
+   * FAZA 1A (STRICTLY READ-ONLY): Audit calitate date catalog (brand, cantitate/multipack, titlu, EAN/GS1)
+   * Fără INSERT/UPDATE/DELETE, fără modificări de canonical_product_id sau price_observations.
+   */
+  static async getCatalogQualityAuditReport(options?: {
+    sampleLimit?: number;
+  }): Promise<CatalogDataQualityReport> {
+    const sampleLimit = Math.min(Math.max(Number(options?.sampleLimit) || 15, 5), 50);
+
+    const mapDbProductRow = (r: any): Product => ({
+      id: String(r.id),
+      name: String(r.name || ''),
+      brand: String(r.brand || ''),
+      category: (r.category || 'Alte produse') as Product['category'],
+      defaultUnit: (r.default_unit || 'buc') as Product['defaultUnit'],
+      packageWeightOrVolume: parseFloat(r.package_weight_or_volume) || 1,
+      packageUnit: (r.package_unit || 'buc') as Product['packageUnit'],
+      normalizedUnit: (r.normalized_unit || 'buc') as Product['normalizedUnit'],
+      barcode: r.barcode || undefined,
+      imageUrl: r.image_url || undefined,
+      isBio: Boolean(r.is_bio),
+      isRomanianProduct: Boolean(r.is_romanian_product),
+      isSoldByWeight: Boolean(r.is_sold_by_weight),
+      baseReferencePrice: parseFloat(r.base_reference_price) || 0,
+      canonicalProductId: r.canonical_product_id || null
+    });
+
+    const mapDbRetailerProductRow = (r: any): RetailerProductRecord => ({
+      id: String(r.id),
+      retailerId: String(r.retailer_id || ''),
+      productId: r.product_id ? String(r.product_id) : null,
+      externalSku: r.external_sku || undefined,
+      url: r.url || undefined,
+      scrapedName: String(r.scraped_name || ''),
+      scrapedBrand: r.scraped_brand || undefined,
+      barcode: r.barcode || undefined,
+      status: (r.status || 'active') as RetailerProductRecord['status']
+    });
+
+    const mapDbStagingRow = (r: any): CatalogExtractedOffer => ({
+      id: String(r.id),
+      runId: r.run_id || undefined,
+      documentId: r.document_id || undefined,
+      retailerId: String(r.retailer_id || ''),
+      rawTitle: String(r.raw_title || ''),
+      rawBrand: r.raw_brand || undefined,
+      rawBarcode: r.raw_barcode || undefined,
+      rawCategory: r.raw_category || undefined,
+      normalPrice: parseFloat(r.normal_price) || 0,
+      promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+      loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
+      effectivePrice: parseFloat(r.effective_price) || 0,
+      currency: 'RON',
+      packageQuantity: r.package_quantity ? parseFloat(r.package_quantity) : undefined,
+      packageUnit: r.package_unit || undefined,
+      unitPrice: r.unit_price ? parseFloat(r.unit_price) : undefined,
+      unitPriceMeasure: r.unit_price_measure || undefined,
+      isPromo: Boolean(r.is_promo),
+      promoDetails: r.promo_details || undefined,
+      loyaltyCardRequired: Boolean(r.loyalty_card_required),
+      loyaltyCardName: r.loyalty_card_name || undefined,
+      matchedProductId: r.matched_product_id || undefined,
+      matchConfidence: parseFloat(r.match_confidence || '0'),
+      matchMethod: (r.match_method || 'unmatched') as CatalogExtractedOffer['matchMethod'],
+      stagingStatus: String(r.staging_status || 'NEEDS_REVIEW').toUpperCase() as CatalogExtractedOffer['stagingStatus'],
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date(0).toISOString(),
+      updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : new Date(0).toISOString()
+    });
+
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      return generateCatalogQualityReport({
+        products: StorageService.getAllProducts(),
+        retailerProducts: StorageService.getRetailerProducts(),
+        stagingOffers: StorageService.getCatalogExtractedOffers(),
+        dataSource: 'storage_service',
+        sampleLimit
+      });
+    }
+
+    const pool = getPool();
+    if (pool) {
+      try {
+        const [prodRes, rpRes, stRes] = await Promise.all([
+          pool.query(
+            `SELECT id, name, brand, category, default_unit, package_weight_or_volume, package_unit, normalized_unit,
+                    barcode, image_url, is_bio, is_romanian_product, is_sold_by_weight, base_reference_price, canonical_product_id
+             FROM products`
+          ),
+          pool.query(
+            `SELECT id, retailer_id, product_id, external_sku, url, scraped_name, scraped_brand, barcode, status
+             FROM retailer_products`
+          ).catch(() => ({ rows: [] as any[] })),
+          pool.query(
+            `SELECT id, run_id, document_id, retailer_id, raw_title, raw_brand, raw_barcode, raw_category,
+                    normal_price, promo_price, loyalty_price, effective_price, package_quantity, package_unit,
+                    unit_price, unit_price_measure, is_promo, promo_details, loyalty_card_required, loyalty_card_name,
+                    matched_product_id, match_confidence, match_method, staging_status, created_at, updated_at
+             FROM catalog_extracted_offers`
+          ).catch(() => ({ rows: [] as any[] }))
+        ]);
+
+        if (prodRes.rows.length > 0) {
+          return generateCatalogQualityReport({
+            products: prodRes.rows.map(mapDbProductRow),
+            retailerProducts: rpRes.rows.map(mapDbRetailerProductRow),
+            stagingOffers: stRes.rows.map(mapDbStagingRow),
+            dataSource: 'postgresql',
+            sampleLimit
+          });
+        }
+      } catch (err: any) {
+        console.warn('Postgres pool getCatalogQualityAuditReport failed, falling back to Supabase:', err.message);
+      }
+    }
+
+    try {
+      const [prodRes, rpRes, stRes] = await Promise.all([
+        fetchAllSupabaseRows((from, to) =>
+          supabase
+            .from('products')
+            .select('id, name, brand, category, default_unit, package_weight_or_volume, package_unit, normalized_unit, barcode, image_url, is_bio, is_romanian_product, base_reference_price, canonical_product_id')
+            .range(from, to)
+        ),
+        fetchAllSupabaseRows((from, to) =>
+          supabase
+            .from('retailer_products')
+            .select('id, retailer_id, product_id, external_sku, url, scraped_name, scraped_brand, barcode, status')
+            .range(from, to)
+        ),
+        fetchAllSupabaseRows((from, to) =>
+          supabase
+            .from('catalog_extracted_offers')
+            .select('id, run_id, document_id, retailer_id, raw_title, raw_brand, raw_barcode, raw_category, normal_price, promo_price, loyalty_price, effective_price, package_quantity, package_unit, unit_price, unit_price_measure, is_promo, promo_details, loyalty_card_required, loyalty_card_name, matched_product_id, match_confidence, match_method, staging_status, created_at, updated_at')
+            .range(from, to)
+        )
+      ]);
+
+      if (!prodRes.error && Array.isArray(prodRes.data) && prodRes.data.length > 0) {
+        return generateCatalogQualityReport({
+          products: prodRes.data.map(mapDbProductRow),
+          retailerProducts: !rpRes.error && Array.isArray(rpRes.data) ? rpRes.data.map(mapDbRetailerProductRow) : undefined,
+          stagingOffers: !stRes.error && Array.isArray(stRes.data) ? stRes.data.map(mapDbStagingRow) : undefined,
+          dataSource: 'supabase_readonly',
+          sampleLimit
+        });
+      }
+    } catch (err: any) {
+      console.warn('Supabase getCatalogQualityAuditReport failed, falling back to memory:', err.message);
+    }
+
+    const { StorageService } = await import('../services/StorageService.ts');
+    return generateCatalogQualityReport({
+      products: StorageService.getAllProducts(),
+      retailerProducts: StorageService.getRetailerProducts(),
+      stagingOffers: StorageService.getCatalogExtractedOffers(),
+      dataSource: 'storage_service',
+      sampleLimit
+    });
+  }
+
+  /**
+   * FAZA 1B (STRICTLY READ-ONLY): Shadow Matching & Duplicate Detection pe catalogul curent.
+   * ZERO INSERT/UPDATE/DELETE, ZERO modificări de canonical_product_id, oferte sau price_observations.
+   */
+  static async getShadowMatchingReport(options?: ShadowMatchingOptions): Promise<ShadowMatchingReport> {
+    const mapDbProductRow = (r: any): Product => ({
+      id: String(r.id),
+      name: String(r.name || ''),
+      brand: String(r.brand || ''),
+      category: (r.category || 'Alte produse') as Product['category'],
+      defaultUnit: (r.default_unit || 'buc') as Product['defaultUnit'],
+      packageWeightOrVolume: parseFloat(r.package_weight_or_volume) || 1,
+      packageUnit: (r.package_unit || 'buc') as Product['packageUnit'],
+      normalizedUnit: (r.normalized_unit || 'buc') as Product['normalizedUnit'],
+      barcode: r.barcode || undefined,
+      imageUrl: r.image_url || undefined,
+      isBio: Boolean(r.is_bio),
+      isRomanianProduct: Boolean(r.is_romanian_product),
+      isSoldByWeight: Boolean(r.is_sold_by_weight),
+      baseReferencePrice: parseFloat(r.base_reference_price) || 0,
+      canonicalProductId: r.canonical_product_id || null
+    });
+
+    const mapDbRetailerProductRow = (r: any): RetailerProductRecord => ({
+      id: String(r.id),
+      retailerId: String(r.retailer_id || ''),
+      productId: r.product_id ? String(r.product_id) : null,
+      externalSku: r.external_sku || undefined,
+      url: r.url || undefined,
+      scrapedName: String(r.scraped_name || ''),
+      scrapedBrand: r.scraped_brand || undefined,
+      barcode: r.barcode || undefined,
+      status: (r.status || 'active') as RetailerProductRecord['status']
+    });
+
+    const mapDbOfferRow = (r: any): ProductOffer => ({
+      id: String(r.id),
+      productId: String(r.product_id),
+      storeId: normalizeStoreIdKey(r.store_id),
+      sourceId: r.source_id || undefined,
+      price: parseFloat(r.price) || 0,
+      unitPrice: parseFloat(r.unit_price) || parseFloat(r.price) || 0,
+      unitPriceMeasure: (r.unit_price_measure || 'lei/buc') as ProductOffer['unitPriceMeasure'],
+      isPromo: Boolean(r.is_promo),
+      observationDate: r.observation_date ? String(r.observation_date).slice(0, 10) : '',
+      source: (r.source || 'verified') as ProductOffer['source'],
+      confidenceLevel: (r.confidence_level || 'high') as ProductOffer['confidenceLevel'],
+      verificationStatus: (r.verification_status || 'verified') as ProductOffer['verificationStatus'],
+      lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : ''
+    });
+
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      return ProductShadowMatchingService.generateShadowMatchingReport({
+        products: StorageService.getAllProducts(),
+        retailerProducts: StorageService.getRetailerProducts(),
+        offers: StorageService.getProductOffers(),
+        options: { ...options, dataSource: 'storage_service' }
+      });
+    }
+
+    const pool = getPool();
+    if (pool) {
+      try {
+        const [prodRes, rpRes, offRes] = await Promise.all([
+          pool.query(
+            `SELECT id, name, brand, category, default_unit, package_weight_or_volume, package_unit, normalized_unit,
+                    barcode, image_url, is_bio, is_romanian_product, is_sold_by_weight, base_reference_price, canonical_product_id
+             FROM products`
+          ),
+          pool.query(
+            `SELECT id, retailer_id, product_id, external_sku, url, scraped_name, scraped_brand, barcode, status
+             FROM retailer_products`
+          ).catch(() => ({ rows: [] as any[] })),
+          pool.query(
+            `SELECT id, product_id, store_id, source_id, price, unit_price, unit_price_measure,
+                    is_promo, observation_date, source, confidence_level, verification_status, last_checked
+             FROM product_offers`
+          ).catch(() => ({ rows: [] as any[] }))
+        ]);
+
+        if (prodRes.rows.length > 0) {
+          return ProductShadowMatchingService.generateShadowMatchingReport({
+            products: prodRes.rows.map(mapDbProductRow),
+            retailerProducts: rpRes.rows.map(mapDbRetailerProductRow),
+            offers: offRes.rows.map(mapDbOfferRow),
+            options: { ...options, dataSource: 'postgresql' }
+          });
+        }
+      } catch (err: any) {
+        console.warn('Postgres pool getShadowMatchingReport failed, falling back to Supabase:', err.message);
+      }
+    }
+
+    try {
+      const [prodRes, rpRes, offRes] = await Promise.all([
+        fetchAllSupabaseRows((from, to) =>
+          supabase
+            .from('products')
+            .select('id, name, brand, category, default_unit, package_weight_or_volume, package_unit, normalized_unit, barcode, image_url, is_bio, is_romanian_product, base_reference_price, canonical_product_id')
+            .range(from, to)
+        ),
+        fetchAllSupabaseRows((from, to) =>
+          supabase
+            .from('retailer_products')
+            .select('id, retailer_id, product_id, external_sku, url, scraped_name, scraped_brand, barcode, status')
+            .range(from, to)
+        ),
+        fetchAllSupabaseRows((from, to) =>
+          supabase
+            .from('product_offers')
+            .select('id, product_id, store_id, source_id, price, unit_price, unit_price_measure, is_promo, observation_date, source, confidence_level, verification_status, last_checked')
+            .range(from, to)
+        )
+      ]);
+
+      if (!prodRes.error && Array.isArray(prodRes.data) && prodRes.data.length > 0) {
+        return ProductShadowMatchingService.generateShadowMatchingReport({
+          products: prodRes.data.map(mapDbProductRow),
+          retailerProducts: !rpRes.error && Array.isArray(rpRes.data) ? rpRes.data.map(mapDbRetailerProductRow) : undefined,
+          offers: !offRes.error && Array.isArray(offRes.data) ? offRes.data.map(mapDbOfferRow) : undefined,
+          options: { ...options, dataSource: 'supabase_readonly' }
+        });
+      }
+    } catch (err: any) {
+      console.warn('Supabase getShadowMatchingReport failed, falling back to memory:', err.message);
+    }
+
+    const { StorageService } = await import('../services/StorageService.ts');
+    return ProductShadowMatchingService.generateShadowMatchingReport({
+      products: StorageService.getAllProducts(),
+      retailerProducts: StorageService.getRetailerProducts(),
+      offers: StorageService.getProductOffers(),
+      options: { ...options, dataSource: 'storage_service' }
+    });
+  }
+
+  /**
+   * FAZA 1B (EXPLICIT & IDEMPOTENT ONLY):
+   * Mapează și salvează candidații Shadow Matching (numai HIGH_CONFIDENCE / REVIEW)
+   * în tabelul existent `product_match_candidates` cu status strict `'pending_confirmation'`.
+   * NU modifică `products`, `canonical_product_id`, `product_offers`, `price_observations` sau `product_matches`.
+   */
+  static async saveShadowMatchCandidatesToExistingSchema(
+    shadowCandidates: ShadowMatchCandidate[],
+    options?: { allowCategories?: Array<'HIGH_CONFIDENCE' | 'REVIEW'> }
+  ): Promise<{
+    attempted: number;
+    added: number;
+    skippedBlockedOrLow: number;
+    persisted: boolean;
+    storageBackend: 'postgresql' | 'storage_service' | 'skipped_no_write';
+  }> {
+    const allowed = new Set(options?.allowCategories || ['HIGH_CONFIDENCE', 'REVIEW']);
+    const eligible = (shadowCandidates || []).filter(c => allowed.has(c.decisionCategory as 'HIGH_CONFIDENCE' | 'REVIEW'));
+    const skippedBlockedOrLow = (shadowCandidates || []).length - eligible.length;
+
+    const mappedRows: ProductMatchCandidate[] = eligible.map(c => {
+      const pkg = normalizeQuantityAndMultipack({ rawTitle: c.sourceTitle });
+      return {
+        id: c.candidateId.slice(0, 64),
+        sourceRawName: (c.sourceTitle || 'Produs sursă').slice(0, 255),
+        sourceBarcode: c.sourceBarcode ? c.sourceBarcode.slice(0, 64) : undefined,
+        sourceBrand: c.sourceBrand ? c.sourceBrand.slice(0, 128) : undefined,
+        sourcePackageWeightOrVolume: pkg.totalQuantity ?? undefined,
+        sourcePackageUnit: pkg.totalUnit ?? undefined,
+        matchedProductId: c.targetProductId.slice(0, 64),
+        matchedProductName: (c.targetTitle || 'Produs țintă').slice(0, 255),
+        confidenceScore: Number(Math.max(0, Math.min(1, c.matchingScore)).toFixed(3)),
+        matchMethod: c.matchingMethod === 'gs1_exact' ? 'gtin_exact' : 'name_brand_similarity',
+        status: 'pending_confirmation', // STRICT: NEVER auto_approved in Faza 1B
+        createdAt: c.generatedAt || new Date().toISOString(),
+        sourceProductId: c.sourceProductId,
+        sourceRetailer: c.sourceRetailer,
+        targetRetailer: c.targetRetailer,
+        decisionCategory: c.decisionCategory,
+        shadowMetadata: {
+          matchingMethod: c.matchingMethod,
+          recommendedAction: c.recommendedAction,
+          normalizationVersion: c.normalizationVersion,
+          sourcePackagingStructure: c.sourcePackagingStructure,
+          targetPackagingStructure: c.targetPackagingStructure,
+          differentStructureSameTotal: c.differentStructureSameTotal
+        }
+      };
+    });
+
+    if (mappedRows.length === 0) {
+      return {
+        attempted: 0,
+        added: 0,
+        skippedBlockedOrLow,
+        persisted: false,
+        storageBackend: 'skipped_no_write'
+      };
+    }
+
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      const before = StorageService.getMatchCandidates().length;
+      StorageService.addMatchCandidates(mappedRows);
+      const after = StorageService.getMatchCandidates().length;
+      return {
+        attempted: mappedRows.length,
+        added: Math.max(0, after - before),
+        skippedBlockedOrLow,
+        persisted: true,
+        storageBackend: 'storage_service'
+      };
+    }
+
+    const pool = getPool();
+    if (!pool) {
+      return {
+        attempted: mappedRows.length,
+        added: 0,
+        skippedBlockedOrLow,
+        persisted: false,
+        storageBackend: 'skipped_no_write'
+      };
+    }
+
+    const result = await this.addMatchCandidates(mappedRows);
+    return {
+      attempted: mappedRows.length,
+      added: result.added,
+      skippedBlockedOrLow,
+      persisted: result.persisted,
+      storageBackend: result.persisted ? 'postgresql' : 'skipped_no_write'
     };
   }
 }

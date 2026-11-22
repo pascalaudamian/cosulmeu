@@ -93,7 +93,7 @@ async function runAcceptanceAudit() {
   // 2.1 Același GTIN/EAN pe retaileri diferiți -> Match sigur 1.0
   const matchEan = ProductMatcher.matchProduct({
     rawName: 'Lapte Napolact UHT 1.5% grasime la supermarket Carrefour',
-    barcode: '5941014002341',
+    barcode: '5941014002343',
     brand: 'Napolact'
   });
   assert.strictEqual(matchEan.confidence, 1.0, 'EAN identic are scor 1.0');

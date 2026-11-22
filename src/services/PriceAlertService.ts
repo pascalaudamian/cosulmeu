@@ -13,6 +13,10 @@ import { STORES } from '../data/mockData.js';
 import { BasketOptimizerService } from './BasketOptimizerService.js';
 import { PriceComparisonService } from './PriceComparisonService.js';
 import { PriceHistoryService } from './PriceHistoryService.js';
+import {
+  buildCanonicalAliasIndex,
+  resolveCanonicalProductId
+} from './ProductIdentityService.js';
 
 const NOTIFICATIONS_STORAGE_KEY = 'cosulmeu_in_app_price_notifications_v1';
 
@@ -75,6 +79,7 @@ export class PriceAlertService {
       alertType?: PriceAlertType;
       intervalDays?: PriceHistoryInterval;
       discountPercentForTarget?: number; // ex: 10 => prag cu 10% sub cel mai mic preț curent
+      aliasMap?: Map<string, string> | Record<string, string>;
     }
   ): {
     createdAlerts: PriceAlert[];
@@ -85,9 +90,13 @@ export class PriceAlertService {
     const intervalDays: PriceHistoryInterval | undefined =
       alertType === 'interval_low' ? (options?.intervalDays || 90) : undefined;
     const discountPct = options?.discountPercentForTarget ?? 10;
+    const aliasIndex = buildCanonicalAliasIndex(options?.aliasMap ?? products);
 
     const existingKeys = new Set(
-      existingAlerts.map(a => `${a.productId}:${a.alertType || 'below_target'}:${a.intervalDays || ''}`)
+      existingAlerts.map(a => {
+        const canonId = resolveCanonicalProductId(a.productId, aliasIndex) || a.productId;
+        return `${canonId}:${a.alertType || 'below_target'}:${a.intervalDays || ''}`;
+      })
     );
     const seenInBatch = new Set<string>();
     const createdAlerts: PriceAlert[] = [];
@@ -96,21 +105,25 @@ export class PriceAlertService {
     const today = new Date().toISOString().slice(0, 10);
 
     for (const item of list.items) {
-      const match = BasketOptimizerService.matchItemToProduct(item, products);
+      const match = BasketOptimizerService.matchItemToProduct(item, products, aliasIndex);
       if (match.status !== 'matched' || !match.product) {
         unmatchedItemNames.push(item.name);
         continue;
       }
 
       const product = match.product;
-      const dedupeAlertKey = `${product.id}:${alertType}:${intervalDays || ''}`;
+      const canonicalProductId = resolveCanonicalProductId(product.id, aliasIndex) || product.id;
+      const dedupeAlertKey = `${canonicalProductId}:${alertType}:${intervalDays || ''}`;
       if (existingKeys.has(dedupeAlertKey) || seenInBatch.has(dedupeAlertKey)) {
         skippedExistingCount++;
         continue;
       }
 
       const validOffers = offers
-        .filter(o => o.productId === product.id && PriceComparisonService.isOfferValid(o, product))
+        .filter(o => {
+          const offerCanonId = resolveCanonicalProductId(o.productId, aliasIndex) || o.productId;
+          return offerCanonId === canonicalProductId && PriceComparisonService.isOfferValid(o, product);
+        })
         .sort((a, b) => a.price - b.price);
 
       const bestOffer = validOffers[0];
@@ -157,6 +170,7 @@ export class PriceAlertService {
     observations?: PriceObservation[];
     stores?: Store[];
     existingNotifications?: InAppPriceNotification[];
+    aliasMap?: Map<string, string> | Record<string, string>;
     now?: Date;
   }): {
     updatedAlerts: PriceAlert[];
@@ -165,7 +179,9 @@ export class PriceAlertService {
     const now = params.now ?? new Date();
     const nowIso = now.toISOString();
     const stores = params.stores ?? STORES;
-    const productsById = new Map((params.products ?? []).map(p => [p.id, p]));
+    const productsList = params.products ?? [];
+    const productsById = new Map(productsList.map(p => [p.id, p]));
+    const aliasIndex = buildCanonicalAliasIndex(params.aliasMap ?? productsList);
     const observations = (params.observations ?? []).filter(
       obs =>
         Number.isFinite(obs.price) &&
@@ -179,7 +195,13 @@ export class PriceAlertService {
     const newNotifications: InAppPriceNotification[] = [];
     const updatedAlerts: PriceAlert[] = [];
 
-    for (const alert of params.alerts) {
+    for (const rawAlert of params.alerts) {
+      const canonicalProductId = resolveCanonicalProductId(rawAlert.productId, aliasIndex) || rawAlert.productId;
+      const alert: PriceAlert =
+        canonicalProductId !== rawAlert.productId
+          ? { ...rawAlert, productId: canonicalProductId }
+          : rawAlert;
+
       if (!alert.isActive) {
         // Alertele dezactivate nu declanșează evaluări sau notificări
         updatedAlerts.push(alert);
@@ -187,13 +209,12 @@ export class PriceAlertService {
       }
 
       const alertType: PriceAlertType = alert.alertType || 'below_target';
-      const matchedProduct = productsById.get(alert.productId);
+      const matchedProduct = productsById.get(canonicalProductId) || productsById.get(rawAlert.productId);
       const validOffers = params.offers
-        .filter(
-          o =>
-            o.productId === alert.productId &&
-            PriceComparisonService.isOfferValid(o, matchedProduct)
-        )
+        .filter(o => {
+          const offerCanonId = resolveCanonicalProductId(o.productId, aliasIndex) || o.productId;
+          return offerCanonId === canonicalProductId && PriceComparisonService.isOfferValid(o, matchedProduct);
+        })
         .sort((a, b) => a.price - b.price);
 
       if (validOffers.length === 0) {
@@ -234,7 +255,10 @@ export class PriceAlertService {
         }
       } else if (alertType === 'interval_low') {
         const intervalDays: PriceHistoryInterval = alert.intervalDays || 90;
-        const productObs = observations.filter(o => o.productId === alert.productId);
+        const productObs = observations.filter(o => {
+          const obsCanonId = resolveCanonicalProductId(o.productId, aliasIndex) || o.productId;
+          return obsCanonId === canonicalProductId;
+        });
         const timeline = productObs.map(o => ({
           date: o.date,
           price: o.price,

@@ -24,7 +24,7 @@ import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
-import { Product, ProductOffer, Receipt, Store, PriceAlert, InAppPriceNotification } from './src/types.ts';
+import { Product, ProductOffer, Receipt, Store, PriceAlert, InAppPriceNotification, RetailerProductRecord } from './src/types.ts';
 import { createHash } from 'node:crypto';
 import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 import { validatePublicHttpUrl } from './src/utils/urlSecurity.ts';
@@ -54,8 +54,14 @@ import {
   priceHistoryQuerySchema,
   saveReceiptRequestSchema,
   scanReceiptRequestSchema,
+  shadowMatchingPersistSchema,
+  shadowMatchingQuerySchema,
+  shadowReviewAuditQuerySchema,
+  shadowReviewDecisionSchema,
+  shadowReviewListQuerySchema,
   validateReceiptImageBuffer
 } from './src/server/validation.ts';
+import { ShadowReviewService, type VerifiedAdminReviewer } from './src/services/ShadowReviewService.ts';
 import { BasketOptimizerService } from './src/services/BasketOptimizerService.ts';
 import { PriceHistoryService } from './src/services/PriceHistoryService.ts';
 import { PriceAlertService } from './src/services/PriceAlertService.ts';
@@ -76,6 +82,11 @@ import { BudgetService } from './src/services/BudgetService.ts';
 import { ProductAlternativesService } from './src/services/ProductAlternativesService.ts';
 import { lookupProductByBarcode, normalizeBarcodeCandidates } from './src/services/BarcodeService.ts';
 import { ShoppingAssistantService } from './src/services/ShoppingAssistantService.ts';
+import {
+  buildCanonicalAliasIndex,
+  collectProductIdsForCanonical,
+  resolveCanonicalProductId
+} from './src/services/ProductIdentityService.ts';
 
 function sanitizeApiImageUrl(rawUrl?: string | null): string | undefined {
   if (!rawUrl || !rawUrl.trim()) return undefined;
@@ -2252,6 +2263,19 @@ app.get('/api/images/proxy', async (req, res) => {
   }
 });
 
+async function loadServerProductAliasMap(): Promise<Map<string, string>> {
+  const dbMap = await DatabaseService.getProductAliasMap();
+  if (dbMap.size > 0 || isPostgresConfigured()) {
+    return dbMap;
+  }
+  const idx = buildCanonicalAliasIndex(StorageService.getAllProducts());
+  const out = new Map<string, string>();
+  for (const [aliasId, parentId] of idx.parentById.entries()) {
+    if (parentId) out.set(aliasId, parentId);
+  }
+  return out;
+}
+
 // Catalog Products endpoint
 app.get('/api/catalog/products', async (req, res) => {
   try {
@@ -2259,6 +2283,20 @@ app.get('/api/catalog/products', async (req, res) => {
     res.json({ success: true, count: products.length, products });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la preluarea produselor din catalog.' });
+  }
+});
+
+// Canonical product alias map endpoint (aliasProductId -> canonicalRootProductId)
+app.get('/api/catalog/aliases', async (_req, res) => {
+  try {
+    const aliasMap = await loadServerProductAliasMap();
+    res.json({
+      success: true,
+      count: aliasMap.size,
+      aliases: Object.fromEntries(aliasMap.entries())
+    });
+  } catch {
+    res.status(500).json({ error: 'Eroare la preluarea mapării canonice de produse.' });
   }
 });
 
@@ -2283,14 +2321,20 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
       });
     }
     const intervalDays = queryCheck.data.days;
+    const aliasMap = await loadServerProductAliasMap();
+    const aliasIndex = buildCanonicalAliasIndex(aliasMap);
+    const canonicalProductId =
+      resolveCanonicalProductId(req.params.productId, aliasIndex) || req.params.productId;
+    const equivalentIds = new Set(collectProductIdsForCanonical(canonicalProductId, aliasIndex));
+
     const [observations, offers, stores] = isPostgresConfigured()
       ? await Promise.all([
-          DatabaseService.getPriceObservations(req.params.productId),
+          DatabaseService.getPriceObservations(canonicalProductId),
           DatabaseService.getOffers(),
           DatabaseService.getStores()
         ])
       : [
-          StorageService.getPriceObservations().filter(o => o.productId === req.params.productId),
+          StorageService.getPriceObservations().filter(o => equivalentIds.has(o.productId)),
           StorageService.getProductOffers(),
           STORES
         ];
@@ -2302,10 +2346,11 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
       if (s.slug) normalizedStoresMap.set(s.slug.toLowerCase(), s.name);
     }
 
-    const fullStats = PriceHistoryService.getProductPriceStats(req.params.productId, {
+    const fullStats = PriceHistoryService.getProductPriceStats(canonicalProductId, {
       observations,
       offers,
-      stores
+      stores,
+      aliasMap
     });
     const filteredPoints = PriceHistoryService.filterPointsByDays(fullStats.historyPoints, intervalDays);
     const activeIntervalStats = fullStats.intervalStats[intervalDays];
@@ -2321,13 +2366,15 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
         const key = (o.storeId || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
         return {
           ...o,
+          productId: resolveCanonicalProductId(o.productId, aliasIndex) || o.productId,
           storeName: normalizedStoresMap.get(key) || o.storeId
         };
       });
 
     res.json({
       success: true,
-      productId: req.params.productId,
+      productId: canonicalProductId,
+      requestedProductId: req.params.productId,
       intervalDays,
       count: filteredPoints.length,
       totalObservationsCount: fullStats.observationsCount,
@@ -2348,6 +2395,13 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
 app.post('/api/catalog/compare', publicComputeLimiter, async (req, res) => {
   try {
     const { items = [], options = {} } = req.body || {};
+    const [aliasMap, catalogPair] = await Promise.all([
+      loadServerProductAliasMap(),
+      isPostgresConfigured()
+        ? Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers(), DatabaseService.getStores()])
+        : Promise.resolve([StorageService.getAllProducts(), StorageService.getProductOffers(), STORES] as const)
+    ]);
+    const [allProducts, allOffers, allStores] = catalogPair;
     const normalizedOptions = {
       useLoyaltyCards: typeof options?.useLoyaltyCards === 'boolean' ? options.useLoyaltyCards : true,
       useCoupons: typeof options?.useCoupons === 'boolean' ? options.useCoupons : false,
@@ -2356,11 +2410,9 @@ app.post('/api/catalog/compare', publicComputeLimiter, async (req, res) => {
       maxOfferAgeDays:
         typeof options?.maxOfferAgeDays === 'number' && Number.isFinite(options.maxOfferAgeDays)
           ? options.maxOfferAgeDays
-          : undefined
+          : undefined,
+      aliasMap
     };
-    const [allProducts, allOffers, allStores] = isPostgresConfigured()
-      ? await Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers(), DatabaseService.getStores()])
-      : [StorageService.getAllProducts(), StorageService.getProductOffers(), STORES];
     const comparisons = PriceComparisonService.compareBasketAcrossStores(
       items,
       normalizedOptions,
@@ -2383,39 +2435,19 @@ app.post('/api/catalog/compare', publicComputeLimiter, async (req, res) => {
 
 const UUID_STRICT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Helper intern: încarcă articolele unei liste salvate verificând strict ownership-ul și RLS
+// Helper intern: încarcă articolele unei liste salvate verificând strict ownership-ul și membership-ul partajat (V2)
 async function loadOwnedShoppingListItemsForOptimization(params: {
-  auth: { user: { id: string }; userClient: SupabaseClient };
+  auth: { user: { id: string; email?: string }; userClient: SupabaseClient };
   listId: string;
 }): Promise<{ ok: true; listName: string; items: any[] } | { ok: false; status: number; error: string }> {
   const { auth, listId } = params;
-  const { data: ownedList, error: listErr } = await auth.userClient
-    .from('shopping_lists')
-    .select('id, name, user_id')
-    .eq('id', listId)
-    .eq('user_id', auth.user.id)
-    .maybeSingle();
-
-  if (listErr) {
-    return { ok: false, status: 500, error: 'Eroare la verificarea proprietății listei de cumpărături.' };
-  }
-  if (!ownedList) {
-    // Verificare suplimentară cu service role (doar pentru a distinge 403 vs 404 fără a expune date)
-    const adminClient = getSupabaseAdminClient();
-    if (adminClient) {
-      const { data: existingList } = await adminClient
-        .from('shopping_lists')
-        .select('id, user_id')
-        .eq('id', listId)
-        .maybeSingle();
-      if (existingList && existingList.user_id !== auth.user.id) {
-        return { ok: false, status: 403, error: 'Acces interzis: această listă aparține altui utilizator.' };
-      }
-    }
-    return { ok: false, status: 404, error: 'Lista de cumpărături nu a fost găsită.' };
+  const access = await resolveSharedListRoleAndMeta({ auth, listId });
+  if (access.ok === false) {
+    return access;
   }
 
-  const { data: itemRows, error: itemsErr } = await auth.userClient
+  const client = getSupabaseAdminClient() || auth.userClient;
+  const { data: itemRows, error: itemsErr } = await client
     .from('shopping_list_items')
     .select('id, list_id, product_id, product_name, quantity, unit, notes, is_checked')
     .eq('list_id', listId)
@@ -2436,7 +2468,7 @@ async function loadOwnedShoppingListItemsForOptimization(params: {
     notes: r.notes || undefined
   }));
 
-  return { ok: true, listName: ownedList.name || 'Coșul meu', items: mappedItems };
+  return { ok: true, listName: access.list.name || 'Coșul meu', items: mappedItems };
 }
 
 // Server-side Basket Optimizer V1 endpoint (batch queries, safe catalog cache, ownership & RLS aware)
@@ -2481,41 +2513,51 @@ app.post('/api/basket/optimize', publicComputeLimiter, async (req, res) => {
         resolvedListName = resolvedListName || ownedResult.listName;
         resolvedItems = ownedResult.items;
       } else if (auth) {
-        // Previne folosirea unui listId străin chiar și când sunt transmise articole inline
-        const adminClient = getSupabaseAdminClient();
-        if (adminClient) {
-          const { data: existingList } = await adminClient
-            .from('shopping_lists')
-            .select('id, user_id')
-            .eq('id', listId)
-            .maybeSingle();
-          if (existingList && existingList.user_id !== auth.user.id) {
-            return res.status(403).json({
-              success: false,
-              error: 'Acces interzis: nu poți accesa lista altui utilizator.'
-            });
-          }
+        // Previne folosirea unui listId străin chiar și când sunt transmise articole inline (permite owner/membri partajați)
+        const access = await resolveSharedListRoleAndMeta({ auth, listId });
+        if (access.ok === false && access.status === 403) {
+          return res.status(403).json({
+            success: false,
+            error: 'Acces interzis: nu poți accesa lista altui utilizator.'
+          });
         }
       }
     }
 
-    const dataset = isPostgresConfigured()
-      ? await DatabaseService.getOptimizationDataset(resolvedItems)
-      : {
-          products: StorageService.getAllProducts(),
-          offers: StorageService.getProductOffers(),
-          stores: STORES,
-          cacheHit: false,
-          batchQueryMode: 'isolated_memory' as const
-        };
+    const [aliasMap, dataset] = await Promise.all([
+      loadServerProductAliasMap(),
+      isPostgresConfigured()
+        ? DatabaseService.getOptimizationDataset(resolvedItems)
+        : Promise.resolve({
+            products: StorageService.getAllProducts(),
+            offers: StorageService.getProductOffers(),
+            stores: STORES,
+            cacheHit: false,
+            batchQueryMode: 'isolated_memory' as const
+          })
+    ]);
+
+    const mergedAliasMap = new Map(aliasMap);
+    for (const p of dataset.products) {
+      if (p.canonicalProductId && p.canonicalProductId !== p.id && !mergedAliasMap.has(p.id)) {
+        mergedAliasMap.set(p.id, p.canonicalProductId);
+      }
+    }
+    const aliasIndex = buildCanonicalAliasIndex(mergedAliasMap);
+    const normalizedItems = resolvedItems.map(item =>
+      item?.productId
+        ? { ...item, productId: resolveCanonicalProductId(item.productId, aliasIndex) || item.productId }
+        : item
+    );
 
     const optimization = BasketOptimizerService.optimize({
       list: listId || resolvedListName ? { id: listId || 'custom', name: resolvedListName || 'Coșul meu' } : undefined,
-      items: resolvedItems,
+      items: normalizedItems,
       options,
       products: dataset.products,
       offers: dataset.offers,
-      stores: dataset.stores
+      stores: dataset.stores,
+      aliasMap: mergedAliasMap
     });
 
     return res.json({
@@ -2534,7 +2576,7 @@ app.post('/api/basket/optimize', publicComputeLimiter, async (req, res) => {
   }
 });
 
-// Authenticated owner-scoped GET endpoint pentru optimizarea directă a unei liste din Supabase (RLS enforced)
+// Authenticated owner/member-scoped GET endpoint pentru optimizarea directă a unei liste din Supabase (RLS & shared-member aware)
 app.get('/api/basket/optimize/:listId', publicComputeLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'private, no-store');
@@ -2580,19 +2622,35 @@ app.get('/api/basket/optimize/:listId', publicComputeLimiter, async (req, res) =
         ? req.query.favoriteStoreIds.split(',').map(s => s.trim()).filter(Boolean)
         : undefined;
 
-    const dataset = isPostgresConfigured()
-      ? await DatabaseService.getOptimizationDataset(ownedResult.items)
-      : {
-          products: StorageService.getAllProducts(),
-          offers: StorageService.getProductOffers(),
-          stores: STORES,
-          cacheHit: false,
-          batchQueryMode: 'isolated_memory' as const
-        };
+    const [aliasMap, dataset] = await Promise.all([
+      loadServerProductAliasMap(),
+      isPostgresConfigured()
+        ? DatabaseService.getOptimizationDataset(ownedResult.items)
+        : Promise.resolve({
+            products: StorageService.getAllProducts(),
+            offers: StorageService.getProductOffers(),
+            stores: STORES,
+            cacheHit: false,
+            batchQueryMode: 'isolated_memory' as const
+          })
+    ]);
+
+    const mergedAliasMap = new Map(aliasMap);
+    for (const p of dataset.products) {
+      if (p.canonicalProductId && p.canonicalProductId !== p.id && !mergedAliasMap.has(p.id)) {
+        mergedAliasMap.set(p.id, p.canonicalProductId);
+      }
+    }
+    const aliasIndex = buildCanonicalAliasIndex(mergedAliasMap);
+    const normalizedItems = ownedResult.items.map(item =>
+      item?.productId
+        ? { ...item, productId: resolveCanonicalProductId(item.productId, aliasIndex) || item.productId }
+        : item
+    );
 
     const optimization = BasketOptimizerService.optimize({
       list: { id: listId, name: ownedResult.listName },
-      items: ownedResult.items,
+      items: normalizedItems,
       options: {
         maxStores,
         useLoyaltyCards,
@@ -2607,7 +2665,8 @@ app.get('/api/basket/optimize/:listId', publicComputeLimiter, async (req, res) =
       },
       products: dataset.products,
       offers: dataset.offers,
-      stores: dataset.stores
+      stores: dataset.stores,
+      aliasMap: mergedAliasMap
     });
 
     return res.json({
@@ -2631,11 +2690,15 @@ function mapDbAlertRow(
   row: Record<string, any>,
   productById: Map<string, Product>,
   lowestOfferByProductId: Map<string, { price: number; storeId: string }>,
-  metaById: Record<string, any>
+  metaById: Record<string, any>,
+  aliasIndex?: ReturnType<typeof buildCanonicalAliasIndex>
 ): PriceAlert {
   const id = String(row.id || '');
-  const productId = String(row.product_id || '');
-  const product = productById.get(productId);
+  const rawProductId = String(row.product_id || '');
+  const productId = aliasIndex
+    ? (resolveCanonicalProductId(rawProductId, aliasIndex) || rawProductId)
+    : rawProductId;
+  const product = productById.get(productId) || productById.get(rawProductId);
   const meta = (metaById[id] && typeof metaById[id] === 'object' ? metaById[id] : {}) as Record<string, any>;
   const rawType = String(row.alert_type ?? meta.alertType ?? 'below_target');
   const alertType: PriceAlert['alertType'] =
@@ -2645,7 +2708,7 @@ function mapDbAlertRow(
     alertType === 'interval_low' && [30, 90, 180, 365].includes(rawInterval)
       ? (rawInterval as PriceAlert['intervalDays'])
       : undefined;
-  const offerInfo = lowestOfferByProductId.get(productId);
+  const offerInfo = lowestOfferByProductId.get(productId) || lowestOfferByProductId.get(rawProductId);
 
   return {
     id,
@@ -2736,26 +2799,29 @@ app.get('/api/alerts', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Autentificare necesară pentru alertele de preț.' });
     }
 
-    const [alertsRes, notifications, profileRes, products, offers] = await Promise.all([
+    const [alertsRes, notifications, profileRes, products, offers, aliasMap] = await Promise.all([
       fetchUserAlertsRls(auth.userClient, auth.user.id),
       fetchUserNotificationsRls(auth.userClient, auth.user.id),
       auth.userClient.from('profiles').select('preferences').eq('id', auth.user.id).maybeSingle(),
       isPostgresConfigured() ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
-      isPostgresConfigured() ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers())
+      isPostgresConfigured() ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
+      loadServerProductAliasMap()
     ]);
 
     if (alertsRes.error) {
       return res.status(500).json({ success: false, error: 'Nu am putut prelua alertele utilizatorului.' });
     }
 
+    const aliasIndex = buildCanonicalAliasIndex(aliasMap);
     const productById = new Map(products.map(p => [p.id, p]));
     const lowestOfferByProductId = new Map<string, { price: number; storeId: string }>();
     for (const offer of offers) {
-      const prod = productById.get(offer.productId);
+      const canonicalOfferPid = resolveCanonicalProductId(offer.productId, aliasIndex) || offer.productId;
+      const prod = productById.get(canonicalOfferPid) || productById.get(offer.productId);
       if (!PriceComparisonService.isOfferValid(offer, prod)) continue;
-      const prev = lowestOfferByProductId.get(offer.productId);
+      const prev = lowestOfferByProductId.get(canonicalOfferPid);
       if (!prev || offer.price < prev.price) {
-        lowestOfferByProductId.set(offer.productId, { price: offer.price, storeId: offer.storeId });
+        lowestOfferByProductId.set(canonicalOfferPid, { price: offer.price, storeId: offer.storeId });
       }
     }
 
@@ -2768,7 +2834,7 @@ app.get('/api/alerts', async (req, res) => {
         : {};
 
     const alerts = (alertsRes.data || []).map(row =>
-      mapDbAlertRow(row, productById, lowestOfferByProductId, metaById)
+      mapDbAlertRow(row, productById, lowestOfferByProductId, metaById, aliasIndex)
     );
 
     return res.json({ success: true, alerts, notifications });
@@ -2794,13 +2860,17 @@ app.post('/api/alerts', async (req, res) => {
     }
 
     const { productId, alertType, targetPrice, intervalDays, sourceListId } = parsed.data;
-    const [products, offers, existingRes] = await Promise.all([
+    const [products, offers, existingRes, aliasMap] = await Promise.all([
       isPostgresConfigured() ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
       isPostgresConfigured() ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
-      fetchUserAlertsRls(auth.userClient, auth.user.id)
+      fetchUserAlertsRls(auth.userClient, auth.user.id),
+      loadServerProductAliasMap()
     ]);
 
-    const product = products.find(p => p.id === productId);
+    const aliasIndex = buildCanonicalAliasIndex(aliasMap);
+    const canonicalProductId = resolveCanonicalProductId(productId, aliasIndex) || productId;
+    const product =
+      products.find(p => p.id === canonicalProductId) || products.find(p => p.id === productId);
     if (!product) {
       return res.status(404).json({ success: false, error: 'Produsul selectat nu există în catalog.' });
     }
@@ -2808,9 +2878,10 @@ app.post('/api/alerts', async (req, res) => {
     const existingAlerts = existingRes.data || [];
     const normalizedInterval = alertType === 'interval_low' ? (intervalDays || 90) : null;
     const isDuplicate = existingAlerts.some(row => {
+      const rowCanonicalId = resolveCanonicalProductId(String(row.product_id || ''), aliasIndex) || String(row.product_id || '');
       const rowType = String((row as any).alert_type || 'below_target');
       const rowInterval = (row as any).interval_days != null ? Number((row as any).interval_days) : null;
-      return row.product_id === productId && rowType === alertType && (alertType !== 'interval_low' || rowInterval === normalizedInterval);
+      return rowCanonicalId === canonicalProductId && rowType === alertType && (alertType !== 'interval_low' || rowInterval === normalizedInterval);
     });
     if (isDuplicate) {
       return res.status(409).json({
@@ -2819,8 +2890,12 @@ app.post('/api/alerts', async (req, res) => {
       });
     }
 
+    const equivalentIds = new Set(collectProductIdsForCanonical(canonicalProductId, aliasIndex));
     const validOffers = offers
-      .filter(o => o.productId === productId && PriceComparisonService.isOfferValid(o, product))
+      .filter(o => {
+        const offerCanonicalPid = resolveCanonicalProductId(o.productId, aliasIndex) || o.productId;
+        return (offerCanonicalPid === canonicalProductId || equivalentIds.has(o.productId)) && PriceComparisonService.isOfferValid(o, product);
+      })
       .sort((a, b) => a.price - b.price);
     const bestOffer = validOffers[0];
     const effectiveTarget =
@@ -2833,7 +2908,7 @@ app.post('/api/alerts', async (req, res) => {
     const extendedInsert = {
       id: newId,
       user_id: auth.user.id,
-      product_id: productId,
+      product_id: canonicalProductId,
       target_price: effectiveTarget,
       is_active: true,
       created_at: nowIso,
@@ -2850,7 +2925,7 @@ app.post('/api/alerts', async (req, res) => {
         .insert({
           id: newId,
           user_id: auth.user.id,
-          product_id: productId,
+          product_id: canonicalProductId,
           target_price: effectiveTarget,
           is_active: true,
           created_at: nowIso
@@ -2865,7 +2940,7 @@ app.post('/api/alerts', async (req, res) => {
 
     const alert: PriceAlert = {
       id: newId,
-      productId,
+      productId: canonicalProductId,
       productName: `${product.name}${product.brand ? ` (${product.brand})` : ''}`,
       targetPrice: effectiveTarget,
       currentLowestPrice: bestOffer?.price ?? 0,
@@ -2910,15 +2985,17 @@ app.post('/api/alerts/from-list/:listId', async (req, res) => {
       return res.status(ownedResult.status).json({ success: false, error: ownedResult.error });
     }
 
-    const [products, offers, existingAlertsRes] = await Promise.all([
+    const [products, offers, existingAlertsRes, aliasMap] = await Promise.all([
       isPostgresConfigured() ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
       isPostgresConfigured() ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
-      fetchUserAlertsRls(auth.userClient, auth.user.id)
+      fetchUserAlertsRls(auth.userClient, auth.user.id),
+      loadServerProductAliasMap()
     ]);
 
+    const aliasIndex = buildCanonicalAliasIndex(aliasMap);
     const productById = new Map(products.map(p => [p.id, p]));
     const existingAlerts = (existingAlertsRes.data || []).map(row =>
-      mapDbAlertRow(row, productById, new Map(), {})
+      mapDbAlertRow(row, productById, new Map(), {}, aliasIndex)
     );
 
     const { createdAlerts, skippedExistingCount, unmatchedItemNames } =
@@ -2933,7 +3010,10 @@ app.post('/api/alerts/from-list/:listId', async (req, res) => {
         existingAlerts,
         products,
         offers,
-        bodyCheck.data
+        {
+          ...bodyCheck.data,
+          aliasMap
+        }
       );
 
     const persistedAlerts: PriceAlert[] = [];
@@ -3133,26 +3213,36 @@ app.post('/api/alerts/evaluate', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
     }
 
-    const [alertsRes, existingNotifs, products, offers, stores] = await Promise.all([
+    const [alertsRes, existingNotifs, products, offers, stores, aliasMap] = await Promise.all([
       fetchUserAlertsRls(auth.userClient, auth.user.id),
       fetchUserNotificationsRls(auth.userClient, auth.user.id),
       isPostgresConfigured() ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
       isPostgresConfigured() ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
-      isPostgresConfigured() ? DatabaseService.getStores() : Promise.resolve(STORES)
+      isPostgresConfigured() ? DatabaseService.getStores() : Promise.resolve(STORES),
+      loadServerProductAliasMap()
     ]);
 
     if (alertsRes.error) {
       return res.status(500).json({ success: false, error: 'Nu am putut evalua alertele.' });
     }
 
+    const aliasIndex = buildCanonicalAliasIndex(aliasMap);
     const productById = new Map(products.map(p => [p.id, p]));
-    const currentAlerts = (alertsRes.data || []).map(row => mapDbAlertRow(row, productById, new Map(), {}));
+    const currentAlerts = (alertsRes.data || []).map(row => mapDbAlertRow(row, productById, new Map(), {}, aliasIndex));
     const observationsByProduct = await Promise.all(
-      Array.from(new Set(currentAlerts.filter(a => a.alertType === 'interval_low').map(a => a.productId))).map(pid =>
-        isPostgresConfigured()
-          ? DatabaseService.getPriceObservations(pid)
-          : Promise.resolve(StorageService.getPriceObservations().filter(o => o.productId === pid))
-      )
+      Array.from(
+        new Set(
+          currentAlerts
+            .filter(a => a.alertType === 'interval_low')
+            .map(a => resolveCanonicalProductId(a.productId, aliasIndex) || a.productId)
+        )
+      ).map(canonicalPid => {
+        if (isPostgresConfigured()) {
+          return DatabaseService.getPriceObservations(canonicalPid);
+        }
+        const equiv = new Set(collectProductIdsForCanonical(canonicalPid, aliasIndex));
+        return Promise.resolve(StorageService.getPriceObservations().filter(o => equiv.has(o.productId)));
+      })
     );
     const observations = observationsByProduct.flat();
 
@@ -3162,7 +3252,8 @@ app.post('/api/alerts/evaluate', async (req, res) => {
       products,
       observations,
       stores,
-      existingNotifications: existingNotifs
+      existingNotifications: existingNotifs,
+      aliasMap
     });
 
     for (const notif of newNotifications) {
@@ -3494,14 +3585,15 @@ app.get('/api/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    // 1. Încercare din baza de date persistentă (PostgreSQL / Supabase)
+    // 1. Încercare din baza de date persistentă (PostgreSQL / Supabase) cu rezolvare multi-hop canonică
     const dbDetail = await DatabaseService.getProductDetailById(id);
     let comparison = null;
     let observations: any[] = [];
 
     if (dbDetail && dbDetail.product) {
+      const canonicalProductId = dbDetail.product.id;
       comparison = PriceComparisonService.getProductComparisonDetails(
-        id,
+        canonicalProductId,
         dbDetail.product,
         Array.isArray(dbDetail.offers) ? dbDetail.offers : [],
         STORES
@@ -3509,11 +3601,33 @@ app.get('/api/products/:id', async (req, res) => {
       observations = dbDetail.priceHistory || [];
     }
 
-    // 2. Fallback la memorie locală dacă produsul nu este în DB
+    // 2. Fallback la memorie locală (cu rezolvare canonică și agregare observații across aliasuri)
     if (!comparison) {
-      comparison = PriceComparisonService.getProductComparisonDetails(id);
+      const localProducts = StorageService.getAllProducts();
+      const aliasMap = await loadServerProductAliasMap();
+      const mergedAliasMap = new Map(aliasMap);
+      for (const p of localProducts) {
+        if (p.canonicalProductId && p.canonicalProductId !== p.id && !mergedAliasMap.has(p.id)) {
+          mergedAliasMap.set(p.id, p.canonicalProductId);
+        }
+      }
+      const aliasIndex = buildCanonicalAliasIndex(mergedAliasMap);
+      const canonicalProductId = resolveCanonicalProductId(id, aliasIndex) || id;
+      comparison = PriceComparisonService.getProductComparisonDetails(
+        canonicalProductId,
+        undefined,
+        undefined,
+        undefined,
+        mergedAliasMap
+      );
       if (comparison) {
-        observations = StorageService.getPriceObservations().filter(obs => obs.productId === id);
+        const equivalentIds = new Set(collectProductIdsForCanonical(comparison.product.id, aliasIndex));
+        observations = StorageService.getPriceObservations()
+          .filter(obs => equivalentIds.has(obs.productId))
+          .map(obs => ({
+            ...obs,
+            productId: comparison!.product.id
+          }));
       }
     }
 
@@ -3550,6 +3664,9 @@ app.get('/api/products/:id', async (req, res) => {
     res.json({
       success: true,
       product: sanitizedProduct,
+      canonicalProductId: sanitizedProduct.id,
+      requestedProductId: id,
+      redirectedFromAlias: id !== sanitizedProduct.id,
       comparison: {
         ...comparison,
         product: sanitizedProduct
@@ -3626,22 +3743,35 @@ app.post('/api/products/report-error', publicReportLimiter, (req, res) => {
   }
 });
 
-// POST /api/admin/match-correction - Corectare sau separare grupuri de matching din panoul admin
-app.post('/api/admin/match-correction', requireAdminAuth, (req, res) => {
+// POST /api/admin/match-correction - Corectare sau separare grupuri de matching din panoul admin (DB tranzacțional + audit fără alterarea price_observations)
+app.post('/api/admin/match-correction', requireAdminAuth, async (req, res) => {
   try {
-    const { candidateId, correctedProductId, reason } = req.body;
+    const { candidateId, correctedProductId, reason } = req.body || {};
     if (!candidateId || !correctedProductId || !reason) {
       return res.status(400).json({ error: 'Câmpurile candidateId, correctedProductId și reason sunt obligatorii.' });
     }
 
-    const ok = StorageService.correctProductMatch(candidateId, correctedProductId, reason, 'admin');
-    if (!ok) {
-      return res.status(404).json({ error: 'Candidatul de potrivire nu a fost găsit.' });
+    const result = await DatabaseService.correctProductMatch({
+      candidateId: String(candidateId),
+      correctedProductId: String(correctedProductId),
+      reason: String(reason),
+      performedBy: 'admin',
+      ipAddress: req.ip
+    });
+
+    if (!result.success) {
+      return res.status(result.statusCode || 400).json({
+        error: result.error || 'Corectarea asocierii nu a putut fi finalizată.'
+      });
     }
 
     res.json({
       success: true,
-      message: 'Asocierea a fost corectată și jurnalizată în audit.'
+      mode: result.persistedIn,
+      candidateId: result.candidateId,
+      previousProductId: result.previousProductId,
+      correctedProductId: result.correctedProductId,
+      message: 'Asocierea a fost corectată, persistată și jurnalizată în audit.'
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la corectarea asocierii.' });
@@ -6400,6 +6530,173 @@ app.get('/api/admin/products-detailed/:id', requireAdminAuth, async (req, res) =
   }
 });
 
+// 13.4.0 Faza 1A: Raport read-only de calitate a datelor catalog (brand, cantitate/multipack, titlu, barcode GS1)
+app.get('/api/admin/catalog-quality/report', requireAdminAuth, async (req, res) => {
+  try {
+    const rawLimit = req.query.sampleLimit;
+    const parsedLimit = rawLimit !== undefined ? Number.parseInt(String(rawLimit), 10) : 15;
+    if (Number.isNaN(parsedLimit) || parsedLimit < 5 || parsedLimit > 50) {
+      return res.status(400).json({ error: 'Parametrul sampleLimit trebuie să fie între 5 și 50.' });
+    }
+    const report = await DatabaseService.getCatalogQualityAuditReport({ sampleLimit: parsedLimit });
+    res.json({ success: true, report });
+  } catch {
+    res.status(500).json({ error: 'Eroare la generarea raportului read-only de calitate a datelor.' });
+  }
+});
+
+// 13.4.0-B Faza 1B: Raport read-only Shadow Matching & detectare produse duplicate cross-retailer (zero mutații)
+app.get('/api/admin/shadow-matching/report', requireAdminAuth, async (req, res) => {
+  try {
+    const parsed = shadowMatchingQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Parametri invalizi pentru raportul Shadow Matching.',
+        details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
+      });
+    }
+    const report = await DatabaseService.getShadowMatchingReport(parsed.data);
+    res.json({ success: true, report });
+  } catch {
+    res.status(500).json({ error: 'Eroare la generarea raportului read-only Shadow Matching.' });
+  }
+});
+
+// 13.4.0-C Faza 1B: Persistență explicită și idempotentă a candidaților Shadow în `product_match_candidates` (strict pending_confirmation, fără auto-merge)
+app.post('/api/admin/shadow-matching/persist', requireAdminAuth, async (req, res) => {
+  try {
+    const parsed = shadowMatchingPersistSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Date invalide pentru salvarea candidaților Shadow Matching.',
+        details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
+      });
+    }
+    const report = await DatabaseService.getShadowMatchingReport({
+      maxReportCandidates: parsed.data.maxCandidates
+    });
+    const result = await DatabaseService.saveShadowMatchCandidatesToExistingSchema(
+      report.candidates.slice(0, parsed.data.maxCandidates),
+      { allowCategories: parsed.data.allowCategories }
+    );
+    res.json({
+      success: true,
+      autoMergeExecuted: false,
+      result
+    });
+  } catch {
+    res.status(500).json({ error: 'Eroare la salvarea explicită a candidaților Shadow Matching.' });
+  }
+});
+
+// 13.4.0-D Faza 2: Human Review Panel — Listare candidați cu filtrare, sortare, paginare și sumar
+function extractVerifiedAdminReviewer(req: express.Request): VerifiedAdminReviewer {
+  return {
+    reviewerId: 'admin-bearer-authenticated',
+    reviewerEmail: 'admin@system.local',
+    authSource: 'admin_bearer_token',
+    ipAddress: req.ip || 'unknown'
+  };
+}
+
+app.get('/api/admin/shadow-matching/reviews', requireAdminAuth, async (req, res) => {
+  try {
+    const parsed = shadowReviewListQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Parametri invalizi pentru listarea candidaților Shadow Review.',
+        details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
+      });
+    }
+    const result = await ShadowReviewService.listCandidates(parsed.data);
+    res.json({ success: true, ...result });
+  } catch {
+    res.status(500).json({ error: 'Eroare la încărcarea listei de Human Review pentru candidații Shadow Matching.' });
+  }
+});
+
+// 13.4.0-E Faza 2: Human Review Panel — Detaliu side-by-side candidat + istoric review
+app.get('/api/admin/shadow-matching/reviews/:candidateId', requireAdminAuth, async (req, res) => {
+  try {
+    const candidateId = String(req.params.candidateId || '').trim();
+    if (!candidateId || candidateId.length > 80) {
+      return res.status(400).json({ error: 'ID candidat invalid.' });
+    }
+    const detail = await ShadowReviewService.getCandidateDetail(candidateId);
+    if (!detail.found) {
+      return res.status(404).json({ error: detail.error });
+    }
+    res.json({ success: true, ...detail });
+  } catch {
+    res.status(500).json({ error: 'Eroare la încărcarea detaliilor candidatului Shadow Matching.' });
+  }
+});
+
+// 13.4.0-F Faza 2: Human Review Panel — Trimitere decizie human review (strict fără merge)
+app.post('/api/admin/shadow-matching/reviews/:candidateId/decision', requireAdminAuth, async (req, res) => {
+  try {
+    const candidateId = String(req.params.candidateId || '').trim();
+    if (!candidateId || candidateId.length > 80) {
+      return res.status(400).json({ error: 'ID candidat invalid.' });
+    }
+
+    const parsed = shadowReviewDecisionSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Date invalide pentru decizia de Human Review.',
+        details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
+      });
+    }
+
+    const result = await ShadowReviewService.submitDecision({
+      candidateId,
+      status: parsed.data.status,
+      reason: parsed.data.reason,
+      notes: parsed.data.notes ?? null,
+      expectedVersion: parsed.data.expectedVersion,
+      reviewer: extractVerifiedAdminReviewer(req)
+    });
+
+    if (!result.ok) {
+      return res.status(result.statusCode).json({
+        success: false,
+        code: result.code,
+        error: result.error,
+        currentVersion: result.currentVersion,
+        currentDecision: result.currentDecision
+      });
+    }
+
+    res.json({
+      success: true,
+      idempotentReplay: result.idempotentReplay,
+      autoMergeExecuted: false,
+      candidate: result.candidate,
+      decision: result.decision,
+      auditEntry: result.auditEntry
+    });
+  } catch {
+    res.status(500).json({ error: 'Eroare la salvarea deciziei de Human Review.' });
+  }
+});
+
+// 13.4.0-G Faza 2: Human Review Panel — Jurnal audit decizii (append-only)
+app.get('/api/admin/shadow-matching/audit', requireAdminAuth, async (req, res) => {
+  try {
+    const parsed = shadowReviewAuditQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Parametri invalizi pentru istoricul de audit Shadow Review.',
+        details: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`)
+      });
+    }
+    const audit = await ShadowReviewService.listAuditEntries(parsed.data);
+    res.json({ success: true, autoMergeExecuted: false, ...audit });
+  } catch {
+    res.status(500).json({ error: 'Eroare la încărcarea jurnalului de audit Shadow Review.' });
+  }
+});
+
 // 13.4.1 Audit Prețuri vs Cantitate și Corectare Importuri
 app.get('/api/admin/price-audit', requireAdminAuth, async (req, res) => {
   try {
@@ -6631,27 +6928,44 @@ async function loadV2CatalogDataset(includeObservations = false): Promise<{
   offers: ProductOffer[];
   stores: Store[];
   observations: any[];
+  aliasMap: Map<string, string>;
+  retailerProducts: RetailerProductRecord[];
 }> {
   if (isPostgresConfigured()) {
     try {
-      const [products, offers, stores, observations] = await Promise.all([
+      const [products, offers, stores, observations, aliasMap, retailerProducts] = await Promise.all([
         DatabaseService.getProducts(),
         DatabaseService.getOffers(),
         DatabaseService.getStores(),
-        includeObservations ? DatabaseService.getPriceObservations() : Promise.resolve([])
+        includeObservations ? DatabaseService.getPriceObservations() : Promise.resolve([]),
+        DatabaseService.getProductAliasMap(),
+        DatabaseService.getRetailerProductsWithBarcodes()
       ]);
       if (products.length > 0) {
-        return { products, offers, stores, observations };
+        return { products, offers, stores, observations, aliasMap, retailerProducts };
       }
     } catch {
       // Fallback to local catalog
     }
   }
+  const products = StorageService.getAllProducts();
+  const dbAliasMap = await DatabaseService.getProductAliasMap().catch(() => new Map<string, string>());
+  let aliasMap = dbAliasMap;
+  if (aliasMap.size === 0) {
+    const built = new Map<string, string>();
+    for (const [k, v] of buildCanonicalAliasIndex(products).parentById.entries()) {
+      if (v) built.set(k, v);
+    }
+    aliasMap = built;
+  }
+  const retailerProducts = StorageService.getRetailerProducts();
   return {
-    products: StorageService.getAllProducts(),
+    products,
     offers: StorageService.getProductOffers(),
     stores: STORES,
-    observations: includeObservations ? StorageService.getPriceObservations() : []
+    observations: includeObservations ? StorageService.getPriceObservations() : [],
+    aliasMap,
+    retailerProducts
   };
 }
 
@@ -6915,7 +7229,11 @@ app.get('/api/products/:id/alternatives', publicComputeLimiter, async (req, res)
     }
     const useLoyaltyCards = req.query.useLoyaltyCards !== 'false';
     const dataset = await loadV2CatalogDataset(false);
-    const targetProduct = dataset.products.find(p => p.id === productId);
+    const aliasIndex = buildCanonicalAliasIndex(dataset.aliasMap);
+    const canonicalProductId = resolveCanonicalProductId(productId, aliasIndex) || productId;
+    const targetProduct =
+      dataset.products.find(p => p.id === canonicalProductId) ||
+      dataset.products.find(p => p.id === productId);
     if (!targetProduct) {
       return res.status(404).json({ success: false, error: 'Produsul nu a fost găsit în catalog.' });
     }
@@ -6925,7 +7243,8 @@ app.get('/api/products/:id/alternatives', publicComputeLimiter, async (req, res)
       allProducts: dataset.products,
       allOffers: dataset.offers,
       stores: dataset.stores,
-      useLoyaltyCards
+      useLoyaltyCards,
+      aliasMap: dataset.aliasMap
     });
 
     return res.json({ success: true, alternatives: result, ...result });
@@ -6952,7 +7271,9 @@ app.get('/api/catalog/barcode/:code', publicComputeLimiter, async (req, res) => 
       products: dataset.products,
       offers: dataset.offers,
       stores: dataset.stores,
-      observations: dataset.observations
+      observations: dataset.observations,
+      retailerProducts: dataset.retailerProducts,
+      aliasMap: dataset.aliasMap
     });
 
     return res.json({ success: true, ...lookup });
@@ -7587,13 +7908,22 @@ app.post('/api/assistant/query', publicComputeLimiter, async (req, res) => {
     }
 
     const dataset = await loadV2CatalogDataset(false);
+    const assistantAliasIndex = buildCanonicalAliasIndex(dataset.aliasMap);
+    const normalizedSelectedProductId = input.selectedProductId
+      ? resolveCanonicalProductId(input.selectedProductId, assistantAliasIndex) || input.selectedProductId
+      : undefined;
+    const normalizedActiveListItems = activeListItems.map((it: any) =>
+      it?.productId
+        ? { ...it, productId: resolveCanonicalProductId(it.productId, assistantAliasIndex) || it.productId }
+        : it
+    );
 
     const activeList =
-      activeListItems.length > 0
+      normalizedActiveListItems.length > 0
         ? {
             id: input.listId || 'active',
             name: resolvedListName,
-            items: activeListItems,
+            items: normalizedActiveListItems,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           }
@@ -7605,7 +7935,7 @@ app.post('/api/assistant/query', publicComputeLimiter, async (req, res) => {
       budgetLei: input.budgetLei,
       days: input.days,
       activeList: activeList as any,
-      selectedProductId: input.selectedProductId,
+      selectedProductId: normalizedSelectedProductId,
       allProducts: dataset.products,
       allOffers: dataset.offers,
       allStores: dataset.stores,

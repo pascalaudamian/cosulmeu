@@ -119,6 +119,10 @@ import {
   ThemeMode,
   PersonalBudgetSettings
 } from './types.js';
+import {
+  buildCanonicalAliasIndex,
+  resolveCanonicalProductId
+} from './services/ProductIdentityService.js';
 import { PriceAlertService } from './services/PriceAlertService.js';
 import { useAuth } from './auth/AuthProvider.js';
 import { supabase } from './lib/supabase.js';
@@ -189,6 +193,7 @@ export default function App() {
   const [catalogProducts, setCatalogProducts] = useState<Product[]>([]);
   const [catalogOffers, setCatalogOffers] = useState<ProductOffer[]>([]);
   const [catalogStores, setCatalogStores] = useState<Store[]>([]);
+  const [catalogAliasMap, setCatalogAliasMap] = useState<Map<string, string>>(() => new Map());
   const [inAppNotifications, setInAppNotifications] = useState<InAppPriceNotification[]>(() =>
     PriceAlertService.loadLocalNotifications()
   );
@@ -199,6 +204,13 @@ export default function App() {
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => getSystemPrefersDark());
   const isDarkMode = resolveIsDark(themeMode, systemPrefersDark);
   const catalogLoadedRef = useRef(false);
+  const isAuthenticatedRef = useRef(Boolean(user));
+  isAuthenticatedRef.current = Boolean(user);
+
+  const catalogAliasIndex = useMemo(
+    () => buildCanonicalAliasIndex(catalogAliasMap),
+    [catalogAliasMap]
+  );
 
   // Cookie Consent state (persisted across refresh, navigation & auth)
   const [cookieConsentState, setCookieConsentState] = useState(() => getStoredCookieConsent());
@@ -238,11 +250,43 @@ export default function App() {
     Promise.all([
       fetch('/api/catalog/products').then(r => r.json()).catch(() => null),
       fetch('/api/catalog/offers').then(r => r.json()).catch(() => null),
-      fetch('/api/stores').then(r => r.json()).catch(() => null)
-    ]).then(([prodRes, offRes, storeRes]) => {
+      fetch('/api/stores').then(r => r.json()).catch(() => null),
+      fetch('/api/catalog/aliases').then(r => r.json()).catch(() => null)
+    ]).then(([prodRes, offRes, storeRes, aliasRes]) => {
       if (prodRes?.success && Array.isArray(prodRes.products)) setCatalogProducts(prodRes.products);
       if (offRes?.success && Array.isArray(offRes.offers)) setCatalogOffers(offRes.offers);
       if (storeRes?.success && Array.isArray(storeRes.stores)) setCatalogStores(canonicalizeStores(storeRes.stores));
+
+      const mergedAliases: Record<string, string> = {};
+      if (aliasRes?.success && aliasRes.aliases && typeof aliasRes.aliases === 'object') {
+        for (const [aliasId, canonicalId] of Object.entries(aliasRes.aliases)) {
+          if (typeof canonicalId === 'string' && canonicalId.trim() && aliasId !== canonicalId) {
+            mergedAliases[aliasId] = canonicalId;
+          }
+        }
+      }
+      if (prodRes?.success && Array.isArray(prodRes.products)) {
+        for (const p of prodRes.products as Product[]) {
+          if (p?.canonicalProductId && p.canonicalProductId !== p.id && !mergedAliases[p.id]) {
+            mergedAliases[p.id] = p.canonicalProductId;
+          }
+        }
+      }
+
+      if (Object.keys(mergedAliases).length > 0) {
+        const nextAliasIndex = buildCanonicalAliasIndex(mergedAliases);
+        setCatalogAliasMap(new Map(Object.entries(mergedAliases)));
+        const normResult = StorageService.normalizeLocalProductReferences(mergedAliases);
+        if (normResult.updated && !isAuthenticatedRef.current) {
+          setShoppingLists(StorageService.getShoppingLists());
+          setPriceAlerts(StorageService.getPriceAlerts());
+          setTrackedProductIds(StorageService.getTrackedProducts());
+          setReceipts(StorageService.getReceipts());
+        }
+        setSelectedProductId(prev =>
+          prev ? resolveCanonicalProductId(prev, nextAliasIndex) || prev : prev
+        );
+      }
     });
   }, []);
 
@@ -956,14 +1000,16 @@ export default function App() {
   };
 
   const handleSelectProduct = (productId: string) => {
+    const canonicalProductId =
+      resolveCanonicalProductId(productId, catalogAliasIndex) || productId;
     setActiveLegalRoute(null);
-    setSelectedProductId(productId);
+    setSelectedProductId(canonicalProductId);
     setCurrentTab('product-detail');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     const url = new URL(window.location.href);
     url.pathname = '/';
     url.searchParams.set('tab', 'products');
-    url.searchParams.set('product', productId);
+    url.searchParams.set('product', canonicalProductId);
     window.history.pushState({}, '', url.toString());
   };
 
@@ -1346,7 +1392,11 @@ export default function App() {
               onSelectProduct={handleSelectProduct}
               useLoyaltyCards={userProfile.useLoyaltyCards}
               onCreateAlertForProduct={handleQuickCreateAlertForProduct}
-              productAlerts={dashboardAlerts.filter(a => a.productId === selectedProductId)}
+              productAlerts={dashboardAlerts.filter(
+                a =>
+                  (resolveCanonicalProductId(a.productId, catalogAliasIndex) || a.productId) ===
+                  (resolveCanonicalProductId(selectedProductId, catalogAliasIndex) || selectedProductId)
+              )}
               onSaveProductAlert={handleSaveProductAlert}
               onToggleProductAlert={handleToggleProductAlert}
               onDeleteProductAlert={handleDeleteProductAlert}

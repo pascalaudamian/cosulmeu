@@ -283,7 +283,7 @@ export const PRODUCTS: Product[] = [
     packageWeightOrVolume: 1,
     packageUnit: 'l',
     normalizedUnit: 'l',
-    barcode: '5941014002341',
+    barcode: '5941014002343',
     isRomanianProduct: true,
     baseReferencePrice: 6.89
   },

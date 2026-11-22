@@ -7,6 +7,10 @@ import {
   Store
 } from '../types.js';
 import { PriceComparisonService } from './PriceComparisonService.js';
+import {
+  buildCanonicalAliasIndex,
+  resolveCanonicalProductId
+} from './ProductIdentityService.js';
 
 const KIND_LABELS_RO: Record<ProductAlternativeKind, string> = {
   same_product_other_retailer: 'Același produs la alt retailer',
@@ -260,15 +264,32 @@ export class ProductAlternativesService {
     stores: Store[];
     useLoyaltyCards?: boolean;
     limitPerGroup?: number;
+    aliasMap?: Map<string, string> | Record<string, string>;
   }): ProductAlternativesResult {
     const {
-      targetProduct,
       allProducts,
       allOffers,
       stores,
       useLoyaltyCards = true,
-      limitPerGroup = 6
+      limitPerGroup = 6,
+      aliasMap
     } = params;
+
+    const aliasIndex = buildCanonicalAliasIndex(aliasMap ?? allProducts);
+    const productById = new Map<string, Product>();
+    for (const p of allProducts) {
+      if (p?.id) productById.set(p.id, p);
+    }
+
+    const resolvedTargetId = resolveCanonicalProductId(params.targetProduct.id, aliasIndex);
+    const targetProduct =
+      (resolvedTargetId && productById.get(resolvedTargetId)) || params.targetProduct;
+
+    const canonicalProducts = allProducts.filter(p => {
+      if (!p?.id || p.canonicalProductId) return false;
+      const cid = resolveCanonicalProductId(p.id, aliasIndex);
+      return !cid || cid === p.id;
+    });
 
     const storeMap = new Map<string, Store>();
     for (const s of stores) {
@@ -291,22 +312,21 @@ export class ProductAlternativesService {
 
     const limitations: string[] = [];
 
-    // Collect valid offers indexed by productId
+    // Collect valid offers indexed by canonical productId
     const validOffersByProduct = new Map<string, ProductOffer[]>();
-    const productById = new Map<string, Product>();
-    for (const p of allProducts) {
-      if (p?.id) productById.set(p.id, p);
-    }
 
     for (const offer of allOffers) {
       if (!offer?.productId) continue;
-      const prod = productById.get(offer.productId);
+      const canonicalOfferProdId = resolveCanonicalProductId(offer.productId, aliasIndex) || offer.productId;
+      const prod = productById.get(canonicalOfferProdId) || productById.get(offer.productId);
       if (!prod) continue;
       if (!PriceComparisonService.isOfferValid(offer, prod)) continue;
       if (!resolveStore(offer.storeId)) continue;
-      const arr = validOffersByProduct.get(offer.productId) || [];
-      arr.push(offer);
-      validOffersByProduct.set(offer.productId, arr);
+      const normalizedOffer =
+        offer.productId === prod.id ? offer : { ...offer, productId: prod.id };
+      const arr = validOffersByProduct.get(prod.id) || [];
+      arr.push(normalizedOffer);
+      validOffersByProduct.set(prod.id, arr);
     }
 
     const targetValidOffers = (validOffersByProduct.get(targetProduct.id) || [])
@@ -376,7 +396,7 @@ export class ProductAlternativesService {
     const targetBrandNorm = normalizeText(targetProduct.brand);
     const targetCoreTokens = new Set(tokenizeCoreName(targetProduct));
 
-    for (const candidate of allProducts) {
+    for (const candidate of canonicalProducts) {
       if (candidate.id === targetProduct.id) continue;
       const candOffers = validOffersByProduct.get(candidate.id);
       if (!candOffers || candOffers.length === 0) continue;

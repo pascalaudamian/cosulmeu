@@ -78,7 +78,7 @@ async function runIndexingTests() {
   console.log('\n--- 3. Parsare Lot de Date & Separare Prețuri ---');
   const lidlCollector = new LidlCollector();
   const sampleCsv = `denumire,pret,gramaj,unitate,marca,cod_bare,promotie,valabil_pana,card_fidelitate
-Lapte proaspat Napolact 1.5% 1L,6.49,1,l,Napolact,5941014002341,,,
+Lapte proaspat Napolact 1.5% 1L,6.49,1,l,Napolact,5941014002343,,,
 Piept de pui Agricola 1kg,24.99,1,kg,Agricola,5941199003310,-10% Lidl Plus,2026-11-20,Lidl Plus
 Paine Toast 500g,4.29,500,g,Vel Pitar,5941033001091,,,
 Produs Pret Invalid,-5.00,1,buc,TestBrand,,,,`;
@@ -157,7 +157,7 @@ Produs Pret Invalid,-5.00,1,buc,TestBrand,,,,`;
 
   // --- 6. Garanția Append-Only la Schimbarea Prețului ---
   console.log('\n--- 6. Garanția Append-Only la Modificarea Prețului ---');
-  const updatedPriceCsv = `denumire,pret,gramaj,unitate,marca,cod_bare\nLapte proaspat Napolact 1.5% 1L,5.99,1,l,Napolact,5941014002341`;
+  const updatedPriceCsv = `denumire,pret,gramaj,unitate,marca,cod_bare\nLapte proaspat Napolact 1.5% 1L,5.99,1,l,Napolact,5941014002343`;
   const updatedBatch = await lidlCollector.collectBatch({ payload: updatedPriceCsv, dryRun: false });
   const updateResult = await ProcessingPipeline.processBatch(updatedBatch);
 

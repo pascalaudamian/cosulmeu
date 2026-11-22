@@ -30,7 +30,7 @@ async function runTests() {
     <!DOCTYPE html>
     <html>
       <body>
-        <div class="product-item" data-ean="5941014002341">
+        <div class="product-item" data-ean="5941014002343">
           <h3 class="product-name">Lapte Integral 3.5% 1L Napolact</h3>
           <span class="brand">Napolact</span>
           <span class="old-price">7,99 Lei</span>
@@ -54,7 +54,7 @@ async function runTests() {
   const lapte = parsedItems[0];
   assert.strictEqual(lapte.rawName, 'Lapte Integral 3.5% 1L Napolact');
   assert.strictEqual(lapte.brand, 'Napolact');
-  assert.strictEqual(lapte.barcode, '5941014002341');
+  assert.strictEqual(lapte.barcode, '5941014002343');
   assert.strictEqual(lapte.normalPrice, 7.99);
   assert.strictEqual(lapte.promoPrice, 6.49);
   assert.strictEqual(lapte.packageWeightOrVolume, 1);

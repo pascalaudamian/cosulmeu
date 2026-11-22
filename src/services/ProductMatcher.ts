@@ -1,5 +1,14 @@
 import { Product, ProductMatchCandidate, UnitType } from '../types.js';
 import { StorageService } from './StorageService.js';
+import {
+  areVariantAttributesCompatible,
+  compareNormalizedPackaging,
+  normalizeBrand,
+  normalizeQuantityAndMultipack,
+  normalizeTitleAndVariants,
+  stripDiacriticsLower,
+  validateAndNormalizeBarcode
+} from './ProductNormalizationService.js';
 
 export class ProductMatcher {
   /**
@@ -29,7 +38,10 @@ export class ProductMatcher {
   }
 
   /**
-   * Match a raw item to an existing catalog product
+   * Match a raw item to an existing catalog product using Faza 1A normalized attributes.
+   * Invalid or variable-weight (20..29) barcodes NEVER trigger automatic GTIN matches.
+   * Placeholder/corrupt brands NEVER contribute as verified brand matches.
+   * Distinct multipack structures (e.g. 1x500g vs 2x250g) NEVER silently auto-merge.
    */
   static matchProduct(params: {
     rawName: string;
@@ -45,75 +57,110 @@ export class ProductMatcher {
     candidate?: ProductMatchCandidate;
   } {
     const allProducts = products;
+    const inputBarcodeVal = validateAndNormalizeBarcode(params.barcode);
 
-    // 1. Exact Barcode Match (GTIN / EAN)
-    if (params.barcode && params.barcode.trim()) {
-      const cleanBarcode = params.barcode.trim();
-      const exactBarcodeMatch = allProducts.find(p => p.barcode && p.barcode.trim() === cleanBarcode);
-      if (exactBarcodeMatch) {
+    // 1. Exact Barcode Match (GTIN / EAN / UPC-A <-> EAN-13) ONLY when valid GS1 & universal
+    if (inputBarcodeVal.isEligibleForAutoMatch && inputBarcodeVal.normalizedEquivalentBarcodes.length > 0) {
+      const inputBcSet = new Set(inputBarcodeVal.normalizedEquivalentBarcodes);
+      const barcodeMatches = allProducts.filter(p => {
+        if (!p.barcode) return false;
+        const pVal = validateAndNormalizeBarcode(p.barcode);
+        if (!pVal.isEligibleForAutoMatch) return false;
+        return pVal.normalizedEquivalentBarcodes.some(code => inputBcSet.has(code));
+      });
+
+      if (barcodeMatches.length > 0) {
+        // Prefer canonical root if available
+        const preferredMatch = barcodeMatches.find(p => !p.canonicalProductId) || barcodeMatches[0];
         return {
-          matchedProduct: exactBarcodeMatch,
+          matchedProduct: preferredMatch,
           confidence: 1.0,
           matchMethod: 'gtin_exact'
         };
       }
     }
 
-    // 2. Name & Brand Token Similarity
-    const inputTokens = this.tokenize(params.rawName);
-    const inputBrandNorm = params.brand ? this.normalizeText(params.brand) : '';
+    // 2. Pre-normalize input title, variants, brand & packaging
+    const inputTitleNorm = normalizeTitleAndVariants(params.rawName);
+    const inputBrandNorm = normalizeBrand(params.brand, params.rawName);
+    const inputPkg = normalizeQuantityAndMultipack({
+      rawTitle: params.rawName,
+      quantity: params.packageWeightOrVolume,
+      unit: params.packageUnit,
+      barcode: params.barcode
+    });
+    const inputTokens = this.tokenize(inputTitleNorm.normalizedDescriptiveTitle || params.rawName);
 
     let bestMatch: Product | null = null;
     let highestScore = 0;
 
     for (const product of allProducts) {
-      // Incompatibility guard: if units are completely incompatible (e.g. liters vs kg)
-      if (params.packageUnit) {
-        const isLiquidA = ['l', 'ml'].includes(params.packageUnit);
-        const isLiquidB = ['l', 'ml'].includes(product.packageUnit);
-        if (isLiquidA !== isLiquidB && product.packageUnit !== 'buc') {
-          continue; // Incompatible units: do not match liquid with solid
+      // Conflict Guard 0: Distinct non-empty barcodes block auto-merge
+      if (params.barcode && product.barcode) {
+        const prodBarcodeVal = validateAndNormalizeBarcode(product.barcode);
+        if (inputBarcodeVal.digitsOnly && prodBarcodeVal.digitsOnly) {
+          const inputSet = new Set(
+            inputBarcodeVal.normalizedEquivalentBarcodes.length > 0
+              ? inputBarcodeVal.normalizedEquivalentBarcodes
+              : [inputBarcodeVal.digitsOnly]
+          );
+          const prodCodes =
+            prodBarcodeVal.normalizedEquivalentBarcodes.length > 0
+              ? prodBarcodeVal.normalizedEquivalentBarcodes
+              : [prodBarcodeVal.digitsOnly];
+          if (!prodCodes.some(c => inputSet.has(c))) {
+            continue; // Conflicting barcodes
+          }
         }
       }
 
-      // Conflict Guard 0: Conflicting verified barcodes
-      if (params.barcode && product.barcode && params.barcode.trim() !== product.barcode.trim()) {
-        continue; // Different barcodes indicate distinct products
-      }
-
-      // Conflict Guard 1: Variant & Fat percentage conflict (ex: 1.5% vs 3.5%)
-      const extractPercentage = (str: string) => {
-        const m = str.match(/(\d+([.,]\d+)?)\s*%/);
-        return m ? m[1].replace(',', '.') : null;
-      };
-      const inputPct = extractPercentage(params.rawName);
-      const prodPct = extractPercentage(product.name);
-      if (inputPct && prodPct && inputPct !== prodPct) {
-        continue; // Different fat/concentration percentage: distinct variants
-      }
-
-      // Conflict Guard 2: Bread / Flour specific variant conflicts
-      const inputNorm = this.normalizeText(params.rawName);
-      const productNorm = this.normalizeText(product.name);
-      const isInputWhite = inputNorm.includes('alba') || inputNorm.includes('alb');
-      const isProductWhite = productNorm.includes('alba') || productNorm.includes('alb');
-      const isInputDark = inputNorm.includes('neagra') || inputNorm.includes('secara') || inputNorm.includes('integrala');
-      const isProductDark = productNorm.includes('neagra') || productNorm.includes('secara') || productNorm.includes('integrala');
-      if ((isInputWhite && isProductDark) || (isInputDark && isProductWhite)) {
-        continue; // White bread vs dark/rye bread must never be merged
-      }
-
-      // Conflict Guard 3: Sugar-free / Zero / Diet conflict
-      const isInputZero = inputNorm.includes('zero') || inputNorm.includes('diet') || inputNorm.includes('light');
-      const isProductZero = productNorm.includes('zero') || productNorm.includes('diet') || productNorm.includes('light');
-      if (isInputZero !== isProductZero) {
+      // Conflict Guard 1: Variant & formulation attributes must be compatible
+      const productTitleNorm = normalizeTitleAndVariants(product.name);
+      const variantCheck = areVariantAttributesCompatible(
+        inputTitleNorm.variantAttributes,
+        productTitleNorm.variantAttributes
+      );
+      if (!variantCheck.compatible) {
         continue;
       }
 
-      const productTokens = this.tokenize(product.name);
-      const productBrandNorm = this.normalizeText(product.brand);
+      // Conflict Guard 2: Packaging, unit family, variable weight & multipack structure
+      const productPkg = normalizeQuantityAndMultipack({
+        rawTitle: product.name,
+        quantity: product.packageWeightOrVolume,
+        unit: product.packageUnit,
+        barcode: product.barcode,
+        isSoldByWeight: product.isSoldByWeight
+      });
+      const pkgCmp = compareNormalizedPackaging(inputPkg, productPkg);
 
-      // Calculate token intersection with Romanian inflection/stem matching (prefix >= 4 chars)
+      if (pkgCmp.variableWeightConflict) {
+        continue;
+      }
+
+      // Legacy fallback: if explicit params.packageUnit conflicts liquid vs solid with product.packageUnit
+      if (params.packageUnit) {
+        const isLiquidA = ['l', 'ml'].includes(params.packageUnit);
+        const isLiquidB = ['l', 'ml'].includes(product.packageUnit);
+        if (isLiquidA !== isLiquidB && product.packageUnit !== 'buc' && params.packageUnit !== 'buc') {
+          continue;
+        }
+      }
+      if (pkgCmp.incompatibleUnitFamily) {
+        // Allow comparison only if one side merely defaulted to 'buc' without explicit weight
+        const onlyCountDefault =
+          (inputPkg.normalizedMetricUnit === 'buc' && !params.packageWeightOrVolume) ||
+          (productPkg.normalizedMetricUnit === 'buc' && product.packageWeightOrVolume === 1 && product.packageUnit === 'buc');
+        if (!onlyCountDefault) {
+          continue;
+        }
+      }
+
+      if (pkgCmp.comparable && pkgCmp.totalRatio < 0.75) {
+        continue;
+      }
+
+      const productTokens = this.tokenize(productTitleNorm.normalizedDescriptiveTitle || product.name);
       const isTokenMatch = (t1: string, t2: string) => {
         if (t1 === t2) return true;
         if (t1.length >= 4 && t2.length >= 4 && (t1.startsWith(t2.slice(0, 4)) || t2.startsWith(t1.slice(0, 4)))) {
@@ -126,42 +173,42 @@ export class ProductMatcher {
       const totalTokens = new Set([...inputTokens, ...productTokens]).size;
       const jaccardScore = totalTokens > 0 ? commonTokens.length / totalTokens : 0;
 
-      // Brand match bonus
-      let brandScore = 0.5; // neutral if no brand given
-      if (inputBrandNorm && productBrandNorm) {
-        if (inputBrandNorm.includes(productBrandNorm) || productBrandNorm.includes(inputBrandNorm)) {
+      // Brand score: ONLY real (verified or extracted) brands contribute bonus or conflict!
+      // Placeholder / corrupt / missing brands are strictly neutral (0.5).
+      const productBrandNorm = normalizeBrand(product.brand, product.name);
+      let brandScore = 0.5;
+      let hasRealBrandConflict = false;
+      if (inputBrandNorm.normalizedBrand && productBrandNorm.normalizedBrand) {
+        const b1 = stripDiacriticsLower(inputBrandNorm.normalizedBrand);
+        const b2 = stripDiacriticsLower(productBrandNorm.normalizedBrand);
+        if (b1 === b2 || b1.includes(b2) || b2.includes(b1)) {
           brandScore = 1.0;
         } else {
-          brandScore = 0.1; // penalized for conflicting brands
+          brandScore = 0.05;
+          hasRealBrandConflict = true;
         }
       }
 
-      // Weight similarity bonus with unit normalization (convert g->kg, ml->l)
+      // Weight & packaging structure score
       let weightScore = 0.8;
-      let ratio = 1.0;
-      if (params.packageWeightOrVolume && product.packageWeightOrVolume) {
-        let normW1 = params.packageWeightOrVolume;
-        if (params.packageUnit === 'g' || params.packageUnit === 'ml') normW1 = normW1 / 1000;
-
-        let normW2 = product.packageWeightOrVolume;
-        if (product.packageUnit === 'g' || product.packageUnit === 'ml') normW2 = normW2 / 1000;
-
-        ratio = Math.min(normW1, normW2) / Math.max(normW1, normW2);
-        // If package weights differ by more than 25%, penalize heavily so they don't auto-group
-        if (ratio < 0.75) {
-          weightScore = 0.1;
+      if (pkgCmp.comparable) {
+        if (pkgCmp.differentStructureSameTotal) {
+          // Total weight is equal (e.g. 1x500g vs 2x250g), but multipack structure differs!
+          weightScore = 0.35;
+        } else if (pkgCmp.totalRatio >= 0.90) {
+          weightScore = 1.0;
         } else {
-          weightScore = ratio >= 0.90 ? 1.0 : ratio;
+          weightScore = pkgCmp.totalRatio;
         }
       }
 
-      // If weight ratio is too small (< 0.75), prevent high confidence auto-matching
-      if (ratio < 0.75) {
-        continue;
-      }
+      let compositeScore = Math.round((jaccardScore * 0.50 + brandScore * 0.30 + weightScore * 0.20) * 100) / 100;
 
-      // Weighted total confidence
-      const compositeScore = Math.round((jaccardScore * 0.50 + brandScore * 0.30 + weightScore * 0.20) * 100) / 100;
+      // Safety caps: structural packaging mismatch, real brand conflict, or suspicious multipack
+      // MUST NOT silently cross the 0.70 auto-match threshold.
+      if (pkgCmp.differentStructureSameTotal || hasRealBrandConflict || inputPkg.isSuspiciousMultipack) {
+        compositeScore = Math.min(compositeScore, 0.65);
+      }
 
       if (compositeScore > highestScore) {
         highestScore = compositeScore;
@@ -169,8 +216,6 @@ export class ProductMatcher {
       }
     }
 
-    // Without a verified barcode, use a conservative threshold (0.70) so medium-confidence
-    // fuzzy matches remain reviewable instead of silently changing the catalog.
     if (bestMatch && highestScore >= 0.70) {
       return {
         matchedProduct: bestMatch,
@@ -178,7 +223,6 @@ export class ProductMatcher {
         matchMethod: 'name_brand_similarity'
       };
     } else if (bestMatch && highestScore >= 0.45) {
-      // Create pending confirmation candidate
       const candidate: ProductMatchCandidate = {
         id: `cand-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
         sourceRawName: params.rawName,
@@ -195,7 +239,7 @@ export class ProductMatcher {
       };
 
       return {
-        matchedProduct: undefined, // Do not auto-merge uncertain products
+        matchedProduct: undefined,
         confidence: highestScore,
         matchMethod: 'name_brand_similarity',
         candidate

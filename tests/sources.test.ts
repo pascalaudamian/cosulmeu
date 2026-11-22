@@ -144,10 +144,10 @@ Apă minerală 750ml,3.00,750,ml`;
   assert(lidlWith?.hasLoyaltyDiscount === true && (lidlWith?.loyaltySavings || 0) > 0, 'Economia adusă de card este evidențiată transparent');
 
   // --- TEST 7: ProductMatcher (GTIN exact, fuzzy token matching și incompatibilitate lichid/solid) ---
-  // Potrivire exactă după GTIN (Lapte proaspăt Napolact are barcode: 5941014002341)
+  // Potrivire exactă după GTIN (Lapte proaspăt Napolact are barcode: 5941014002343)
   const exactMatch = ProductMatcher.matchProduct({
     rawName: 'Lapte Napolact Barcode Test',
-    barcode: '5941014002341'
+    barcode: '5941014002343'
   });
   assert(exactMatch.matchedProduct?.id === 'prod-lapte-1' && exactMatch.confidence === 1.0, 'Potrivirea după GTIN/EAN verificat are încredere 100% și metoda gtin_exact');
 
@@ -206,7 +206,7 @@ Apă minerală 750ml,3.00,750,ml`;
   assert(lidlAdapter.id === 'src-lidl-file' && lidlAdapter.defaultStoreId === 'lidl', 'LidlPriceFileAdapter este preconfigurat corect pentru magazinul Lidl');
 
   const sampleLidlContent = `Denumire,Pret,Unitate,cod_bare
-Lapte proaspăt 1.5% grăsime 1L,6.29,l,5941014002341
+Lapte proaspăt 1.5% grăsime 1L,6.29,l,5941014002343
 Ouă proaspete M 10 buc,10.99,buc,5941889001221`;
 
   const importResult = await lidlAdapter.importData({

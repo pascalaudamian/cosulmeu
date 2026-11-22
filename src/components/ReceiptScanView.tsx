@@ -391,15 +391,41 @@ export const ReceiptScanView: React.FC<ReceiptScanViewProps> = ({
 
                 {/* Scanning Animation Overlay */}
                 {isScanning && (
-                  <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-xs flex flex-col items-center justify-center text-white p-4">
-                    <div className="relative w-48 h-1 bg-emerald-500/30 rounded-full overflow-hidden mb-4">
-                      <div className="w-24 h-full bg-emerald-400 rounded-full animate-[pulse_1s_infinite]"></div>
+                  <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center text-white p-4 overflow-hidden">
+                    {/* Laser scanning beam moving up and down */}
+                    <div className="absolute inset-x-0 h-1 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_25px_4px_rgba(52,211,153,0.9)] animate-[scanBeam_2s_ease-in-out_infinite] z-10"></div>
+                    
+                    {/* Scanning frame corners */}
+                    <div className="absolute inset-6 sm:inset-10 border border-emerald-500/30 rounded-2xl pointer-events-none flex flex-col justify-between p-3">
+                      <div className="flex justify-between">
+                        <div className="w-5 h-5 border-t-2 border-l-2 border-emerald-400"></div>
+                        <div className="w-5 h-5 border-t-2 border-r-2 border-emerald-400"></div>
+                      </div>
+                      <div className="flex justify-between">
+                        <div className="w-5 h-5 border-b-2 border-l-2 border-emerald-400"></div>
+                        <div className="w-5 h-5 border-b-2 border-r-2 border-emerald-400"></div>
+                      </div>
                     </div>
-                    <Sparkles className="w-8 h-8 text-emerald-400 animate-spin mb-2" />
-                    <span className="font-bold text-base">Extragem datele cu AI...</span>
-                    <span className="text-xs text-slate-300 mt-1">
-                      Identificăm magazinul, produsele, cantitățile și reducerile
-                    </span>
+
+                    <div className="relative z-20 flex flex-col items-center bg-slate-900/90 dark:bg-slate-950/90 border border-emerald-500/40 px-6 py-5 rounded-2xl shadow-2xl backdrop-blur-md">
+                      <div className="relative w-40 h-1.5 bg-emerald-950 rounded-full overflow-hidden mb-3">
+                        <div className="absolute inset-y-0 w-20 bg-emerald-400 rounded-full animate-[pulse_1s_infinite]"></div>
+                      </div>
+                      <div className="flex items-center gap-2.5 mb-1.5">
+                        <Sparkles className="w-5 h-5 text-emerald-400 animate-spin" />
+                        <span className="font-bold text-base tracking-tight text-emerald-100">Scanare optică AI în curs...</span>
+                      </div>
+                      <span className="text-xs text-slate-300 text-center max-w-xs">
+                        Identificăm magazinul, produsele, prețurile și reducerile de pe bon
+                      </span>
+                    </div>
+
+                    <style>{`
+                      @keyframes scanBeam {
+                        0%, 100% { top: 8%; opacity: 0.8; }
+                        50% { top: 92%; opacity: 1; }
+                      }
+                    `}</style>
                   </div>
                 )}
               </div>
