@@ -14,6 +14,7 @@ import { PriceQualityClassifier } from './PriceQualityClassifier.js';
 import {
   buildCanonicalAliasIndex,
   CanonicalAliasIndex,
+  type CanonicalAliasSource,
   collectProductIdsForCanonical,
   normalizeStoreIdKey,
   resolveCanonicalProductId
@@ -102,6 +103,7 @@ export class PriceComparisonService {
       includeStaleOffers?: boolean;
       maxOfferAgeDays?: number;
       requestedQuantity?: number;
+      aliasMap?: CanonicalAliasSource;
       now?: Date;
     }
   ): boolean {
@@ -116,6 +118,7 @@ export class PriceComparisonService {
 
     const contextResult = PriceQualityClassifier.validateOfferForContext(offer, {
       product,
+      aliasSource: options?.aliasMap,
       region: options?.region,
       useLoyaltyCards: options?.useLoyaltyCards ?? true,
       useCoupons: options?.useCoupons ?? false,

@@ -9,6 +9,8 @@ import {
 import { PriceComparisonService } from './PriceComparisonService.js';
 import {
   buildCanonicalAliasIndex,
+  type CanonicalAliasSource,
+  collectProductIdsForCanonical,
   resolveCanonicalProductId
 } from './ProductIdentityService.js';
 
@@ -264,7 +266,7 @@ export class ProductAlternativesService {
     stores: Store[];
     useLoyaltyCards?: boolean;
     limitPerGroup?: number;
-    aliasMap?: Map<string, string> | Record<string, string>;
+    aliasMap?: CanonicalAliasSource;
   }): ProductAlternativesResult {
     const {
       allProducts,

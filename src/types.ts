@@ -331,6 +331,8 @@ export interface ReceiptItem {
     totalPrice?: ReceiptFieldProvenance;
     discount?: ReceiptFieldProvenance;
     matchedProductId?: ReceiptFieldProvenance;
+    originalMatchedProductId?: string;
+    rejectedCycleMatchedProductId?: boolean;
   };
   rawLineText?: string;
   category?: ProductCategory;
@@ -424,6 +426,7 @@ export interface InAppPriceNotification {
   alertId: string;
   dedupeKey: string;
   productId: string;
+  originalProductId?: string;
   productName: string;
   alertType: PriceAlertType;
   title: string;
@@ -646,6 +649,7 @@ export interface SavingsSummary {
 export interface UserErrorReport {
   id: string;
   productId: string;
+  originalProductId?: string;
   productName: string;
   storeId?: string;
   errorType: 'price_mismatch' | 'wrong_product' | 'expired_promo' | 'wrong_category' | 'other';
@@ -783,6 +787,7 @@ export type PriceAuditCategory =
 export interface PriceAuditItem {
   offerId: string;
   productId: string;
+  originalProductId?: string;
   productName: string;
   brand: string;
   storeId: string;

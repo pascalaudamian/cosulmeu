@@ -29,7 +29,9 @@ import { PriceQualityClassifier } from './PriceQualityClassifier.js';
 import {
   buildCanonicalAliasIndex,
   CanonicalAliasIndex,
-  resolveCanonicalProductId
+  resolveCanonicalProductDetail,
+  resolveCanonicalProductId,
+  resolveProductReferenceMap
 } from './ProductIdentityService.js';
 
 function normalizeStoreKey(value: string): string {
@@ -420,17 +422,18 @@ export class BasketOptimizerService {
     candidates?: Array<{ id: string; name: string; brand: string }>;
   } {
     const aliasIndex = buildCanonicalAliasIndex(aliasSource ?? products);
-    const byIdMap = new Map(products.map(p => [p.id, p]));
-    const promoteCanonical = (prod: Product): Product => {
-      const canonId = resolveCanonicalProductId(prod.id, aliasIndex);
-      return canonId && byIdMap.has(canonId) ? byIdMap.get(canonId)! : prod;
-    };
+    const refMap = resolveProductReferenceMap(products, aliasIndex);
+    const canonicalMap = new Map<string, Product>();
+    for (const rootProd of refMap.values()) {
+      canonicalMap.set(rootProd.id, rootProd);
+    }
+    const canonicalProducts = Array.from(canonicalMap.values());
 
-    // 1. Exact EAN / GTIN (incl. normalized digits)
+    // 1. Exact EAN / GTIN (incl. normalized digits, promoting aliases to canonical root if non-cyclic)
     if (item.barcode && item.barcode.trim()) {
       const cleanBarcode = item.barcode.trim();
       const digitsOnly = normalizeBarcodeDigits(cleanBarcode);
-      const byBarcode = products.find(p => {
+      const barcodeMatches = products.filter(p => {
         if (!p.barcode) return false;
         const pClean = p.barcode.trim();
         if (pClean === cleanBarcode) return true;
@@ -440,17 +443,35 @@ export class BasketOptimizerService {
         }
         return false;
       });
-      if (byBarcode) {
-        return { status: 'matched', product: promoteCanonical(byBarcode), confidence: 'exact_ean' };
+      // Preferăm rădăcina canonică dacă există; în lipsă, promovăm un alias valid non-ciclic
+      for (const candidate of barcodeMatches) {
+        const resolved = refMap.get(candidate.id);
+        if (resolved) {
+          return { status: 'matched', product: resolved, confidence: 'exact_ean' };
+        }
       }
     }
 
-    // 2. Exact internal ID (with multi-hop canonical alias resolution)
+    // 2. Exact internal ID (multi-hop canonical resolution; nu acceptă cicluri sau aliasuri orfane)
     if (item.productId) {
-      const resolvedId = resolveCanonicalProductId(item.productId, aliasIndex);
-      const byId = (resolvedId ? byIdMap.get(resolvedId) : undefined) || byIdMap.get(item.productId);
-      if (byId) {
-        return { status: 'matched', product: promoteCanonical(byId), confidence: 'exact_id' };
+      const detail = resolveCanonicalProductDetail(item.productId, aliasIndex, {
+        knownProductIds: new Set(products.map(p => p.id))
+      });
+      if (detail.cycleDetected) {
+        return {
+          status: 'unconfident',
+          reasonRo: `Referința produsului (${item.productId}) face parte dintr-un lanț canonic invalid/ciclic.`
+        };
+      }
+      if (detail.wasAlias && !detail.found) {
+        return {
+          status: 'unconfident',
+          reasonRo: `Referința produsului (${item.productId}) este un alias orfan fără rădăcină canonică validă.`
+        };
+      }
+      const resolvedProd = refMap.get(item.productId);
+      if (resolvedProd) {
+        return { status: 'matched', product: resolvedProd, confidence: 'exact_id' };
       }
     }
 
@@ -462,12 +483,12 @@ export class BasketOptimizerService {
       };
     }
 
-    // 3. Exact Brand + Name + Weight + Unit
+    // 3. Exact Brand + Name + Weight + Unit (exclusiv pe rădăcini canonice deduplicate)
     const itemBrandNorm = normalizeText(item.brand || item.preferredBrand || '');
     const itemSpec = extractPackageSpecFromText(item.name || '');
     const itemReqUnit = normalizeUnitToken(item.unit);
 
-    const exactBrandNameWeightMatches = products.filter(p => {
+    const exactBrandNameWeightMatches = canonicalProducts.filter(p => {
       if (!this.areProductAttributesCompatible(item, p)) return false;
       const pName = normalizeText(p.name);
       const pBrand = normalizeText(p.brand);
@@ -498,8 +519,8 @@ export class BasketOptimizerService {
       return { status: 'matched', product: exactBrandNameWeightMatches[0], confidence: matchConfidence };
     }
 
-    // Exact normalized name match (single compatible candidate)
-    const exactMatches = products.filter(
+    // Exact normalized name match (single compatible canonical candidate; blochează potrivirile ambigue)
+    const exactMatches = canonicalProducts.filter(
       p => normalizeText(p.name) === cleanItemName && this.areProductAttributesCompatible(item, p)
     );
     if (exactMatches.length === 1) {
@@ -519,10 +540,10 @@ export class BasketOptimizerService {
       };
     }
 
-    // 4. High-confidence semantic token match ONLY on attribute-compatible products
+    // 4. High-confidence semantic token match ONLY on attribute-compatible canonical products
     const itemTokens = cleanItemName.split(' ').filter(t => t.length >= 2);
     if (itemTokens.length >= 2) {
-      const compatibleProducts = products.filter(p => this.areProductAttributesCompatible(item, p));
+      const compatibleProducts = canonicalProducts.filter(p => this.areProductAttributesCompatible(item, p));
       const scored = compatibleProducts
         .map(p => {
           const fullText = normalizeText(`${p.name} ${p.brand}`);
@@ -557,7 +578,7 @@ export class BasketOptimizerService {
     }
 
     // Provide potential candidates ONLY as suggestions without auto-matching
-    const potentialSuggestions = products
+    const potentialSuggestions = canonicalProducts
       .filter(p => {
         const pNorm = normalizeText(`${p.name} ${p.brand}`);
         return itemTokens.some(t => pNorm.includes(t));

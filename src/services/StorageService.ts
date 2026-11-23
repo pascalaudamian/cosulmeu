@@ -350,33 +350,83 @@ export class StorageService {
     }
   }
 
-  static deleteProducts(ids: string[]): { deletedCount: number } {
-    if (!ids || ids.length === 0) return { deletedCount: 0 };
-    const idSet = new Set(ids);
-    const deletedList = this.getDeletedProductIds();
-    const updatedDeletedList = Array.from(new Set([...deletedList, ...ids]));
-    safeSetItem(KEYS.DELETED_PRODUCT_IDS, JSON.stringify(updatedDeletedList));
+  static deleteProducts(ids: string[]): {
+    deletedCount: number;
+    blockedCount?: number;
+    blockedIds?: string[];
+    error?: string;
+  } {
+    if (!ids || ids.length === 0) return { deletedCount: 0, blockedCount: 0, blockedIds: [] };
 
-    const custom = this.getCustomProducts();
-    const updatedCustom = custom.filter(p => !idSet.has(p.id));
-    safeSetItem(KEYS.CUSTOM_PRODUCTS, JSON.stringify(updatedCustom));
-
-    // Also remove from tracked products
-    const tracked = this.getTrackedProducts();
-    const updatedTracked = tracked.filter((id: string) => !idSet.has(id));
-    safeSetItem(KEYS.TRACKED_PRODUCTS, JSON.stringify(updatedTracked));
-
-    // Also remove offers associated with deleted products
-    const offers = this.getProductOffers();
-    const updatedOffers = offers.filter(o => !idSet.has(o.productId));
-    this.saveProductOffers(updatedOffers);
-
-    // Also remove observations associated with deleted products
+    const allProducts = this.getAllProducts();
+    const aliasIndex = buildCanonicalAliasIndex(allProducts);
     const observations = this.getPriceObservations();
-    const updatedObs = observations.filter(o => !idSet.has(o.productId));
-    safeSetItem(KEYS.PRICE_OBSERVATIONS, JSON.stringify(updatedObs));
+    const obsProductIds = new Set(observations.map(o => o.productId).filter(Boolean));
 
-    return { deletedCount: ids.length };
+    const collectDownwardSubtree = (rootTargetId: string): string[] => {
+      const visited = new Set<string>([rootTargetId]);
+      const queue: string[] = [rootTargetId];
+      while (queue.length > 0) {
+        const curr = queue.shift()!;
+        const children = aliasIndex.childrenByCanonicalId.get(curr);
+        if (!children) continue;
+        for (const childId of children) {
+          if (!visited.has(childId)) {
+            visited.add(childId);
+            queue.push(childId);
+          }
+        }
+      }
+      return Array.from(visited);
+    };
+
+    const eligibleTargetIds: string[] = [];
+    const eligibleRootIds: string[] = [];
+    const blockedIds: string[] = [];
+
+    for (const rawId of Array.from(new Set(ids.filter(Boolean)))) {
+      const subtree = collectDownwardSubtree(rawId);
+      const hasObservations = subtree.some(nodeId => obsProductIds.has(nodeId));
+      if (hasObservations) {
+        blockedIds.push(rawId);
+      } else {
+        eligibleRootIds.push(rawId);
+        eligibleTargetIds.push(...subtree);
+      }
+    }
+
+    if (eligibleTargetIds.length > 0) {
+      const idSet = new Set(eligibleTargetIds);
+      const deletedList = this.getDeletedProductIds();
+      const updatedDeletedList = Array.from(new Set([...deletedList, ...eligibleTargetIds]));
+      safeSetItem(KEYS.DELETED_PRODUCT_IDS, JSON.stringify(updatedDeletedList));
+
+      const custom = this.getCustomProducts();
+      const updatedCustom = custom.filter(p => !idSet.has(p.id));
+      safeSetItem(KEYS.CUSTOM_PRODUCTS, JSON.stringify(updatedCustom));
+
+      // Also remove from tracked products
+      const tracked = this.getTrackedProducts();
+      const updatedTracked = tracked.filter((id: string) => !idSet.has(id));
+      safeSetItem(KEYS.TRACKED_PRODUCTS, JSON.stringify(updatedTracked));
+
+      // Also remove offers associated with eligible deleted products (price_observations stays strictly append-only)
+      const offers = this.getProductOffers();
+      const updatedOffers = offers.filter(o => !idSet.has(o.productId));
+      this.saveProductOffers(updatedOffers);
+    }
+
+    const error =
+      blockedIds.length > 0
+        ? `Ștergerea a fost blocată pentru ${blockedIds.length} produs(e) deoarece există observații istorice protejate în price_observations.`
+        : undefined;
+
+    return {
+      deletedCount: eligibleRootIds.length,
+      blockedCount: blockedIds.length,
+      blockedIds,
+      ...(error ? { error } : {})
+    };
   }
 
   static deleteProduct(id: string): boolean {
@@ -1336,7 +1386,14 @@ export class StorageService {
         if (resolved && resolved !== item.matchedProductId) {
           upgradedReceiptItems++;
           recItemsChanged = true;
-          return { ...item, matchedProductId: resolved };
+          const existingProv =
+            (item as any).provenance && typeof (item as any).provenance === 'object'
+              ? { ...((item as any).provenance as Record<string, unknown>) }
+              : {};
+          if (!existingProv.originalMatchedProductId) {
+            existingProv.originalMatchedProductId = item.matchedProductId;
+          }
+          return { ...item, matchedProductId: resolved, provenance: existingProv };
         }
         return item;
       });

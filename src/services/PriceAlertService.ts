@@ -15,6 +15,8 @@ import { PriceComparisonService } from './PriceComparisonService.js';
 import { PriceHistoryService } from './PriceHistoryService.js';
 import {
   buildCanonicalAliasIndex,
+  type CanonicalAliasSource,
+  resolveCanonicalProductDetail,
   resolveCanonicalProductId
 } from './ProductIdentityService.js';
 
@@ -79,7 +81,7 @@ export class PriceAlertService {
       alertType?: PriceAlertType;
       intervalDays?: PriceHistoryInterval;
       discountPercentForTarget?: number; // ex: 10 => prag cu 10% sub cel mai mic preț curent
-      aliasMap?: Map<string, string> | Record<string, string>;
+      aliasMap?: CanonicalAliasSource;
     }
   ): {
     createdAlerts: PriceAlert[];
@@ -94,7 +96,11 @@ export class PriceAlertService {
 
     const existingKeys = new Set(
       existingAlerts.map(a => {
-        const canonId = resolveCanonicalProductId(a.productId, aliasIndex) || a.productId;
+        const detail = resolveCanonicalProductDetail(a.productId, aliasIndex);
+        const canonId =
+          detail.cycleDetected || (detail.wasAlias && !detail.found)
+            ? `__invalid__:${a.productId}`
+            : (detail.found && detail.canonicalId ? detail.canonicalId : a.productId);
         return `${canonId}:${a.alertType || 'below_target'}:${a.intervalDays || ''}`;
       })
     );
@@ -121,8 +127,13 @@ export class PriceAlertService {
 
       const validOffers = offers
         .filter(o => {
-          const offerCanonId = resolveCanonicalProductId(o.productId, aliasIndex) || o.productId;
-          return offerCanonId === canonicalProductId && PriceComparisonService.isOfferValid(o, product);
+          const offerDetail = resolveCanonicalProductDetail(o.productId, aliasIndex);
+          if (offerDetail.cycleDetected || (offerDetail.wasAlias && !offerDetail.found)) return false;
+          const offerCanonId = offerDetail.found && offerDetail.canonicalId ? offerDetail.canonicalId : o.productId;
+          return (
+            offerCanonId === canonicalProductId &&
+            PriceComparisonService.isOfferValid(o, product, { aliasMap: aliasIndex })
+          );
         })
         .sort((a, b) => a.price - b.price);
 
@@ -170,7 +181,7 @@ export class PriceAlertService {
     observations?: PriceObservation[];
     stores?: Store[];
     existingNotifications?: InAppPriceNotification[];
-    aliasMap?: Map<string, string> | Record<string, string>;
+    aliasMap?: CanonicalAliasSource;
     now?: Date;
   }): {
     updatedAlerts: PriceAlert[];
@@ -196,7 +207,12 @@ export class PriceAlertService {
     const updatedAlerts: PriceAlert[] = [];
 
     for (const rawAlert of params.alerts) {
-      const canonicalProductId = resolveCanonicalProductId(rawAlert.productId, aliasIndex) || rawAlert.productId;
+      const alertDetail = resolveCanonicalProductDetail(rawAlert.productId, aliasIndex);
+      if (alertDetail.cycleDetected || (alertDetail.wasAlias && !alertDetail.found)) {
+        updatedAlerts.push(rawAlert);
+        continue;
+      }
+      const canonicalProductId = alertDetail.found && alertDetail.canonicalId ? alertDetail.canonicalId : rawAlert.productId;
       const alert: PriceAlert =
         canonicalProductId !== rawAlert.productId
           ? { ...rawAlert, productId: canonicalProductId }
@@ -212,8 +228,13 @@ export class PriceAlertService {
       const matchedProduct = productsById.get(canonicalProductId) || productsById.get(rawAlert.productId);
       const validOffers = params.offers
         .filter(o => {
-          const offerCanonId = resolveCanonicalProductId(o.productId, aliasIndex) || o.productId;
-          return offerCanonId === canonicalProductId && PriceComparisonService.isOfferValid(o, matchedProduct);
+          const offerDetail = resolveCanonicalProductDetail(o.productId, aliasIndex);
+          if (offerDetail.cycleDetected || (offerDetail.wasAlias && !offerDetail.found)) return false;
+          const offerCanonId = offerDetail.found && offerDetail.canonicalId ? offerDetail.canonicalId : o.productId;
+          return (
+            offerCanonId === canonicalProductId &&
+            PriceComparisonService.isOfferValid(o, matchedProduct, { aliasMap: aliasIndex })
+          );
         })
         .sort((a, b) => a.price - b.price);
 
@@ -256,7 +277,9 @@ export class PriceAlertService {
       } else if (alertType === 'interval_low') {
         const intervalDays: PriceHistoryInterval = alert.intervalDays || 90;
         const productObs = observations.filter(o => {
-          const obsCanonId = resolveCanonicalProductId(o.productId, aliasIndex) || o.productId;
+          const obsDetail = resolveCanonicalProductDetail(o.productId, aliasIndex);
+          if (obsDetail.cycleDetected || (obsDetail.wasAlias && !obsDetail.found)) return false;
+          const obsCanonId = obsDetail.found && obsDetail.canonicalId ? obsDetail.canonicalId : o.productId;
           return obsCanonId === canonicalProductId;
         });
         const timeline = productObs.map(o => ({

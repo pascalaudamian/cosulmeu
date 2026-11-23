@@ -10,6 +10,7 @@ import { PriceComparisonService } from './PriceComparisonService.js';
 import { PriceHistoryService } from './PriceHistoryService.js';
 import {
   buildCanonicalAliasIndex,
+  type CanonicalAliasSource,
   collectProductIdsForCanonical,
   normalizeBarcodeCandidates,
   normalizeStoreIdKey,
@@ -32,7 +33,7 @@ export function lookupProductByBarcode(params: {
   stores: Store[];
   observations?: PriceObservation[];
   retailerProducts?: RetailerProductRecord[];
-  aliasMap?: Map<string, string> | Record<string, string>;
+  aliasMap?: CanonicalAliasSource;
 }): BarcodeLookupResult {
   const cleaned = (params.barcode || '').replace(/\D/g, '').trim();
   const validation = validateAndNormalizeBarcode(params.barcode);

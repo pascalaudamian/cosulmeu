@@ -38,6 +38,8 @@ import { PriceExtractor } from '../indexing/catalog/PriceExtractor.ts';
 import {
   buildCanonicalAliasIndex,
   buildCanonicalExternalSku,
+  CanonicalAliasIndex,
+  type CanonicalProductNode,
   collectProductIdsForCanonical,
   normalizeBarcodeCandidates,
   normalizeStoreIdKey,
@@ -639,7 +641,11 @@ export class DatabaseService {
   static async getProducts(): Promise<Product[]> {
     if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
       const { StorageService } = await import('../services/StorageService.ts');
-      return StorageService.getAllProducts();
+      const allProducts = StorageService.getAllProducts();
+      const aliasIndex = buildCanonicalAliasIndex(allProducts);
+      return allProducts.filter(
+        p => !p.canonicalProductId && resolveCanonicalProductId(p.id, aliasIndex) === p.id
+      );
     }
     const pool = getPool();
     if (pool) {
@@ -701,64 +707,61 @@ export class DatabaseService {
   }
 
   /**
-   * Returnează harta completă alias_id -> canonical_product_id (rezolvată tranzitiv, fără cicluri).
+   * Returnează graful complet și brut de identitate canonică din baza de date (toate nodurile și muchiile,
+   * inclusiv auto-referințe, cicluri, lanțuri adânci și aliasuri orfane), fără pre-filtrare.
    */
-  static async getProductAliasMap(): Promise<Map<string, string>> {
-    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
-      const { StorageService } = await import('../services/StorageService.ts');
-      const all = StorageService.getAllProducts();
-      const index = buildCanonicalAliasIndex(all);
-      const out = new Map<string, string>();
-      for (const p of all) {
-        if (!p.canonicalProductId) continue;
-        const resolved = resolveCanonicalProductId(p.id, index);
-        if (resolved && resolved !== p.id) {
-          out.set(p.id, resolved);
-        }
-      }
-      return out;
+  static async getProductAliasIndex(options?: {
+    nodesOverride?: ReadonlyArray<CanonicalProductNode>;
+    supabaseClient?: any;
+  }): Promise<CanonicalAliasIndex> {
+    if (options?.nodesOverride) {
+      return buildCanonicalAliasIndex(options.nodesOverride);
     }
 
-    const pool = getPool();
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1' && !options?.supabaseClient) {
+      const { StorageService } = await import('../services/StorageService.ts');
+      return buildCanonicalAliasIndex(StorageService.getAllProducts());
+    }
+
+    const pool = options?.supabaseClient ? null : getPool();
     if (pool) {
       try {
         const res = await pool.query('SELECT id, canonical_product_id FROM products');
-        const index = buildCanonicalAliasIndex(res.rows);
-        const out = new Map<string, string>();
-        for (const r of res.rows) {
-          if (!r.canonical_product_id) continue;
-          const resolved = resolveCanonicalProductId(r.id, index);
-          if (resolved && resolved !== r.id) {
-            out.set(r.id, resolved);
-          }
-        }
-        return out;
+        return buildCanonicalAliasIndex(res.rows);
       } catch (err: any) {
-        console.warn('Postgres pool getProductAliasMap failed, falling back to Supabase:', err.message);
+        console.warn('Postgres pool getProductAliasIndex failed, falling back to Supabase:', err.message);
       }
     }
 
+    const client = options?.supabaseClient || supabase;
     try {
       const { data, error } = await fetchAllSupabaseRows((from, to) =>
-        supabase.from('products').select('id, canonical_product_id').range(from, to)
+        client.from('products').select('id, canonical_product_id').range(from, to)
       );
-      if (!error && Array.isArray(data) && data.length > 0) {
-        const index = buildCanonicalAliasIndex(data);
-        const out = new Map<string, string>();
-        for (const r of data) {
-          if (!r.canonical_product_id) continue;
-          const resolved = resolveCanonicalProductId(r.id, index);
-          if (resolved && resolved !== r.id) {
-            out.set(r.id, resolved);
-          }
-        }
-        return out;
+      if (!error && Array.isArray(data)) {
+        return buildCanonicalAliasIndex(data);
       }
     } catch {
-      // Fallback fără aliasuri
+      // Fallback sigur fără aliasuri ascunse
     }
 
-    return new Map<string, string>();
+    return buildCanonicalAliasIndex([]);
+  }
+
+  /**
+   * Returnează harta completă alias_id -> canonical_product_id (rezolvată tranzitiv, exclusiv mapări valide non-ciclice).
+   */
+  static async getProductAliasMap(): Promise<Map<string, string>> {
+    const index = await this.getProductAliasIndex();
+    const out = new Map<string, string>();
+    for (const [id, parentId] of index.parentById.entries()) {
+      if (!parentId) continue;
+      const resolved = resolveCanonicalProductId(id, index);
+      if (resolved && resolved !== id) {
+        out.set(id, resolved);
+      }
+    }
+    return out;
   }
 
   /**
@@ -766,15 +769,15 @@ export class DatabaseService {
    */
   static async getRetailerProductsWithBarcodes(): Promise<RetailerProductRecord[]> {
     const readLocalRetailerProducts = async (): Promise<RetailerProductRecord[]> => {
-      const [{ StorageService }, aliasMap] = await Promise.all([
+      const [{ StorageService }, aliasIndex] = await Promise.all([
         import('../services/StorageService.ts'),
-        this.getProductAliasMap()
+        this.getProductAliasIndex()
       ]);
       return StorageService.getRetailerProducts()
         .filter(r => Boolean(r?.barcode && r?.productId))
         .map(r => ({
           ...r,
-          productId: r.productId ? (resolveCanonicalProductId(String(r.productId), aliasMap) || String(r.productId)) : null
+          productId: r.productId ? (resolveCanonicalProductId(String(r.productId), aliasIndex) || String(r.productId)) : null
         }));
     };
 
@@ -784,18 +787,18 @@ export class DatabaseService {
     const pool = getPool();
     if (pool) {
       try {
-        const [rpRes, aliasMap] = await Promise.all([
+        const [rpRes, aliasIndex] = await Promise.all([
           pool.query(
             `SELECT id, retailer_id, product_id, external_sku, url, scraped_name, scraped_brand, barcode, status
              FROM retailer_products
              WHERE barcode IS NOT NULL AND product_id IS NOT NULL`
           ),
-          this.getProductAliasMap()
+          this.getProductAliasIndex()
         ]);
         return rpRes.rows.map(r => ({
           id: String(r.id),
           retailerId: String(r.retailer_id),
-          productId: r.product_id ? (resolveCanonicalProductId(String(r.product_id), aliasMap) || String(r.product_id)) : null,
+          productId: r.product_id ? (resolveCanonicalProductId(String(r.product_id), aliasIndex) || String(r.product_id)) : null,
           externalSku: r.external_sku || undefined,
           url: r.url || undefined,
           scrapedName: r.scraped_name || 'Produs',
@@ -809,7 +812,7 @@ export class DatabaseService {
     }
 
     try {
-      const [rpRes, aliasMap] = await Promise.all([
+      const [rpRes, aliasIndex] = await Promise.all([
         fetchAllSupabaseRows((from, to) =>
           supabase
             .from('retailer_products')
@@ -818,13 +821,13 @@ export class DatabaseService {
             .not('product_id', 'is', null)
             .range(from, to)
         ),
-        this.getProductAliasMap()
+        this.getProductAliasIndex()
       ]);
       if (!rpRes.error && Array.isArray(rpRes.data)) {
         return rpRes.data.map(r => ({
           id: String(r.id),
           retailerId: String(r.retailer_id),
-          productId: r.product_id ? (resolveCanonicalProductId(String(r.product_id), aliasMap) || String(r.product_id)) : null,
+          productId: r.product_id ? (resolveCanonicalProductId(String(r.product_id), aliasIndex) || String(r.product_id)) : null,
           externalSku: r.external_sku || undefined,
           url: r.url || undefined,
           scrapedName: r.scraped_name || 'Produs',
@@ -1025,20 +1028,53 @@ export class DatabaseService {
   static async getOffers(): Promise<ProductOffer[]> {
     if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
       const { StorageService } = await import('../services/StorageService.ts');
-      return StorageService.getProductOffers().filter(
-        o =>
-          o.price > 0 &&
-          !o.isFlaggedAnomaly &&
-          !['demo', 'isolated', 'rejected'].includes(o.verificationStatus || 'verified')
-      );
+      const allProducts = StorageService.getAllProducts();
+      const aliasIndex = buildCanonicalAliasIndex(allProducts);
+      const normalizedOffers: ProductOffer[] = [];
+      for (const o of StorageService.getProductOffers()) {
+        if (
+          !(o.price > 0) ||
+          o.isFlaggedAnomaly ||
+          ['demo', 'isolated', 'rejected'].includes(o.verificationStatus || 'verified')
+        ) {
+          continue;
+        }
+        const detail = resolveCanonicalProductDetail(o.productId, aliasIndex);
+        if (detail.cycleDetected) continue;
+        if (aliasIndex.parentById.has(o.productId)) {
+          if (!detail.found || !detail.canonicalId) continue;
+          normalizedOffers.push(
+            detail.canonicalId !== o.productId ? { ...o, productId: detail.canonicalId } : o
+          );
+        } else {
+          normalizedOffers.push(o);
+        }
+      }
+      return latestCanonicalOffers(normalizedOffers);
     }
     const pool = getPool();
     if (pool) {
       try {
         const res = await pool.query(
-          `SELECT po.*, COALESCE(p.canonical_product_id, p.id) AS canonical_product_id
+          `WITH RECURSIVE canonical_map AS (
+             SELECT id AS node_id, id AS current_id, canonical_product_id, ARRAY[id::text]::text[] AS path, 0 AS depth
+             FROM products
+             UNION ALL
+             SELECT cm.node_id, p.id AS current_id, p.canonical_product_id, (cm.path || p.id::text)::text[], cm.depth + 1
+             FROM canonical_map cm
+             JOIN products p ON p.id = cm.canonical_product_id
+             WHERE cm.canonical_product_id IS NOT NULL
+               AND NOT (p.id::text = ANY(cm.path))
+               AND cm.depth < 16
+           ),
+           resolved_root AS (
+             SELECT node_id, current_id AS canonical_product_id
+             FROM canonical_map
+             WHERE canonical_product_id IS NULL
+           )
+           SELECT po.*, rr.canonical_product_id
            FROM product_offers po
-           JOIN products p ON p.id = po.product_id
+           JOIN resolved_root rr ON rr.node_id = po.product_id
            WHERE po.source != 'demo'
              AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
              AND COALESCE(po.is_flagged_anomaly, false) = false
@@ -1097,39 +1133,42 @@ export class DatabaseService {
         )
       ]);
       const data = offersRes.data.filter(r => !r.is_flagged_anomaly && Number(r.price) > 0);
-      const canonicalIdByProductId = new Map(
-        productsRes.data.map(product => [product.id, product.canonical_product_id || product.id])
-      );
+      const aliasIndex = buildCanonicalAliasIndex(productsRes.data || []);
 
       if (!offersRes.error && data.length > 0) {
-        const offers = data.map(r => ({
-          id: r.id,
-          productId: canonicalIdByProductId.get(r.product_id) || r.product_id,
-          storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
-          sourceId: r.source_id || undefined,
-          price: parseFloat(r.price),
-          originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
-          normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
-          promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
-          loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
-          unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
-          unitPriceMeasure: r.unit_price_measure || 'lei/buc',
-          isPromo: Boolean(r.is_promo),
-          promoDetails: r.promo_details || undefined,
-          loyaltyCardRequired: Boolean(r.loyalty_card_required),
-          loyaltyCardName: r.loyalty_card_name || undefined,
-          validUntil: r.valid_until ? String(r.valid_until).slice(0, 10) : undefined,
-          observationDate: r.observation_date ? String(r.observation_date).slice(0, 10) : new Date().toISOString().split('T')[0],
-          source: r.source || 'verified',
-          confidenceLevel: r.confidence_level || 'high',
-          verificationStatus: r.verification_status || 'verified',
-          lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
-          lastVerifiedAt: r.last_verified_at ? new Date(r.last_verified_at).toISOString() : undefined,
-          region: r.region || undefined,
-          isSponsored: Boolean(r.is_sponsored),
-          isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
-          anomalyReason: r.anomaly_reason || undefined
-        }));
+        const offers: ProductOffer[] = [];
+        for (const r of data) {
+          const detail = resolveCanonicalProductDetail(r.product_id, aliasIndex);
+          if (!detail.found || !detail.canonicalId || detail.cycleDetected) continue;
+          offers.push({
+            id: r.id,
+            productId: detail.canonicalId,
+            storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
+            sourceId: r.source_id || undefined,
+            price: parseFloat(r.price),
+            originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+            normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
+            promoPrice: r.promo_price ? parseFloat(r.promo_price) : undefined,
+            loyaltyPrice: r.loyalty_price ? parseFloat(r.loyalty_price) : undefined,
+            unitPrice: parseFloat(r.unit_price) || parseFloat(r.price),
+            unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+            isPromo: Boolean(r.is_promo),
+            promoDetails: r.promo_details || undefined,
+            loyaltyCardRequired: Boolean(r.loyalty_card_required),
+            loyaltyCardName: r.loyalty_card_name || undefined,
+            validUntil: r.valid_until ? String(r.valid_until).slice(0, 10) : undefined,
+            observationDate: r.observation_date ? String(r.observation_date).slice(0, 10) : new Date().toISOString().split('T')[0],
+            source: r.source || 'verified',
+            confidenceLevel: r.confidence_level || 'high',
+            verificationStatus: r.verification_status || 'verified',
+            lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString(),
+            lastVerifiedAt: r.last_verified_at ? new Date(r.last_verified_at).toISOString() : undefined,
+            region: r.region || undefined,
+            isSponsored: Boolean(r.is_sponsored),
+            isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
+            anomalyReason: r.anomaly_reason || undefined
+          });
+        }
         return latestCanonicalOffers(offers);
       }
     } catch (err: any) {
@@ -3202,6 +3241,61 @@ export class DatabaseService {
     let activeRetailersCount = 6; // Lidl, Kaufland, Carrefour, PENNY, Auchan, Mega Image
 
     const fallbackNow = new Date().toISOString();
+    const isIsolated = process.env.COSUL_MEU_ISOLATED_TEST === '1';
+
+    if (isIsolated) {
+      const [{ StorageService }, canonicalProds, canonicalOffers] = await Promise.all([
+        import('../services/StorageService.ts'),
+        this.getProducts(),
+        this.getOffers()
+      ]);
+      const extractedOffers = StorageService.getCatalogExtractedOffers();
+      const observations = StorageService.getPriceObservations();
+      return {
+        overallStatus: 'TOTUL FUNCȚIONEAZĂ',
+        statusMessage: 'Metrici calculate în modul izolat din produse canonice distincte.',
+        activeRetailersCount,
+        configuredRetailersCount,
+        activeSourcesCount,
+        configuredSourcesCount,
+        blockedSourcesCount,
+        runningImportsCount: 0,
+        dbStatus: {
+          connected: false,
+          configured: false,
+          persistenceMode: 'demo_memory',
+          dbType: 'none',
+          message: 'Rulează în mod izolat în memorie.'
+        },
+        kpis: {
+          configuredRetailers: { key: 'configuredRetailers', label: 'Retaileri Configurați', value: 8, period: 'Permanent', updatedAt: fallbackNow, status: 'positive' },
+          configuredSources: { key: 'configuredSources', label: 'Surse Configurate', value: configuredSourcesCount, period: 'Permanent', updatedAt: fallbackNow, status: 'positive' },
+          activeSources: { key: 'activeSources', label: 'Surse Funcționale', value: activeSourcesCount, period: 'Permanent', updatedAt: fallbackNow, status: 'positive' },
+          discoveredDocuments: { key: 'discoveredDocuments', label: 'Documente Descoperite', value: StorageService.getCatalogDocuments().length, period: 'Total', updatedAt: fallbackNow, status: 'neutral' },
+          downloadedDocuments: { key: 'downloadedDocuments', label: 'Documente Descărcate', value: 0, period: 'Total', updatedAt: fallbackNow, status: 'neutral' },
+          extractedProducts: { key: 'extractedProducts', label: 'Produse Extrase', value: extractedOffers.length, period: 'Total', updatedAt: fallbackNow, status: 'neutral' },
+          distinctProducts: { key: 'distinctProducts', label: 'Produse Distincte', value: canonicalProds.length, period: 'Catalog Public', updatedAt: fallbackNow, status: 'positive' },
+          newProducts: { key: 'newProducts', label: 'Produse Noi', value: 0, period: 'Ultima rulare', updatedAt: fallbackNow, status: 'neutral' },
+          updatedProducts: { key: 'updatedProducts', label: 'Produse Actualizate', value: 0, period: 'Ultima rulare', updatedAt: fallbackNow, status: 'neutral' },
+          extractedOffers: { key: 'extractedOffers', label: 'Oferte Extrase', value: extractedOffers.length, period: 'Staging', updatedAt: fallbackNow, status: 'neutral' },
+          validatedOffers: { key: 'validatedOffers', label: 'Oferte Validate', value: extractedOffers.filter(o => o.stagingStatus === 'VALIDATED').length, period: 'Staging', updatedAt: fallbackNow, status: 'neutral' },
+          approvedOffers: { key: 'approvedOffers', label: 'Oferte Aprobate', value: extractedOffers.filter(o => o.stagingStatus === 'APPROVED').length, period: 'Staging', updatedAt: fallbackNow, status: 'neutral' },
+          publishedOffers: { key: 'publishedOffers', label: 'Oferte Publicate', value: canonicalOffers.length, period: 'Catalog Public', updatedAt: fallbackNow, status: 'positive' },
+          changedPrices: { key: 'changedPrices', label: 'Prețuri Modificate', value: observations.length, period: 'Istoric', updatedAt: fallbackNow, status: 'neutral' },
+          itemsWithoutPrice: { key: 'itemsWithoutPrice', label: 'Produse Fără Preț', value: 0, period: 'Protecție', updatedAt: fallbackNow, status: 'neutral' },
+          processingErrors: { key: 'processingErrors', label: 'Erori de Procesare', value: 0, period: 'Total', updatedAt: fallbackNow, status: 'neutral' }
+        },
+        pipelineStages: [
+          { stage: 'discovery', name: 'Descoperire', status: 'PASS', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'download', name: 'Descărcare', status: 'PASS', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'parse', name: 'Parsare', status: 'PASS', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'validation', name: 'Validare', status: 'PASS', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'approval', name: 'Aprobare', status: 'PASS', processedCount: 0, pendingCount: 0, errorCount: 0 },
+          { stage: 'publishing', name: 'Publicare', status: 'PASS', processedCount: 0, pendingCount: 0, errorCount: 0 }
+        ],
+        activeAlerts: []
+      };
+    }
 
     if (!pool) {
       return {
@@ -3255,7 +3349,7 @@ export class DatabaseService {
     try {
       const countsQuery = await pool.query(`
         SELECT 
-          (SELECT count(*) FROM products) AS distinct_products,
+          (SELECT count(*) FROM products WHERE canonical_product_id IS NULL) AS distinct_products,
           (SELECT count(*) FROM product_offers) AS published_offers,
           (SELECT count(*) FROM price_observations) AS price_observations,
           (SELECT count(*) FROM promotions WHERE ends_at IS NULL OR ends_at >= CURRENT_DATE) AS active_promotions,
@@ -3679,8 +3773,10 @@ export class DatabaseService {
     retailer?: string;
   }): Promise<{ products: any[]; total: number }> {
     const pool = getPool();
-    if (!pool) {
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1' || !pool) {
       let all = await this.getProducts();
+      const offers: ProductOffer[] = await this.getOffers();
+
       if (params.search && params.search.trim()) {
         const q = params.search.toLowerCase().trim();
         all = all.filter(p =>
@@ -3692,17 +3788,48 @@ export class DatabaseService {
       if (params.category && params.category !== 'toate') {
         all = all.filter(p => p.category === params.category);
       }
-      if (params.retailer && params.retailer !== 'toate') {
-        const cleanRet = params.retailer.trim().toLowerCase().replace(/^store-/, '');
-        const offers: ProductOffer[] = await this.getOffers();
-        const matchingIds = new Set(
-          offers
-            .filter((o: ProductOffer) => (o.storeId || '').toLowerCase().replace(/^store-/, '') === cleanRet)
-            .map((o: ProductOffer) => o.productId)
-        );
-        all = all.filter(p => matchingIds.has(p.id));
+
+      const offersByProduct = new Map<string, Map<string, ProductOffer>>();
+      for (const off of offers) {
+        const storeKey = normalizeStoreIdKey(off.storeId);
+        let storeMap = offersByProduct.get(off.productId);
+        if (!storeMap) {
+          storeMap = new Map<string, ProductOffer>();
+          offersByProduct.set(off.productId, storeMap);
+        }
+        const prev = storeMap.get(storeKey);
+        const curDate = `${off.observationDate || ''}:${off.lastChecked || ''}`;
+        const prevDate = prev ? `${prev.observationDate || ''}:${prev.lastChecked || ''}` : '';
+        if (!prev || curDate >= prevDate) {
+          storeMap.set(storeKey, off);
+        }
       }
-      return { products: all.slice(params.offset, params.offset + params.limit), total: all.length };
+
+      if (params.retailer && params.retailer !== 'toate') {
+        const cleanRet = normalizeStoreIdKey(params.retailer);
+        all = all.filter(p => offersByProduct.get(p.id)?.has(cleanRet));
+      }
+
+      const total = all.length;
+      const paged = all.slice(params.offset, params.offset + params.limit).map(p => {
+        const storeOffers = Array.from(offersByProduct.get(p.id)?.values() || []);
+        const prices = storeOffers.map(o => o.price);
+        return {
+          ...p,
+          offersCount: storeOffers.length,
+          minPrice: prices.length > 0 ? Math.min(...prices) : null,
+          maxPrice: prices.length > 0 ? Math.max(...prices) : null,
+          offers: storeOffers.map(o => ({
+            storeId: o.storeId,
+            price: o.price,
+            isPromo: o.isPromo,
+            normalPrice: o.normalPrice,
+            promoPrice: o.promoPrice,
+            loyaltyPrice: o.loyaltyPrice
+          }))
+        };
+      });
+      return { products: paged, total };
     }
 
     try {
@@ -3726,7 +3853,8 @@ export class DatabaseService {
         const cleanRet = params.retailer.trim().toLowerCase().replace(/^store-/, '');
         conditions.push(`EXISTS (
           SELECT 1 FROM product_offers po_ret
-          WHERE (po_ret.product_id = p.id OR po_ret.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
+          JOIN resolved_root rr_ret ON rr_ret.node_id = po_ret.product_id
+          WHERE rr_ret.root_id = p.id
             AND COALESCE(po_ret.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
             AND COALESCE(po_ret.is_flagged_anomaly, false) = false
             AND po_ret.price > 0
@@ -3738,7 +3866,26 @@ export class DatabaseService {
 
       const whereClause = conditions.join(' AND ');
 
-      const countRes = await pool.query(`SELECT count(*) FROM products p WHERE ${whereClause}`, values);
+      const countRes = await pool.query(
+        `WITH RECURSIVE canonical_map AS (
+           SELECT id AS node_id, id AS current_id, canonical_product_id, ARRAY[id::text]::text[] AS path, 0 AS depth
+           FROM products
+           UNION ALL
+           SELECT cm.node_id, p2.id AS current_id, p2.canonical_product_id, (cm.path || p2.id::text)::text[], cm.depth + 1
+           FROM canonical_map cm
+           JOIN products p2 ON p2.id = cm.canonical_product_id
+           WHERE cm.canonical_product_id IS NOT NULL
+             AND NOT (p2.id::text = ANY(cm.path))
+             AND cm.depth < 16
+         ),
+         resolved_root AS (
+           SELECT node_id, current_id AS root_id
+           FROM canonical_map
+           WHERE canonical_product_id IS NULL
+         )
+         SELECT count(*) FROM products p WHERE ${whereClause}`,
+        values
+      );
       const total = parseInt(countRes.rows[0]?.count || '0', 10);
 
       const limitIdx = idx;
@@ -3747,6 +3894,63 @@ export class DatabaseService {
       values.push(params.offset);
 
       const query = `
+        WITH RECURSIVE canonical_map AS (
+          SELECT id AS node_id, id AS current_id, canonical_product_id, ARRAY[id::text]::text[] AS path, 0 AS depth
+          FROM products
+          UNION ALL
+          SELECT cm.node_id, p2.id AS current_id, p2.canonical_product_id, (cm.path || p2.id::text)::text[], cm.depth + 1
+          FROM canonical_map cm
+          JOIN products p2 ON p2.id = cm.canonical_product_id
+          WHERE cm.canonical_product_id IS NOT NULL
+            AND NOT (p2.id::text = ANY(cm.path))
+            AND cm.depth < 16
+        ),
+        resolved_root AS (
+          SELECT node_id, current_id AS root_id
+          FROM canonical_map
+          WHERE canonical_product_id IS NULL
+        ),
+        paged_products AS (
+          SELECT p.*
+          FROM products p
+          WHERE ${whereClause}
+          ORDER BY p.updated_at DESC
+          LIMIT $${limitIdx} OFFSET $${offsetIdx}
+        ),
+        latest_offers_per_root AS (
+          SELECT DISTINCT ON (rr.root_id, po.store_id)
+            rr.root_id,
+            po.store_id,
+            po.price,
+            po.is_promo,
+            po.normal_price,
+            po.promo_price,
+            po.loyalty_price
+          FROM product_offers po
+          JOIN resolved_root rr ON rr.node_id = po.product_id
+          JOIN paged_products pp ON pp.id = rr.root_id
+          WHERE COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+            AND COALESCE(po.is_flagged_anomaly, false) = false
+            AND po.price > 0
+          ORDER BY rr.root_id, po.store_id, po.observation_date DESC, po.last_checked DESC
+        ),
+        agg_offers AS (
+          SELECT
+            root_id,
+            count(*)::int AS "offersCount",
+            min(price) AS "minPrice",
+            max(price) AS "maxPrice",
+            json_agg(json_build_object(
+              'storeId', store_id,
+              'price', price,
+              'isPromo', is_promo,
+              'normalPrice', normal_price,
+              'promoPrice', promo_price,
+              'loyaltyPrice', loyalty_price
+            )) AS "offers"
+          FROM latest_offers_per_root
+          GROUP BY root_id
+        )
         SELECT 
           p.id, p.name, p.brand, p.category, p.default_unit AS "defaultUnit",
           p.package_weight_or_volume AS "packageWeightOrVolume", p.package_unit AS "packageUnit",
@@ -3754,47 +3958,13 @@ export class DatabaseService {
           p.is_bio AS "isBio", p.is_romanian_product AS "isRomanianProduct",
           p.base_reference_price AS "baseReferencePrice",
           p.created_at AS "createdAt", p.updated_at AS "updatedAt",
-  (SELECT count(*) FROM (
-  SELECT DISTINCT ON (po.store_id) po.store_id
-  FROM product_offers po
-  WHERE (po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
-    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
-    AND COALESCE(po.is_flagged_anomaly, false) = false
-    AND po.price > 0
-  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
-  ) current_offers) AS "offersCount",
-  (SELECT min(current_offers.price) FROM (
-  SELECT DISTINCT ON (po.store_id) po.store_id, po.price
-  FROM product_offers po
-  WHERE (po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
-    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
-    AND COALESCE(po.is_flagged_anomaly, false) = false
-    AND po.price > 0
-  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
-  ) current_offers) AS "minPrice",
-  (SELECT max(current_offers.price) FROM (
-  SELECT DISTINCT ON (po.store_id) po.store_id, po.price
-  FROM product_offers po
-  WHERE (po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
-    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
-    AND COALESCE(po.is_flagged_anomaly, false) = false
-    AND po.price > 0
-  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
-  ) current_offers) AS "maxPrice",
-  (SELECT json_agg(json_build_object('storeId', current_offers.store_id, 'price', current_offers.price, 'isPromo', current_offers.is_promo, 'normalPrice', current_offers.normal_price, 'promoPrice', current_offers.promo_price, 'loyaltyPrice', current_offers.loyalty_price))
-  FROM (
-  SELECT DISTINCT ON (po.store_id) po.store_id, po.price, po.is_promo, po.normal_price, po.promo_price, po.loyalty_price
-  FROM product_offers po
-  WHERE (po.product_id = p.id OR po.product_id IN (SELECT alias.id FROM products alias WHERE alias.canonical_product_id = p.id))
-    AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
-    AND COALESCE(po.is_flagged_anomaly, false) = false
-    AND po.price > 0
-  ORDER BY po.store_id, po.observation_date DESC, po.last_checked DESC
-  ) current_offers) AS "offers"
-        FROM products p
-        WHERE ${whereClause}
+          COALESCE(ao."offersCount", 0) AS "offersCount",
+          ao."minPrice",
+          ao."maxPrice",
+          ao."offers"
+        FROM paged_products p
+        LEFT JOIN agg_offers ao ON ao.root_id = p.id
         ORDER BY p.updated_at DESC
-        LIMIT $${limitIdx} OFFSET $${offsetIdx}
       `;
 
       const res = await pool.query(query, values);
@@ -3806,10 +3976,22 @@ export class DatabaseService {
   }
 
   /**
-   * Ștergere / delistare produse (individual sau în calup) cu ștergere în cascadă
+   * Ștergere / delistare sigură a produselor (blochează ștergerea dacă există istoric append-only în price_observations)
    */
-  static async deleteProducts(productIds: string[]): Promise<{ deletedCount: number }> {
-    if (!productIds || productIds.length === 0) return { deletedCount: 0 };
+  static async deleteProducts(productIds: string[]): Promise<{
+    deletedCount: number;
+    blockedCount?: number;
+    blockedIds?: string[];
+    partialModification?: boolean;
+    partialDeletions?: Array<{ table: string; targetIdsCount: number }>;
+    error?: string;
+  }> {
+    if (!productIds || productIds.length === 0) return { deletedCount: 0, blockedCount: 0, blockedIds: [] };
+
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      return StorageService.deleteProducts(productIds);
+    }
 
     const pool = getPool();
     if (pool) {
@@ -3817,58 +3999,337 @@ export class DatabaseService {
       try {
         await client.query('BEGIN');
 
-        // Găsim toate ID-urile (inclusiv aliasuri canonice)
-        const allIdsRes = await client.query(
-          `SELECT id FROM products WHERE id = ANY($1) OR canonical_product_id = ANY($1)`,
+        // Colectare descendenți multi-hop cu protecție împotriva ciclurilor
+        const treeRes = await client.query(
+          `WITH RECURSIVE descendants AS (
+             SELECT id AS root_req_id, id AS node_id, ARRAY[id::text]::text[] AS path, 0 AS depth
+             FROM products
+             WHERE id = ANY($1::varchar[])
+             UNION ALL
+             SELECT d.root_req_id, p.id AS node_id, (d.path || p.id::text)::text[], d.depth + 1
+             FROM products p
+             JOIN descendants d ON p.canonical_product_id = d.node_id
+             WHERE NOT (p.id::text = ANY(d.path))
+               AND d.depth < 16
+           )
+           SELECT root_req_id, node_id FROM descendants`,
           [productIds]
         );
-        const targetIds = Array.from(new Set([...productIds, ...allIdsRes.rows.map(r => r.id)]));
 
-        // Ștergere date corelate (inclusiv product_match_candidates cu coloana matched_product_id și product_matches)
-        await client.query(`DELETE FROM price_observations WHERE product_id = ANY($1)`, [targetIds]);
-        await client.query(`DELETE FROM product_offers WHERE product_id = ANY($1)`, [targetIds]);
-        await client.query(`DELETE FROM promotions WHERE product_id = ANY($1)`, [targetIds]);
-        await client.query(`DELETE FROM retailer_products WHERE product_id = ANY($1)`, [targetIds]);
-        await client.query(`DELETE FROM product_match_candidates WHERE matched_product_id = ANY($1)`, [targetIds]);
-        await client.query(`DELETE FROM product_matches WHERE product_id = ANY($1)`, [targetIds]);
+        const subtreeByReqId = new Map<string, Set<string>>();
+        for (const reqId of productIds) {
+          subtreeByReqId.set(reqId, new Set([reqId]));
+        }
+        for (const row of treeRes.rows) {
+          const set = subtreeByReqId.get(String(row.root_req_id)) || new Set<string>();
+          set.add(String(row.node_id));
+          subtreeByReqId.set(String(row.root_req_id), set);
+        }
 
-        // Ștergere aliasuri și apoi produse principale
-        await client.query(`DELETE FROM products WHERE canonical_product_id = ANY($1)`, [productIds]);
-        const delRes = await client.query(`DELETE FROM products WHERE id = ANY($1)`, [productIds]);
+        const allCandidateIds = Array.from(
+          new Set(Array.from(subtreeByReqId.values()).flatMap(s => Array.from(s)))
+        );
+
+        // Verificare strictă: NU ștergem niciodată price_observations (tabel protejat append-only)
+        const obsCheckRes = await client.query(
+          `SELECT DISTINCT product_id FROM price_observations WHERE product_id = ANY($1::varchar[])`,
+          [allCandidateIds]
+        );
+        const obsProtectedIds = new Set(obsCheckRes.rows.map(r => String(r.product_id)));
+
+        const blockedIds: string[] = [];
+        const eligibleSubtreeIds = new Set<string>();
+
+        for (const reqId of Array.from(new Set(productIds))) {
+          const subtree = subtreeByReqId.get(reqId) || new Set([reqId]);
+          const hasObs = Array.from(subtree).some(nid => obsProtectedIds.has(nid));
+          if (hasObs) {
+            blockedIds.push(reqId);
+          } else {
+            for (const nid of subtree) eligibleSubtreeIds.add(nid);
+          }
+        }
+
+        const targetIds = Array.from(eligibleSubtreeIds);
+        let deletedCount = 0;
+
+        if (targetIds.length > 0) {
+          await client.query(`DELETE FROM product_offers WHERE product_id = ANY($1)`, [targetIds]);
+          await client.query(`DELETE FROM promotions WHERE product_id = ANY($1)`, [targetIds]);
+          await client.query(`DELETE FROM retailer_products WHERE product_id = ANY($1)`, [targetIds]);
+          await client.query(`DELETE FROM product_match_candidates WHERE matched_product_id = ANY($1)`, [targetIds]);
+          await client.query(`DELETE FROM product_matches WHERE product_id = ANY($1)`, [targetIds]);
+          const delRes = await client.query(`DELETE FROM products WHERE id = ANY($1)`, [targetIds]);
+          deletedCount = delRes.rowCount || 0;
+        }
 
         await client.query('COMMIT');
         invalidateCatalogOptimizationCache();
-        return { deletedCount: delRes.rowCount || 0 };
+
+        const error =
+          blockedIds.length > 0
+            ? `Ștergerea a fost blocată pentru ${blockedIds.length} produs(e) deoarece au observații istorice protejate în price_observations.`
+            : undefined;
+        return {
+          deletedCount,
+          blockedCount: blockedIds.length,
+          blockedIds,
+          ...(error ? { error } : {})
+        };
       } catch (err: any) {
         await client.query('ROLLBACK');
         console.error('Eroare la ștergerea produselor din PostgreSQL:', err.message);
+        return {
+          deletedCount: 0,
+          blockedCount: productIds.length,
+          blockedIds: productIds,
+          error: `Ștergerea nu a putut fi finalizată sigur: ${err.message}`
+        };
       } finally {
         client.release();
       }
     }
 
-    // Fallback Supabase
-    try {
-      await supabase.from('price_observations').delete().in('product_id', productIds);
-      await supabase.from('product_offers').delete().in('product_id', productIds);
-      await supabase.from('promotions').delete().in('product_id', productIds);
-      await supabase.from('retailer_products').delete().in('product_id', productIds);
-      await supabase.from('product_match_candidates').delete().in('matched_product_id', productIds);
-      await supabase.from('product_matches').delete().in('product_id', productIds);
-      await supabase.from('products').delete().in('canonical_product_id', productIds);
-      const { data } = await supabase.from('products').delete().in('id', productIds).select('id');
-      invalidateCatalogOptimizationCache();
-      return { deletedCount: data?.length || productIds.length };
-    } catch (err: any) {
-      console.warn('Eroare Supabase deleteProducts:', err.message);
+    // Fallback Supabase fail-closed (verifică price_observations exhaustiv, fără a executa DELETE asupra tabelului append-only)
+    return this.deleteProductsViaSupabase(productIds);
+  }
+
+  /**
+   * Execuție fail-closed pentru ștergerea produselor prin clientul Supabase:
+   * - Verifică `error` și forma validă a răspunsului pe fiecare interogare de protecție și pe fiecare `DELETE`.
+   * - Verifică exhaustiv toate observațiile din `price_observations` fără `.limit(1000)` și fără a presupune o limită fixă de pagină.
+   * - La orice eroare sau rezultat ambiguu înainte de prima ștergere oprește operația cu `deletedCount: 0` și ZERO apeluri `DELETE`.
+   * - Deoarece Supabase REST nu oferă tranzacții multi-tabel, raportează explicit modificările parțiale dacă o ștergere eșuează pe parcurs.
+   */
+  static async deleteProductsViaSupabase(
+    productIds: string[],
+    supabaseClientOverride?: any
+  ): Promise<{
+    deletedCount: number;
+    blockedCount?: number;
+    blockedIds?: string[];
+    partialModification?: boolean;
+    partialDeletions?: Array<{ table: string; targetIdsCount: number }>;
+    error?: string;
+  }> {
+    const uniqueRequestedIds = Array.from(
+      new Set((productIds || []).map(id => String(id || '').trim()).filter(Boolean))
+    );
+    if (uniqueRequestedIds.length === 0) {
+      return { deletedCount: 0, blockedCount: 0, blockedIds: [], partialModification: false, partialDeletions: [] };
     }
 
-    return { deletedCount: productIds.length };
+    const client = supabaseClientOverride || supabase;
+    const partialDeletions: Array<{ table: string; targetIdsCount: number }> = [];
+    const deletedProductIds = new Set<string>();
+    let deletedCount = 0;
+
+    try {
+      const { data: prodNodes, error: prodNodesError } = await fetchAllSupabaseRows((from, to) =>
+        client.from('products').select('id, canonical_product_id').range(from, to)
+      );
+      if (prodNodesError || !Array.isArray(prodNodes)) {
+        return {
+          deletedCount: 0,
+          blockedCount: uniqueRequestedIds.length,
+          blockedIds: uniqueRequestedIds,
+          partialModification: false,
+          partialDeletions: [],
+          error: `Ștergerea a fost oprită: nu am putut verifica arborele produselor (${prodNodesError?.message || 'răspuns invalid sau ambiguu la products'}).`
+        };
+      }
+
+      const aliasIdx = buildCanonicalAliasIndex(prodNodes);
+      const collectSubtree = (rootId: string): string[] => {
+        const visited = new Set<string>([rootId]);
+        const q = [rootId];
+        while (q.length > 0) {
+          const cur = q.shift()!;
+          const ch = aliasIdx.childrenByCanonicalId.get(cur);
+          if (!ch) continue;
+          for (const c of ch) {
+            if (!visited.has(c)) {
+              visited.add(c);
+              q.push(c);
+            }
+          }
+        }
+        return Array.from(visited);
+      };
+
+      const candidateAll = Array.from(new Set(uniqueRequestedIds.flatMap(collectSubtree)));
+      const obsProtected = new Set<string>();
+      const OBS_CHUNK_SIZE = 100;
+      const OBS_PAGE_SIZE = 1000;
+
+      for (let i = 0; i < candidateAll.length; i += OBS_CHUNK_SIZE) {
+        let remaining = candidateAll.slice(i, i + OBS_CHUNK_SIZE);
+        let offset = 0;
+
+        while (remaining.length > 0) {
+          const { data: obsRows, error: obsError } = await client
+            .from('price_observations')
+            .select('product_id')
+            .in('product_id', remaining)
+            .range(offset, offset + OBS_PAGE_SIZE - 1);
+
+          if (obsError || !Array.isArray(obsRows)) {
+            return {
+              deletedCount: 0,
+              blockedCount: uniqueRequestedIds.length,
+              blockedIds: uniqueRequestedIds,
+              partialModification: false,
+              partialDeletions: [],
+              error: `Ștergerea a fost oprită înainte de orice mutație: verificarea protecției price_observations a eșuat sau a returnat un rezultat ambiguu (${obsError?.message || 'răspuns non-array'}).`
+            };
+          }
+
+          if (obsRows.length === 0) {
+            break;
+          }
+
+          let addedNew = 0;
+          for (const r of obsRows) {
+            if (!r || typeof r.product_id !== 'string' || !r.product_id.trim()) {
+              return {
+                deletedCount: 0,
+                blockedCount: uniqueRequestedIds.length,
+                blockedIds: uniqueRequestedIds,
+                partialModification: false,
+                partialDeletions: [],
+                error: 'Ștergerea a fost oprită: rând ambiguu fără product_id valid returnat de price_observations.'
+              };
+            }
+            const pid = r.product_id.trim();
+            if (!obsProtected.has(pid)) {
+              obsProtected.add(pid);
+              addedNew++;
+            }
+          }
+
+          const nextRemaining = remaining.filter(id => !obsProtected.has(id));
+          if (nextRemaining.length === 0) {
+            break;
+          }
+          if (nextRemaining.length < remaining.length || addedNew > 0) {
+            remaining = nextRemaining;
+            offset = 0;
+          } else {
+            offset += obsRows.length;
+          }
+        }
+      }
+
+      const blockedIds: string[] = [];
+      const eligibleSubtrees: Array<{ reqId: string; ids: string[] }> = [];
+      for (const reqId of uniqueRequestedIds) {
+        const sub = collectSubtree(reqId);
+        if (sub.some(nid => obsProtected.has(nid))) {
+          blockedIds.push(reqId);
+        } else {
+          eligibleSubtrees.push({ reqId, ids: sub });
+        }
+      }
+
+      const targetIds = Array.from(new Set(eligibleSubtrees.flatMap(entry => entry.ids)));
+
+      if (targetIds.length > 0) {
+        const DELETE_CHUNK_SIZE = 100;
+        const childTables: Array<{ table: string; column: string }> = [
+          { table: 'product_offers', column: 'product_id' },
+          { table: 'promotions', column: 'product_id' },
+          { table: 'retailer_products', column: 'product_id' },
+          { table: 'product_match_candidates', column: 'matched_product_id' },
+          { table: 'product_matches', column: 'product_id' }
+        ];
+
+        for (let i = 0; i < targetIds.length; i += DELETE_CHUNK_SIZE) {
+          const chunk = targetIds.slice(i, i + DELETE_CHUNK_SIZE);
+
+          for (const { table, column } of childTables) {
+            const { error: delChildErr } = await client
+              .from(table)
+              .delete()
+              .in(column, chunk);
+            if (delChildErr) {
+              const notDeletedRequestedIds = uniqueRequestedIds.filter(id => !deletedProductIds.has(id));
+              const hasPartial = partialDeletions.length > 0 || deletedCount > 0;
+              const tablesList = Array.from(new Set(partialDeletions.map(p => p.table))).join(', ');
+              return {
+                deletedCount,
+                blockedCount: notDeletedRequestedIds.length,
+                blockedIds: notDeletedRequestedIds,
+                partialModification: hasPartial,
+                partialDeletions: [...partialDeletions],
+                error: hasPartial
+                  ? `Ștergerea a eșuat parțial la ${table} (${delChildErr.message || 'eroare DELETE'}). Atenție: ștergeri anterioare non-tranzacționale au fost deja aplicate pe [${tablesList}].`
+                  : `Ștergerea nu a putut fi finalizată sigur la ${table}: ${delChildErr.message || 'eroare DELETE'}`
+              };
+            }
+            partialDeletions.push({ table, targetIdsCount: chunk.length });
+          }
+
+          const { data: deletedRows, error: delProdErr } = await client
+            .from('products')
+            .delete()
+            .in('id', chunk)
+            .select('id');
+          if (delProdErr || !Array.isArray(deletedRows)) {
+            const notDeletedRequestedIds = uniqueRequestedIds.filter(id => !deletedProductIds.has(id));
+            const hasPartial = partialDeletions.length > 0 || deletedCount > 0;
+            const tablesList = Array.from(new Set(partialDeletions.map(p => p.table))).join(', ');
+            return {
+              deletedCount,
+              blockedCount: notDeletedRequestedIds.length,
+              blockedIds: notDeletedRequestedIds,
+              partialModification: hasPartial,
+              partialDeletions: [...partialDeletions],
+              error: `Ștergerea produselor a eșuat (${delProdErr?.message || 'răspuns invalid DELETE products'}). Ștergeri parțiale anterioare aplicate pe [${tablesList}].`
+            };
+          }
+
+          for (const row of deletedRows) {
+            if (row?.id) deletedProductIds.add(String(row.id));
+          }
+          deletedCount += deletedRows.length;
+          partialDeletions.push({ table: 'products', targetIdsCount: deletedRows.length });
+        }
+
+        if (deletedCount > 0) {
+          invalidateCatalogOptimizationCache();
+        }
+      }
+
+      const error =
+        blockedIds.length > 0
+          ? `Ștergerea a fost blocată pentru ${blockedIds.length} produs(e) deoarece au observații istorice protejate în price_observations.`
+          : undefined;
+      return {
+        deletedCount,
+        blockedCount: blockedIds.length,
+        blockedIds,
+        partialModification: false,
+        partialDeletions: [],
+        ...(error ? { error } : {})
+      };
+    } catch (err: any) {
+      console.warn('Eroare Supabase deleteProducts:', err.message);
+      const hasPartial = partialDeletions.length > 0 || deletedCount > 0;
+      const notDeletedIds = uniqueRequestedIds.filter(id => !deletedProductIds.has(id));
+      return {
+        deletedCount,
+        blockedCount: notDeletedIds.length,
+        blockedIds: notDeletedIds,
+        partialModification: hasPartial,
+        partialDeletions: [...partialDeletions],
+        error: `Ștergerea nu a putut fi finalizată sigur: ${err.message}`
+      };
+    }
   }
 
   static async deleteProduct(productId: string): Promise<boolean> {
     const res = await this.deleteProducts([productId]);
-    return res.deletedCount > 0;
+    return res.deletedCount > 0 && (res.blockedCount || 0) === 0;
   }
 
   /**
@@ -4708,7 +5169,7 @@ export class DatabaseService {
   }
 
   /**
-   * Returnează ofertele active publicate în catalog (product_offers)
+   * Returnează ofertele active publicate în catalog (product_offers), agregate canonic per (produs canonic, retailer)
    */
   static async getPublicOffersDetailed(params: {
     page?: number;
@@ -4719,36 +5180,176 @@ export class DatabaseService {
     const page = Math.max(1, params.page || 1);
     const limit = Math.max(1, Math.min(params.limit || 50, 100));
     const offset = (page - 1) * limit;
+
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      const allProducts = StorageService.getAllProducts();
+      const aliasIndex = buildCanonicalAliasIndex(allProducts);
+      const prodById = new Map(allProducts.map(p => [p.id, p]));
+      const storeById = new Map(
+        StorageService.getStores().map(s => [normalizeStoreIdKey(s.id), s.name])
+      );
+
+      const dedupMap = new Map<string, { offer: ProductOffer; canonicalId: string; originalId?: string }>();
+      for (const r of StorageService.getProductOffers()) {
+        if (!r || r.price <= 0) continue;
+        if (r.source === 'demo') continue;
+        if (r.verificationStatus === 'demo' || r.verificationStatus === 'isolated' || r.verificationStatus === 'rejected') continue;
+        if (r.isFlaggedAnomaly) continue;
+        const detail = resolveCanonicalProductDetail(r.productId, aliasIndex);
+        if (!detail.found || !detail.canonicalId || detail.cycleDetected) continue;
+        const canonicalId = detail.canonicalId;
+        if (!prodById.has(canonicalId)) continue;
+        const cleanStore = normalizeStoreIdKey(r.storeId);
+        const key = `${canonicalId}::${cleanStore}`;
+        const existing = dedupMap.get(key);
+        const currObs = r.observationDate || '';
+        const prevObs = existing?.offer.observationDate || '';
+        const currChecked = r.lastChecked || '';
+        const prevChecked = existing?.offer.lastChecked || '';
+        if (!existing || currObs > prevObs || (currObs === prevObs && currChecked > prevChecked)) {
+          dedupMap.set(key, {
+            offer: r,
+            canonicalId,
+            originalId: canonicalId !== r.productId ? r.productId : undefined
+          });
+        }
+      }
+
+      let mapped = Array.from(dedupMap.values())
+        .map(({ offer: r, canonicalId, originalId }) => {
+          const prod = prodById.get(canonicalId);
+          const cleanStore = normalizeStoreIdKey(r.storeId);
+          return {
+            id: r.id,
+            productId: canonicalId,
+            ...(originalId ? { originalProductId: originalId } : {}),
+            productName: prod?.name || 'Produs fără denumire',
+            productBrand: prod?.brand,
+            productCategory: prod?.category,
+            productBarcode: prod?.barcode,
+            productImage: prod?.imageUrl,
+            storeId: cleanStore,
+            storeName: storeById.get(cleanStore) || r.storeId,
+            price: r.price,
+            originalPrice: r.originalPrice,
+            unitPrice: r.unitPrice || r.price,
+            unitPriceMeasure: r.unitPriceMeasure || 'lei/buc',
+            isPromo: Boolean(r.isPromo),
+            promoDetails: r.promoDetails,
+            loyaltyCardRequired: Boolean(r.loyaltyCardRequired),
+            loyaltyCardName: r.loyaltyCardName,
+            validUntil: r.validUntil,
+            observationDate: r.observationDate,
+            isExpired: r.validUntil ? new Date(r.validUntil) < new Date() : false,
+            lastChecked: r.lastChecked
+          };
+        })
+        .sort((a, b) => a.price - b.price);
+
+      if (params.retailerId && params.retailerId !== 'toate') {
+        const cleanRet = normalizeStoreIdKey(params.retailerId);
+        mapped = mapped.filter(o => o.storeId === cleanRet);
+      }
+      if (params.search && params.search.trim()) {
+        const q = params.search.toLowerCase().trim();
+        mapped = mapped.filter(
+          o =>
+            o.productName.toLowerCase().includes(q) ||
+            (o.productBrand && o.productBrand.toLowerCase().includes(q)) ||
+            (o.productBarcode && o.productBarcode.includes(q))
+        );
+      }
+
+      const total = mapped.length;
+      return {
+        offers: mapped.slice(offset, offset + limit),
+        total,
+        page,
+        totalPages: Math.max(1, Math.ceil(total / limit))
+      };
+    }
+
     const pool = getPool();
 
     if (!pool) {
       try {
-        let query = supabase
-          .from('product_offers')
-          .select('*', { count: 'exact' })
-          .neq('source', 'demo')
-          .not('verification_status', 'in', '("demo","isolated","rejected")')
-          .eq('is_flagged_anomaly', false)
-          .gt('price', 0);
-        if (params.retailerId && params.retailerId !== 'toate') query = query.eq('store_id', params.retailerId);
-        const { data, count, error } = await query.order('price', { ascending: true }).range(offset, offset + limit - 1);
-        if (!error && data) {
+        const [offersRes, productsRes, storesRes] = await Promise.all([
+          fetchAllSupabaseRows((from, to) =>
+            supabase
+              .from('product_offers')
+              .select('*')
+              .neq('source', 'demo')
+              .not('verification_status', 'in', '("demo","isolated","rejected")')
+              .gt('price', 0)
+              .range(from, to)
+          ),
+          fetchAllSupabaseRows((from, to) =>
+            supabase.from('products').select('id, canonical_product_id, name, brand, category, barcode, image_url').range(from, to)
+          ),
+          supabase.from('stores').select('id, name')
+        ]);
+        if (!offersRes.error && offersRes.data) {
+          const aliasIndex = buildCanonicalAliasIndex(productsRes.data || []);
+          const prodById = new Map((productsRes.data || []).map((p: any) => [p.id, p]));
+          const storeById = new Map(
+            (storesRes.data || []).map((s: any) => [normalizeStoreIdKey(s.id), s.name])
+          );
+
+          const deduped = new Map<string, any>();
+          for (const r of offersRes.data) {
+            if (r.is_flagged_anomaly || !(Number(r.price) > 0)) continue;
+            const detail = resolveCanonicalProductDetail(r.product_id, aliasIndex);
+            if (!detail.found || !detail.canonicalId || detail.cycleDetected) continue;
+            const cleanStore = normalizeStoreIdKey(r.store_id);
+            const key = `${detail.canonicalId}__${cleanStore}`;
+            const curTs = `${r.observation_date || ''}:${r.last_checked || ''}`;
+            const prev = deduped.get(key);
+            if (!prev || curTs >= prev._ts) {
+              const prod = prodById.get(detail.canonicalId);
+              deduped.set(key, {
+                _ts: curTs,
+                id: r.id,
+                productId: detail.canonicalId,
+                productName: prod?.name || 'Produs fără denumire',
+                productBrand: prod?.brand,
+                productCategory: prod?.category,
+                productBarcode: prod?.barcode,
+                productImage: prod?.image_url,
+                storeId: cleanStore,
+                storeName: storeById.get(cleanStore) || r.store_id,
+                price: parseFloat(r.price) || 0,
+                originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
+                isPromo: Boolean(r.is_promo),
+                unitPrice: parseFloat(r.unit_price) || parseFloat(r.price) || 0,
+                unitPriceMeasure: r.unit_price_measure || 'lei/buc',
+                lastChecked: r.last_checked ? new Date(r.last_checked).toISOString() : new Date().toISOString()
+              });
+            }
+          }
+
+          let list = Array.from(deduped.values())
+            .map(({ _ts, ...rest }) => rest)
+            .sort((a, b) => a.price - b.price);
+          if (params.retailerId && params.retailerId !== 'toate') {
+            const cleanRet = normalizeStoreIdKey(params.retailerId);
+            list = list.filter(o => o.storeId === cleanRet);
+          }
+          if (params.search && params.search.trim()) {
+            const q = params.search.toLowerCase().trim();
+            list = list.filter(
+              o =>
+                o.productName.toLowerCase().includes(q) ||
+                (o.productBrand && o.productBrand.toLowerCase().includes(q)) ||
+                (o.productBarcode && o.productBarcode.includes(q))
+            );
+          }
+          const total = list.length;
           return {
-            offers: data.map((r: any) => ({
-              id: r.id,
-              productId: r.product_id,
-              productName: r.product_id,
-              storeId: r.store_id,
-              storeName: r.store_id,
-              price: parseFloat(r.price) || 0,
-              isPromo: Boolean(r.is_promo),
-              unitPrice: parseFloat(r.unit_price) || parseFloat(r.price) || 0,
-              unitPriceMeasure: r.unit_price_measure || 'lei/buc',
-              lastChecked: new Date().toISOString()
-            })),
-            total: count || data.length,
+            offers: list.slice(offset, offset + limit),
+            total,
             page,
-            totalPages: Math.max(1, Math.ceil((count || data.length) / limit))
+            totalPages: Math.max(1, Math.ceil(total / limit))
           };
         }
       } catch {}
@@ -4756,16 +5357,12 @@ export class DatabaseService {
     }
 
     try {
-      const conditions: string[] = [
-        "COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')",
-        'COALESCE(po.is_flagged_anomaly, false) = false',
-        'po.price > 0'
-      ];
+      const conditions: string[] = ['1=1'];
       const values: any[] = [];
       let idx = 1;
 
       if (params.retailerId && params.retailerId !== 'toate') {
-        conditions.push(`(po.store_id = $${idx} OR po.store_id = 'store-' || $${idx})`);
+        conditions.push(`(co.store_id = $${idx} OR co.store_id = 'store-' || $${idx} OR replace(lower(co.store_id), 'store-', '') = replace(lower($${idx}), 'store-', ''))`);
         values.push(params.retailerId);
         idx++;
       }
@@ -4776,28 +5373,68 @@ export class DatabaseService {
       }
 
       const whereClause = conditions.join(' AND ');
+      const ctePrefix = `
+        WITH RECURSIVE canonical_map AS (
+          SELECT id AS node_id, id AS current_id, canonical_product_id, ARRAY[id::text]::text[] AS path, 0 AS depth
+          FROM products
+          UNION ALL
+          SELECT cm.node_id, p2.id AS current_id, p2.canonical_product_id, (cm.path || p2.id::text)::text[], cm.depth + 1
+          FROM canonical_map cm
+          JOIN products p2 ON p2.id = cm.canonical_product_id
+          WHERE cm.canonical_product_id IS NOT NULL
+            AND NOT (p2.id::text = ANY(cm.path))
+            AND cm.depth < 16
+        ),
+        resolved_root AS (
+          SELECT node_id, current_id AS root_id
+          FROM canonical_map
+          WHERE canonical_product_id IS NULL
+        ),
+        canonical_offers AS (
+          SELECT DISTINCT ON (rr.root_id, replace(lower(po.store_id), 'store-', ''))
+            po.*,
+            rr.root_id AS canonical_product_id,
+            po.product_id AS raw_product_id
+          FROM product_offers po
+          JOIN resolved_root rr ON rr.node_id = po.product_id
+          WHERE po.source != 'demo'
+            AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+            AND COALESCE(po.is_flagged_anomaly, false) = false
+            AND po.price > 0
+          ORDER BY rr.root_id, replace(lower(po.store_id), 'store-', ''), po.observation_date DESC, po.last_checked DESC
+        )
+      `;
+
       const countRes = await pool.query(
-        `SELECT count(*) FROM product_offers po LEFT JOIN products p ON p.id = po.product_id WHERE ${whereClause}`,
+        `${ctePrefix}
+         SELECT count(*)
+         FROM canonical_offers co
+         JOIN products p ON p.id = co.canonical_product_id
+         WHERE ${whereClause}`,
         values
       );
       const total = parseInt(countRes.rows[0]?.count || '0', 10);
 
       const queryValues = [...values, limit, offset];
       const dataRes = await pool.query(
-        `SELECT po.*, p.name AS product_name, p.brand AS product_brand, p.category AS product_category,
+        `${ctePrefix}
+         SELECT co.*, p.name AS product_name, p.brand AS product_brand, p.category AS product_category,
                 p.barcode AS product_barcode, p.image_url AS product_image, s.name AS store_name, s.brand_color AS store_brand_color
-         FROM product_offers po
-         LEFT JOIN products p ON p.id = po.product_id
-         LEFT JOIN stores s ON s.id = po.store_id OR s.id = replace(po.store_id, 'store-', '')
+         FROM canonical_offers co
+         JOIN products p ON p.id = co.canonical_product_id
+         LEFT JOIN stores s ON s.id = co.store_id OR s.id = replace(co.store_id, 'store-', '')
          WHERE ${whereClause}
-         ORDER BY po.price ASC
+         ORDER BY co.price ASC
          LIMIT $${idx} OFFSET $${idx + 1}`,
         queryValues
       );
 
       const offers = dataRes.rows.map(r => ({
         id: r.id,
-        productId: r.product_id,
+        productId: r.canonical_product_id || r.product_id,
+        ...(r.raw_product_id && r.canonical_product_id && r.raw_product_id !== r.canonical_product_id
+          ? { originalProductId: r.raw_product_id }
+          : {}),
         productName: r.product_name || 'Produs fără denumire',
         productBrand: r.product_brand,
         productCategory: r.product_category,
@@ -4827,7 +5464,8 @@ export class DatabaseService {
   }
 
   /**
-   * Returnează istoricul modificărilor de preț din tabela append-only price_observations
+   * Returnează istoricul modificărilor de preț din tabela append-only price_observations,
+   * cu agregare multi-hop pe identitatea produsului canonic fără a șterge sau muta observațiile.
    */
   static async getPriceChangesDetailed(params: {
     page?: number;
@@ -4838,28 +5476,121 @@ export class DatabaseService {
     const page = Math.max(1, params.page || 1);
     const limit = Math.max(1, Math.min(params.limit || 50, 100));
     const offset = (page - 1) * limit;
+
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      const { StorageService } = await import('../services/StorageService.ts');
+      const allProducts = StorageService.getAllProducts();
+      const aliasIndex = buildCanonicalAliasIndex(allProducts);
+      const prodById = new Map(allProducts.map(p => [p.id, p]));
+      const storeById = new Map(
+        StorageService.getStores().map(s => [normalizeStoreIdKey(s.id), s.name])
+      );
+
+      let changes = StorageService.getPriceObservations()
+        .map(obs => {
+          const detail = resolveCanonicalProductDetail(obs.productId, aliasIndex);
+          const resolvedId = detail.found && detail.canonicalId && !detail.cycleDetected ? detail.canonicalId : obs.productId;
+          const prod = !detail.cycleDetected ? prodById.get(resolvedId) : undefined;
+          const cleanStore = normalizeStoreIdKey(obs.storeId);
+          return {
+            id: obs.id,
+            productId: resolvedId,
+            ...(resolvedId !== obs.productId ? { originalProductId: obs.productId } : {}),
+            productName: prod?.name || 'Produs fără denumire',
+            productBrand: prod?.brand,
+            productBarcode: prod?.barcode,
+            storeId: cleanStore,
+            storeName: storeById.get(cleanStore) || obs.storeId,
+            price: obs.price,
+            previousPrice: prod?.baseReferencePrice,
+            date: obs.date,
+            source: obs.source || 'verified',
+            loyaltyCardUsed: Boolean(obs.loyaltyCardUsed)
+          };
+        })
+        .sort((a, b) => b.date.localeCompare(a.date));
+
+      if (params.retailerId && params.retailerId !== 'toate') {
+        const cleanRet = normalizeStoreIdKey(params.retailerId);
+        changes = changes.filter(c => c.storeId === cleanRet);
+      }
+      if (params.search && params.search.trim()) {
+        const q = params.search.toLowerCase().trim();
+        changes = changes.filter(
+          c =>
+            c.productName.toLowerCase().includes(q) ||
+            (c.productBrand && c.productBrand.toLowerCase().includes(q)) ||
+            (c.productBarcode && c.productBarcode.includes(q))
+        );
+      }
+
+      const total = changes.length;
+      return {
+        changes: changes.slice(offset, offset + limit),
+        total,
+        page,
+        totalPages: Math.max(1, Math.ceil(total / limit))
+      };
+    }
+
     const pool = getPool();
 
     if (!pool) {
       try {
-        let query = supabase.from('price_observations').select('*', { count: 'exact' });
-        if (params.retailerId && params.retailerId !== 'toate') query = query.eq('store_id', params.retailerId);
-        const { data, count, error } = await query.order('date', { ascending: false }).range(offset, offset + limit - 1);
-        if (!error && data) {
-          return {
-            changes: data.map((r: any) => ({
+        const [obsRes, productsRes, storesRes] = await Promise.all([
+          fetchAllSupabaseRows((from, to) =>
+            supabase.from('price_observations').select('*').order('date', { ascending: false }).range(from, to)
+          ),
+          fetchAllSupabaseRows((from, to) =>
+            supabase.from('products').select('id, canonical_product_id, name, brand, barcode, base_reference_price').range(from, to)
+          ),
+          supabase.from('stores').select('id, name')
+        ]);
+        if (!obsRes.error && obsRes.data) {
+          const aliasIndex = buildCanonicalAliasIndex(productsRes.data || []);
+          const prodById = new Map((productsRes.data || []).map((p: any) => [p.id, p]));
+          const storeById = new Map(
+            (storesRes.data || []).map((s: any) => [normalizeStoreIdKey(s.id), s.name])
+          );
+
+          let list = obsRes.data.map((r: any) => {
+            const detail = resolveCanonicalProductDetail(r.product_id, aliasIndex);
+            const resolvedId = detail.found && detail.canonicalId && !detail.cycleDetected ? detail.canonicalId : r.product_id;
+            const prod = !detail.cycleDetected ? prodById.get(resolvedId) : undefined;
+            const cleanStore = normalizeStoreIdKey(r.store_id);
+            return {
               id: r.id,
-              productId: r.product_id,
-              productName: r.product_id,
-              storeId: r.store_id,
-              storeName: r.store_id,
+              productId: resolvedId,
+              ...(resolvedId !== r.product_id ? { originalProductId: r.product_id } : {}),
+              productName: prod?.name || 'Produs fără denumire',
+              productBrand: prod?.brand,
+              productBarcode: prod?.barcode,
+              storeId: cleanStore,
+              storeName: storeById.get(cleanStore) || r.store_id,
               price: parseFloat(r.price) || 0,
               date: r.date,
               source: r.source || 'verified'
-            })),
-            total: count || data.length,
+            };
+          });
+          if (params.retailerId && params.retailerId !== 'toate') {
+            const cleanRet = normalizeStoreIdKey(params.retailerId);
+            list = list.filter(c => c.storeId === cleanRet);
+          }
+          if (params.search && params.search.trim()) {
+            const q = params.search.toLowerCase().trim();
+            list = list.filter(
+              c =>
+                c.productName.toLowerCase().includes(q) ||
+                (c.productBrand && c.productBrand.toLowerCase().includes(q)) ||
+                (c.productBarcode && c.productBarcode.includes(q))
+            );
+          }
+          const total = list.length;
+          return {
+            changes: list.slice(offset, offset + limit),
+            total,
             page,
-            totalPages: Math.max(1, Math.ceil((count || data.length) / limit))
+            totalPages: Math.max(1, Math.ceil(total / limit))
           };
         }
       } catch {}
@@ -4872,7 +5603,7 @@ export class DatabaseService {
       let idx = 1;
 
       if (params.retailerId && params.retailerId !== 'toate') {
-        conditions.push(`(po.store_id = $${idx} OR po.store_id = 'store-' || $${idx})`);
+        conditions.push(`(po.store_id = $${idx} OR po.store_id = 'store-' || $${idx} OR replace(lower(po.store_id), 'store-', '') = replace(lower($${idx}), 'store-', ''))`);
         values.push(params.retailerId);
         idx++;
       }
@@ -4883,18 +5614,44 @@ export class DatabaseService {
       }
 
       const whereClause = conditions.join(' AND ');
+      const ctePrefix = `
+        WITH RECURSIVE canonical_map AS (
+          SELECT id AS node_id, id AS current_id, canonical_product_id, ARRAY[id::text]::text[] AS path, 0 AS depth
+          FROM products
+          UNION ALL
+          SELECT cm.node_id, p2.id AS current_id, p2.canonical_product_id, (cm.path || p2.id::text)::text[], cm.depth + 1
+          FROM canonical_map cm
+          JOIN products p2 ON p2.id = cm.canonical_product_id
+          WHERE cm.canonical_product_id IS NOT NULL
+            AND NOT (p2.id::text = ANY(cm.path))
+            AND cm.depth < 16
+        ),
+        resolved_root AS (
+          SELECT node_id, current_id AS root_id
+          FROM canonical_map
+          WHERE canonical_product_id IS NULL
+        )
+      `;
+
       const countRes = await pool.query(
-        `SELECT count(*) FROM price_observations po LEFT JOIN products p ON p.id = po.product_id WHERE ${whereClause}`,
+        `${ctePrefix}
+         SELECT count(*)
+         FROM price_observations po
+         LEFT JOIN resolved_root rr ON rr.node_id = po.product_id
+         LEFT JOIN products p ON p.id = rr.root_id
+         WHERE ${whereClause}`,
         values
       );
       const total = parseInt(countRes.rows[0]?.count || '0', 10);
 
       const queryValues = [...values, limit, offset];
       const dataRes = await pool.query(
-        `SELECT po.*, p.name AS product_name, p.brand AS product_brand, p.base_reference_price,
+        `${ctePrefix}
+         SELECT po.*, rr.root_id AS canonical_product_id, p.name AS product_name, p.brand AS product_brand, p.base_reference_price,
                 s.name AS store_name, s.brand_color AS store_brand_color
          FROM price_observations po
-         LEFT JOIN products p ON p.id = po.product_id
+         LEFT JOIN resolved_root rr ON rr.node_id = po.product_id
+         LEFT JOIN products p ON p.id = rr.root_id
          LEFT JOIN stores s ON s.id = po.store_id OR s.id = replace(po.store_id, 'store-', '')
          WHERE ${whereClause}
          ORDER BY po.date DESC, po.created_at DESC
@@ -4909,10 +5666,14 @@ export class DatabaseService {
         const prevPrice = normPrice && normPrice !== curPrice ? normPrice : baseRef;
         const delta = prevPrice !== undefined ? Math.round((curPrice - prevPrice) * 100) / 100 : undefined;
         const pctChange = prevPrice && prevPrice > 0 ? Math.round(((curPrice - prevPrice) / prevPrice) * 100) : undefined;
+        const resolvedProductId = r.canonical_product_id || r.product_id;
 
         return {
           id: r.id,
-          productId: r.product_id,
+          productId: resolvedProductId,
+          ...(r.canonical_product_id && r.canonical_product_id !== r.product_id
+            ? { originalProductId: r.product_id }
+            : {}),
           productName: r.product_name || 'Produs fără denumire',
           productBrand: r.product_brand,
           storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
@@ -5156,7 +5917,7 @@ export class DatabaseService {
   /**
    * Validează complet o ofertă din staging înainte de aprobare (verificare prețuri, retailer, document, produs canonic, duplicate, EAN/SKU, cantitate/unitate, valabilitate)
    */
-  private static validateStagingOfferCandidate(params: {
+  static validateStagingOfferCandidate(params: {
     offer: {
       id: string;
       retailerId: string;
@@ -5183,6 +5944,7 @@ export class DatabaseService {
     batchSignatures: Set<string>;
     existingApprovedSignatures: Map<string, string>;
     requestedMatchedProductId?: string;
+    aliasIndex?: CanonicalAliasIndex;
     todayStr: string;
   }): {
     valid: boolean;
@@ -5201,6 +5963,7 @@ export class DatabaseService {
       batchSignatures,
       existingApprovedSignatures,
       requestedMatchedProductId,
+      aliasIndex,
       todayStr
     } = params;
 
@@ -5261,22 +6024,32 @@ export class DatabaseService {
       errors.push(`Oferta este expirată (valabilă până la ${offer.validUntil}).`);
     }
 
-    // Canonical product resolution
+    // Canonical product resolution (promovează aliasurile multi-hop la produsul canonic rădăcină, blochează ciclurile)
     let resolvedProductId: string | undefined;
     let resolvedProductName: string | undefined;
     let resolvedMatchMethod: 'gtin_exact' | 'name_brand_similarity' | 'manual' | 'unmatched' = 'unmatched';
     let resolvedMatchConfidence = 0;
 
+    const canonicalPool = allProducts.filter(p => !p.canonicalProductId);
     const targetProductId = requestedMatchedProductId || offer.matchedProductId || undefined;
     if (targetProductId) {
-      const existingProd = productsById.get(targetProductId);
-      if (!existingProd) {
-        errors.push(`Produsul canonic asociat (${targetProductId}) nu a fost găsit în catalog.`);
+      const detail = aliasIndex
+        ? resolveCanonicalProductDetail(targetProductId, aliasIndex)
+        : null;
+      if (detail?.cycleDetected) {
+        errors.push(`Produsul asociat (${targetProductId}) face parte dintr-un lanț canonic ciclic invalid.`);
       } else {
-        resolvedProductId = existingProd.id;
-        resolvedProductName = existingProd.name;
-        resolvedMatchMethod = requestedMatchedProductId ? 'manual' : 'gtin_exact';
-        resolvedMatchConfidence = 1.0;
+        const canonicalTargetId =
+          detail && detail.found && detail.canonicalId ? detail.canonicalId : targetProductId;
+        const existingProd = productsById.get(canonicalTargetId);
+        if (!existingProd || existingProd.canonicalProductId) {
+          errors.push(`Produsul canonic asociat (${targetProductId}) nu a fost găsit ca rădăcină validă în catalog.`);
+        } else {
+          resolvedProductId = existingProd.id;
+          resolvedProductName = existingProd.name;
+          resolvedMatchMethod = requestedMatchedProductId ? 'manual' : 'gtin_exact';
+          resolvedMatchConfidence = 1.0;
+        }
       }
     } else if (titleTrimmed.length >= 2) {
       const matchRes = ProductMatcher.matchProduct(
@@ -5288,13 +6061,19 @@ export class DatabaseService {
           packageUnit: (offer.packageUnit as any) || undefined,
           category: offer.rawCategory || undefined
         },
-        allProducts
+        canonicalPool
       );
       if (matchRes.matchedProduct && matchRes.confidence >= 0.75) {
-        resolvedProductId = matchRes.matchedProduct.id;
-        resolvedProductName = matchRes.matchedProduct.name;
-        resolvedMatchMethod = matchRes.matchMethod;
-        resolvedMatchConfidence = matchRes.confidence;
+        const safeCanonId = aliasIndex
+          ? resolveCanonicalProductId(matchRes.matchedProduct.id, aliasIndex) || matchRes.matchedProduct.id
+          : matchRes.matchedProduct.id;
+        const canonicalMatch = productsById.get(safeCanonId) || matchRes.matchedProduct;
+        if (!canonicalMatch.canonicalProductId) {
+          resolvedProductId = canonicalMatch.id;
+          resolvedProductName = canonicalMatch.name;
+          resolvedMatchMethod = matchRes.matchMethod;
+          resolvedMatchConfidence = matchRes.confidence;
+        }
       }
     }
 
@@ -5441,20 +6220,26 @@ export class DatabaseService {
 
       const validStoreIds = new Set(storesRes.rows.map(r => String(r.id)));
       const validDocumentIds = new Set(docsRes.rows.map(r => String(r.id)));
-      const allProducts: Product[] = productsRes.rows.map(r => ({
-        id: r.id,
-        name: r.name,
-        brand: r.brand,
-        category: r.category as any,
-        defaultUnit: r.default_unit,
-        packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
-        packageUnit: r.package_unit,
-        normalizedUnit: r.normalized_unit,
-        barcode: r.barcode || undefined,
-        imageUrl: r.image_url || undefined,
-        baseReferencePrice: parseFloat(r.base_reference_price),
-        isRomanianProduct: r.is_romanian_product
-      }));
+      const stagingAliasIndex = buildCanonicalAliasIndex(
+        productsRes.rows.map(r => ({ id: r.id, canonicalProductId: r.canonical_product_id || null }))
+      );
+      const allProducts: Product[] = productsRes.rows
+        .filter(r => !r.canonical_product_id && resolveCanonicalProductId(r.id, stagingAliasIndex) === r.id)
+        .map(r => ({
+          id: r.id,
+          name: r.name,
+          brand: r.brand,
+          category: r.category as any,
+          defaultUnit: r.default_unit,
+          packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
+          packageUnit: r.package_unit,
+          normalizedUnit: r.normalized_unit,
+          barcode: r.barcode || undefined,
+          imageUrl: r.image_url || undefined,
+          baseReferencePrice: parseFloat(r.base_reference_price),
+          isRomanianProduct: r.is_romanian_product,
+          canonicalProductId: null
+        }));
       const productsById = new Map(allProducts.map(p => [p.id, p]));
 
       const existingApprovedSignatures = new Map<string, string>();
@@ -5479,6 +6264,7 @@ export class DatabaseService {
           rawTitle: row.raw_title,
           rawBrand: row.raw_brand,
           rawBarcode: row.raw_barcode,
+          retailerSku: row.retailer_sku,
           rawCategory: row.raw_category,
           normalPrice: parseFloat(row.normal_price),
           promoPrice: row.promo_price ? parseFloat(row.promo_price) : null,
@@ -5497,6 +6283,7 @@ export class DatabaseService {
         batchSignatures: new Set<string>(),
         existingApprovedSignatures,
         requestedMatchedProductId: matchedProductId,
+        aliasIndex: stagingAliasIndex,
         todayStr
       });
 
@@ -5664,20 +6451,26 @@ export class DatabaseService {
 
         const validStoreIds = new Set(storesRes.rows.map(r => String(r.id)));
         const validDocumentIds = new Set(docsRes.rows.map(r => String(r.id)));
-        const allProducts: Product[] = productsRes.rows.map(r => ({
-          id: r.id,
-          name: r.name,
-          brand: r.brand,
-          category: r.category as any,
-          defaultUnit: r.default_unit,
-          packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
-          packageUnit: r.package_unit,
-          normalizedUnit: r.normalized_unit,
-          barcode: r.barcode || undefined,
-          imageUrl: r.image_url || undefined,
-          baseReferencePrice: parseFloat(r.base_reference_price),
-          isRomanianProduct: r.is_romanian_product
-        }));
+        const bulkAliasIndex = buildCanonicalAliasIndex(
+          productsRes.rows.map(r => ({ id: r.id, canonicalProductId: r.canonical_product_id || null }))
+        );
+        const allProducts: Product[] = productsRes.rows
+          .filter(r => !r.canonical_product_id && resolveCanonicalProductId(r.id, bulkAliasIndex) === r.id)
+          .map(r => ({
+            id: r.id,
+            name: r.name,
+            brand: r.brand,
+            category: r.category as any,
+            defaultUnit: r.default_unit,
+            packageWeightOrVolume: parseFloat(r.package_weight_or_volume),
+            packageUnit: r.package_unit,
+            normalizedUnit: r.normalized_unit,
+            barcode: r.barcode || undefined,
+            imageUrl: r.image_url || undefined,
+            baseReferencePrice: parseFloat(r.base_reference_price),
+            isRomanianProduct: r.is_romanian_product,
+            canonicalProductId: null
+          }));
         const productsById = new Map(allProducts.map(p => [p.id, p]));
 
         const existingApprovedSignatures = new Map<string, string>();
@@ -5707,6 +6500,7 @@ export class DatabaseService {
               rawTitle: row.raw_title,
               rawBrand: row.raw_brand,
               rawBarcode: row.raw_barcode,
+              retailerSku: row.retailer_sku,
               rawCategory: row.raw_category,
               normalPrice: parseFloat(row.normal_price),
               promoPrice: row.promo_price ? parseFloat(row.promo_price) : null,
@@ -5724,6 +6518,7 @@ export class DatabaseService {
             allProducts,
             batchSignatures,
             existingApprovedSignatures,
+            aliasIndex: bulkAliasIndex,
             todayStr
           });
 
@@ -5830,15 +6625,10 @@ export class DatabaseService {
     batchQueryMode: 'targeted_batch' | 'cached_catalog' | 'isolated_memory';
   }> {
     if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
-      const { StorageService } = await import('../services/StorageService.ts');
+      const [products, offers] = await Promise.all([this.getProducts(), this.getOffers()]);
       return {
-        products: StorageService.getAllProducts(),
-        offers: StorageService.getProductOffers().filter(
-          o =>
-            o.price > 0 &&
-            !o.isFlaggedAnomaly &&
-            !['demo', 'isolated', 'rejected'].includes(o.verificationStatus || 'verified')
-        ),
+        products,
+        offers,
         stores: STORES,
         cacheHit: false,
         batchQueryMode: 'isolated_memory'

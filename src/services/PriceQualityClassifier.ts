@@ -9,6 +9,7 @@ import type {
   Product,
   ProductOffer
 } from '../types.js';
+import { type CanonicalAliasSource, resolveCanonicalProductDetail } from './ProductIdentityService.js';
 
 export const PRICE_QUALITY_METHODOLOGY_VERSION = 'v1.0.0';
 
@@ -50,6 +51,7 @@ export interface ClassifyOfferQualityOptions {
 
 export interface ValidateOfferContextOptions {
   product?: Product;
+  aliasSource?: CanonicalAliasSource;
   storeId?: string;
   region?: string;
   useLoyaltyCards?: boolean;
@@ -469,7 +471,24 @@ export class PriceQualityClassifier {
     }
 
     if (options.product && offer.productId !== options.product.id) {
-      reasons.push(`Oferta aparține produsului ${offer.productId}, nu produsului ${options.product.id}.`);
+      let sameCanonicalProduct = false;
+      if (options.aliasSource || options.product.canonicalProductId) {
+        const source = options.aliasSource ?? [options.product];
+        const offerDetail = resolveCanonicalProductDetail(offer.productId, source);
+        const prodDetail = resolveCanonicalProductDetail(options.product.id, source);
+        sameCanonicalProduct = Boolean(
+          offerDetail.found &&
+          !offerDetail.cycleDetected &&
+          offerDetail.canonicalId &&
+          prodDetail.found &&
+          !prodDetail.cycleDetected &&
+          prodDetail.canonicalId &&
+          offerDetail.canonicalId === prodDetail.canonicalId
+        );
+      }
+      if (!sameCanonicalProduct) {
+        reasons.push(`Oferta aparține produsului ${offer.productId}, nu produsului ${options.product.id}.`);
+      }
     }
 
     if (options.region !== undefined) {

@@ -213,7 +213,7 @@ export function resolveCanonicalProductDetail(
     const parentId = index.parentById.get(currentId);
     if (!parentId) {
       // Am ajuns la un nod canonic (fără părinte) sau la capătul hărții de aliasuri
-      if (knownIds && !knownIds.has(currentId) && index.hasExplicitNodes && !index.parentById.has(currentId)) {
+      if (knownIds && !knownIds.has(currentId)) {
         return {
           requestedId,
           canonicalId: null,
@@ -345,6 +345,40 @@ export type CanonicalAliasSource =
   | null
   | undefined;
 
+export function mergeCanonicalAliasSources(
+  primary: CanonicalAliasSource,
+  secondary?: CanonicalAliasSource
+): CanonicalAliasIndex {
+  const baseIndex = buildCanonicalAliasIndex(primary);
+  if (!secondary) {
+    return baseIndex;
+  }
+  const extraIndex = buildCanonicalAliasIndex(secondary);
+  const parentById = new Map<string, string | null>(baseIndex.parentById);
+  for (const [id, parentId] of extraIndex.parentById.entries()) {
+    if (!parentById.has(id)) {
+      parentById.set(id, parentId);
+    } else if (parentId && !parentById.get(id)) {
+      parentById.set(id, parentId);
+    }
+  }
+  const childrenByCanonicalId = new Map<string, Set<string>>();
+  for (const [childId, parentId] of parentById.entries()) {
+    if (!parentId) continue;
+    let set = childrenByCanonicalId.get(parentId);
+    if (!set) {
+      set = new Set<string>();
+      childrenByCanonicalId.set(parentId, set);
+    }
+    set.add(childId);
+  }
+  return {
+    parentById,
+    childrenByCanonicalId,
+    hasExplicitNodes: baseIndex.hasExplicitNodes || extraIndex.hasExplicitNodes
+  };
+}
+
 /**
  * Construiește o hartă deterministă `anyProductId -> canonicalRootProduct` pentru toate
  * rădăcinile canonice și aliasurile lor valide (1..N niveluri, cu protecție împotriva ciclurilor
@@ -448,7 +482,7 @@ export function resolveCanonicalProduct<T extends CanonicalProductNode = Product
  * (oferte, observații, alerte, articole de bon sau listă), fără acces la baza de date și fără a
  * pierde proveniența originală dacă este solicitată păstrarea ei.
  */
-export function normalizeProductReferences<T extends Record<string, unknown>>(
+export function normalizeProductReferences<T extends object>(
   items: ReadonlyArray<T>,
   aliasSource: CanonicalAliasSource,
   options?: {
@@ -464,10 +498,11 @@ export function normalizeProductReferences<T extends Record<string, unknown>>(
 
   return (items || []).map(item => {
     if (!item || typeof item !== 'object') return item;
+    const rec = item as Record<string, unknown>;
     let next: Record<string, unknown> | null = null;
 
     for (const field of fields) {
-      const rawVal = item[field];
+      const rawVal = rec[field];
       if (typeof rawVal !== 'string' || !rawVal.trim()) continue;
       const trimmed = rawVal.trim();
       const detail = resolveCanonicalProductDetail(trimmed, index, {
@@ -478,7 +513,7 @@ export function normalizeProductReferences<T extends Record<string, unknown>>(
         continue;
       }
       if (detail.canonicalId !== trimmed) {
-        if (!next) next = { ...item };
+        if (!next) next = { ...rec };
         next[field] = detail.canonicalId;
         if (options?.preserveOriginalField && next[options.preserveOriginalField] === undefined) {
           next[options.preserveOriginalField] = trimmed;
@@ -496,7 +531,7 @@ export function normalizeProductReferences<T extends Record<string, unknown>>(
       }
     }
 
-    return (next as T | null) ?? item;
+    return (next as unknown as T | null) ?? item;
   });
 }
 

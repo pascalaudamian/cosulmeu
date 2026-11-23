@@ -240,7 +240,8 @@ export class BudgetService {
                 item.rawName,
                 item.category,
                 item.matchedProductId,
-                productCategoryMap
+                productCategoryMap,
+                aliasIndex
               );
               addCategoryAmount(cat, attributed, 1);
             }

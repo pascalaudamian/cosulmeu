@@ -17,6 +17,11 @@ import { StorageService } from './StorageService.ts';
 import { PriceExtractor } from '../indexing/catalog/PriceExtractor.ts';
 import { STORES } from '../data/mockData.ts';
 import { PriceAuditRemediationItemInput } from '../server/validation.ts';
+import {
+  buildCanonicalAliasIndex,
+  collectProductIdsForCanonical,
+  resolveCanonicalProductDetail
+} from './ProductIdentityService.ts';
 
 interface RawOfferRow {
   id: string;
@@ -368,9 +373,11 @@ export class PriceAuditService {
       auditReason = 'Preț plauzibil, dar oferta nu a fost încă marcată verified.';
     }
 
+    const resolvedProductId = product?.id || offer.product_id;
     const item: PriceAuditItem = {
       offerId: offer.id,
-      productId: offer.product_id,
+      productId: resolvedProductId,
+      originalProductId: product?.id && product.id !== offer.product_id ? offer.product_id : undefined,
       productName,
       brand: String(product?.brand || 'Nespecificat'),
       storeId,
@@ -433,8 +440,9 @@ export class PriceAuditService {
     for (const p of products) {
       productById.set(p.id, p);
     }
+    const aliasIndex = buildCanonicalAliasIndex(products);
 
-    // Indexăm staging rows după matched_product_id + retailer și după titlu normalizat + retailer
+    // Indexăm staging rows după matched_product_id (+ echivalent canonic) + retailer și după titlu normalizat + retailer
     const stagingByProdRetailer = new Map<string, RawStagingRow>();
     const stagingByTitleRetailer = new Map<string, RawStagingRow>();
     for (const st of stagingRows) {
@@ -442,6 +450,11 @@ export class PriceAuditService {
       if (st.matched_product_id) {
         const key = `${rKey}::${st.matched_product_id}`;
         if (!stagingByProdRetailer.has(key)) stagingByProdRetailer.set(key, st);
+        const stCanon = resolveCanonicalProductDetail(st.matched_product_id, aliasIndex);
+        if (stCanon.found && stCanon.canonicalId && !stCanon.cycleDetected) {
+          const canonKey = `${rKey}::${stCanon.canonicalId}`;
+          if (!stagingByProdRetailer.has(canonKey)) stagingByProdRetailer.set(canonKey, st);
+        }
       }
       const titleKey = `${rKey}::${normalizeTitleKey(st.raw_title)}`;
       if (titleKey && !stagingByTitleRetailer.has(titleKey)) {
@@ -463,9 +476,13 @@ export class PriceAuditService {
     for (const offer of activeOffers) {
       const storeId = normalizeStoreId(offer.store_id);
       const storeName = storesMap.get(storeId) || storeId.toUpperCase();
-      const prod = productById.get(offer.product_id);
-      const canonicalProd = prod?.canonical_product_id ? productById.get(prod.canonical_product_id) : undefined;
-      const effectiveProd = canonicalProd || prod;
+      const canonDetail = resolveCanonicalProductDetail(offer.product_id, aliasIndex);
+      const effectiveProd =
+        canonDetail.found && canonDetail.canonicalId && !canonDetail.cycleDetected
+          ? productById.get(canonDetail.canonicalId)
+          : !canonDetail.cycleDetected
+          ? productById.get(offer.product_id)
+          : undefined;
 
       let matchedStaging = stagingByProdRetailer.get(`${storeId}::${offer.product_id}`);
       if (!matchedStaging && effectiveProd && effectiveProd.id !== offer.product_id) {
@@ -567,6 +584,7 @@ export class PriceAuditService {
     const { offers, products } = await this.loadRawDataset();
     const offerById = new Map<string, RawOfferRow>(offers.map(o => [o.id, o]));
     const productById = new Map<string, RawProductRow>(products.map(p => [p.id, p]));
+    const aliasIndex = buildCanonicalAliasIndex(products);
 
     let affectedOffersCount = 0;
     let updatedProductsCount = 0;
@@ -578,6 +596,8 @@ export class PriceAuditService {
       req: PriceAuditRemediationItemInput;
       offer: RawOfferRow;
       product?: RawProductRow;
+      canonicalProductId: string;
+      equivalentProductIds: string[];
       newUnitPrice?: number;
       newUnitMeasure?: 'lei/kg' | 'lei/l' | 'lei/buc';
       newNormalPrice?: number | null;
@@ -591,7 +611,22 @@ export class PriceAuditService {
         continue;
       }
 
-      const product = productById.get(existingOffer.product_id);
+      const canonDetail = resolveCanonicalProductDetail(existingOffer.product_id, aliasIndex);
+      if (canonDetail.cycleDetected) {
+        errors.push(`Oferta ${req.offerId} referă un lanț canonic invalid/ciclic (${existingOffer.product_id}); remedierea a fost blocată.`);
+        continue;
+      }
+
+      const canonicalProductId =
+        canonDetail.found && canonDetail.canonicalId ? canonDetail.canonicalId : existingOffer.product_id;
+      const product = productById.get(canonicalProductId) || productById.get(existingOffer.product_id);
+      const equivalentSet = new Set<string>([
+        existingOffer.product_id,
+        canonicalProductId,
+        ...collectProductIdsForCanonical(canonicalProductId, aliasIndex)
+      ]);
+      const equivalentProductIds = Array.from(equivalentSet);
+
       const productName = product?.name || existingOffer.product_id;
       const oldPrice = Number(existingOffer.price) || 0;
       const oldVerificationStatus = (existingOffer.verification_status || 'unverified') as VerificationStatus;
@@ -637,6 +672,8 @@ export class PriceAuditService {
           req,
           offer: existingOffer,
           product,
+          canonicalProductId,
+          equivalentProductIds,
           newUnitPrice: unitPrice,
           newUnitMeasure: unitPriceMeasure,
           newNormalPrice: resolvedNormalPrice,
@@ -653,7 +690,7 @@ export class PriceAuditService {
           newVerificationStatus: 'isolated',
           reason: req.reason || 'Izolare din catalogul public până la confirmarea prețului.'
         });
-        validWorkItems.push({ req, offer: existingOffer, product });
+        validWorkItems.push({ req, offer: existingOffer, product, canonicalProductId, equivalentProductIds });
       } else if (req.action === 'verify') {
         previews.push({
           offerId: existingOffer.id,
@@ -666,7 +703,7 @@ export class PriceAuditService {
           newVerificationStatus: 'verified',
           reason: req.reason || 'Confirmare manuală validitate preț comercial.'
         });
-        validWorkItems.push({ req, offer: existingOffer, product });
+        validWorkItems.push({ req, offer: existingOffer, product, canonicalProductId, equivalentProductIds });
       }
     }
 
@@ -709,14 +746,16 @@ export class PriceAuditService {
           cur.lastVerifiedAt = nowIso;
           affectedOffersCount++;
 
-          const pIdx = memProducts.findIndex(p => p.id === cur.productId);
+          const pIdx = memProducts.findIndex(p => p.id === work.canonicalProductId);
           if (pIdx !== -1) {
             memProducts[pIdx] = { ...memProducts[pIdx], baseReferencePrice: work.req.newPrice };
             updatedProductsCount++;
           }
+          const equivSet = new Set(work.equivalentProductIds);
           for (let sIdx = 0; sIdx < memStaging.length; sIdx++) {
             if (
-              memStaging[sIdx].matchedProductId === cur.productId &&
+              memStaging[sIdx].matchedProductId &&
+              equivSet.has(memStaging[sIdx].matchedProductId!) &&
               normalizeStoreId(memStaging[sIdx].retailerId) === normalizeStoreId(cur.storeId)
             ) {
               memStaging[sIdx] = {
@@ -748,7 +787,7 @@ export class PriceAuditService {
       StorageService.saveProductOffers(memOffers);
       for (const work of validWorkItems) {
         if (work.req.action === 'fix_price' && work.req.newPrice) {
-          const p = memProducts.find(mp => mp.id === work.offer.product_id);
+          const p = memProducts.find(mp => mp.id === work.canonicalProductId);
           if (p) StorageService.addCustomProduct(p);
         }
       }
@@ -797,7 +836,7 @@ export class PriceAuditService {
 
             const prodRes = await client.query(
               'UPDATE products SET base_reference_price = $1, updated_at = NOW() WHERE id = $2',
-              [newPrice, work.offer.product_id]
+              [newPrice, work.canonicalProductId]
             );
             updatedProductsCount += prodRes.rowCount || 0;
 
@@ -805,12 +844,12 @@ export class PriceAuditService {
               `UPDATE catalog_extracted_offers
                SET effective_price = $1, normal_price = COALESCE($2, normal_price),
                    promo_price = $3, price_validation_status = 'VALID', updated_at = NOW()
-               WHERE matched_product_id = $4 AND retailer_id = $5`,
+               WHERE matched_product_id = ANY($4::varchar[]) AND retailer_id = $5`,
               [
                 newPrice,
                 work.newNormalPrice ?? null,
                 work.newPromoPrice ?? null,
-                work.offer.product_id,
+                work.equivalentProductIds,
                 normalizeStoreId(work.offer.store_id)
               ]
             );
@@ -821,11 +860,11 @@ export class PriceAuditService {
               `UPDATE promotions
                SET normal_price = COALESCE($1, normal_price),
                    promo_price = COALESCE($2, promo_price)
-               WHERE product_id = $3 AND retailer_id = $4`,
+               WHERE product_id = ANY($3::varchar[]) AND retailer_id = $4`,
               [
                 work.newNormalPrice ?? null,
                 work.newPromoPrice ?? newPrice,
-                work.offer.product_id,
+                work.equivalentProductIds,
                 normalizeStoreId(work.offer.store_id)
               ]
             );
@@ -932,7 +971,7 @@ export class PriceAuditService {
           const { error: prodErr } = await supabase
             .from('products')
             .update({ base_reference_price: newPrice, updated_at: nowIso })
-            .eq('id', work.offer.product_id);
+            .eq('id', work.canonicalProductId);
           if (!prodErr) updatedProductsCount++;
 
           const { data: stgUpdated } = await supabase
@@ -943,7 +982,7 @@ export class PriceAuditService {
               price_validation_status: 'VALID',
               updated_at: nowIso
             })
-            .eq('matched_product_id', work.offer.product_id)
+            .in('matched_product_id', work.equivalentProductIds)
             .eq('retailer_id', normalizeStoreId(work.offer.store_id))
             .select('id');
           if (Array.isArray(stgUpdated)) updatedStagingCount += stgUpdated.length;
@@ -955,7 +994,7 @@ export class PriceAuditService {
               normal_price: work.newNormalPrice ?? null,
               promo_price: work.newPromoPrice ?? newPrice
             })
-            .eq('product_id', work.offer.product_id)
+            .in('product_id', work.equivalentProductIds)
             .eq('retailer_id', normalizeStoreId(work.offer.store_id))
             .select('id');
           if (Array.isArray(prmUpdated)) updatedPromotionsCount += prmUpdated.length;

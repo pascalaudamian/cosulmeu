@@ -12,6 +12,7 @@ import { STORES } from '../data/mockData.js';
 import { PriceComparisonService } from './PriceComparisonService.js';
 import {
   buildCanonicalAliasIndex,
+  type CanonicalAliasSource,
   collectProductIdsForCanonical,
   resolveCanonicalProductId
 } from './ProductIdentityService.js';
@@ -191,7 +192,7 @@ export class PriceHistoryService {
       observations?: PriceObservation[];
       stores?: Store[];
       receipts?: Receipt[];
-      aliasMap?: Map<string, string> | Record<string, string>;
+      aliasMap?: CanonicalAliasSource;
       now?: Date;
     }
   ): ProductPriceStats {
