@@ -15,7 +15,7 @@ import {
   normalizeBarcodeCandidates,
   normalizeStoreIdKey,
   normalizeValidatedBarcodeCandidates,
-  resolveCanonicalProductId
+  resolveCanonicalProductDetail
 } from './ProductIdentityService.js';
 import { validateAndNormalizeBarcode } from './ProductNormalizationService.js';
 
@@ -59,31 +59,38 @@ export function lookupProductByBarcode(params: {
   for (const p of params.products || []) {
     if (p?.id) productsById.set(p.id, p);
   }
+  const knownProductIds = new Set(productsById.keys());
   const aliasIndex = buildCanonicalAliasIndex(params.aliasMap ?? params.products ?? []);
 
-  let rawMatchedProduct = (params.products || []).find(p => {
+  let matchedProduct: Product | undefined;
+  const directProductMatch = (params.products || []).find(p => {
     if (!p?.barcode) return false;
     const prodVariants = normalizeBarcodeCandidates(p.barcode);
-    return prodVariants.some(v => candidateSet.has(v));
+    if (!prodVariants.some(v => candidateSet.has(v))) return false;
+    const detail = resolveCanonicalProductDetail(p.id, aliasIndex, { knownProductIds });
+    return detail.found && !detail.cycleDetected && Boolean(detail.canonicalId && productsById.has(detail.canonicalId));
   });
 
-  if (!rawMatchedProduct && Array.isArray(params.retailerProducts)) {
-    const matchedRp = params.retailerProducts.find(rp => {
-      if (!rp?.barcode || !rp?.productId) return false;
-      const rpVariants = normalizeBarcodeCandidates(rp.barcode);
-      return rpVariants.some(v => candidateSet.has(v));
-    });
-    if (matchedRp?.productId) {
-      const resolvedFromRp = resolveCanonicalProductId(matchedRp.productId, aliasIndex) || matchedRp.productId;
-      rawMatchedProduct = productsById.get(resolvedFromRp) || productsById.get(matchedRp.productId);
+  if (directProductMatch) {
+    const directDetail = resolveCanonicalProductDetail(directProductMatch.id, aliasIndex, { knownProductIds });
+    if (directDetail.found && !directDetail.cycleDetected && directDetail.canonicalId) {
+      matchedProduct = productsById.get(directDetail.canonicalId);
     }
   }
 
-  let matchedProduct = rawMatchedProduct;
-  if (rawMatchedProduct) {
-    const canonicalId = resolveCanonicalProductId(rawMatchedProduct.id, aliasIndex);
-    if (canonicalId && productsById.has(canonicalId)) {
-      matchedProduct = productsById.get(canonicalId)!;
+  if (!matchedProduct && Array.isArray(params.retailerProducts)) {
+    const matchedRp = params.retailerProducts.find(rp => {
+      if (!rp?.barcode || !rp?.productId) return false;
+      const rpVariants = normalizeBarcodeCandidates(rp.barcode);
+      if (!rpVariants.some(v => candidateSet.has(v))) return false;
+      const rpDetail = resolveCanonicalProductDetail(rp.productId, aliasIndex, { knownProductIds });
+      return rpDetail.found && !rpDetail.cycleDetected && Boolean(rpDetail.canonicalId && productsById.has(rpDetail.canonicalId));
+    });
+    if (matchedRp?.productId) {
+      const rpDetail = resolveCanonicalProductDetail(matchedRp.productId, aliasIndex, { knownProductIds });
+      if (rpDetail.found && !rpDetail.cycleDetected && rpDetail.canonicalId) {
+        matchedProduct = productsById.get(rpDetail.canonicalId);
+      }
     }
   }
 
@@ -113,9 +120,10 @@ export function lookupProductByBarcode(params: {
 
   const bestOfferByStoreKey = new Map<string, { offer: ProductOffer; store: Store }>();
   for (const offer of params.offers || []) {
-    const offerCanonId = resolveCanonicalProductId(offer.productId, aliasIndex) || offer.productId;
-    if (!equivalentIds.has(offer.productId) && offerCanonId !== matchedProduct.id) continue;
-    if (!PriceComparisonService.isOfferValid(offer, matchedProduct)) continue;
+    const offerDetail = resolveCanonicalProductDetail(offer.productId, aliasIndex, { knownProductIds });
+    if (offerDetail.cycleDetected || !offerDetail.found || !offerDetail.canonicalId) continue;
+    if (offerDetail.canonicalId !== matchedProduct.id && !equivalentIds.has(offer.productId)) continue;
+    if (!PriceComparisonService.isOfferValid(offer, matchedProduct, { aliasMap: aliasIndex })) continue;
     const normKey = normalizeStoreIdKey(offer.storeId);
     const store = storeMap.get(offer.storeId) || storeMap.get(normKey);
     if (!store) continue;

@@ -21,7 +21,11 @@ import { STORES } from '../../data/mockData.js';
 import { CatalogSourceDiscovery } from './CatalogSourceDiscovery.js';
 import { validatePublicHttpUrl } from '../../utils/urlSecurity.js';
 import { PriceExtractor } from './PriceExtractor.js';
-import { resolveCanonicalProductId } from '../../services/ProductIdentityService.js';
+import {
+  buildCanonicalAliasIndex,
+  type CanonicalAliasIndex,
+  resolveCanonicalProductDetail
+} from '../../services/ProductIdentityService.js';
 import {
   normalizeBrand,
   normalizeQuantityAndMultipack,
@@ -73,6 +77,16 @@ export interface PublishPreviewItem {
   documentUrl?: string;
   validUntil?: string;
   isNewProduct: boolean;
+  confidenceStatus?: 'confident' | 'unconfident';
+  canonicalReferenceIssue?: string;
+}
+
+export interface PublishPreviewRejectedItem {
+  id: string;
+  title: string;
+  originalMatchedProductId?: string;
+  confidenceStatus: 'unconfident';
+  error: string;
 }
 
 export interface PublishPreviewData {
@@ -89,6 +103,7 @@ export interface PublishPreviewData {
   retailersInvolved: string[];
   items: PublishPreviewItem[];
   sampleItems: PublishPreviewItem[];
+  rejectedItems?: PublishPreviewRejectedItem[];
   eligibleOfferIds: string[];
   cleanupOfferIds: string[];
   previewSnapshotHash: string;
@@ -406,9 +421,15 @@ export class CatalogStagingManager {
     let needsReviewCount = 0;
     const nowIso = new Date().toISOString();
 
-    const productsForMatching = isPostgresConfigured()
+    const rawProductsForMatching = isPostgresConfigured()
       ? await DatabaseService.getProducts()
       : StorageService.getAllProducts();
+    const matchAliasIndex = buildCanonicalAliasIndex(rawProductsForMatching);
+    const productsForMatching = rawProductsForMatching.filter(p => {
+      if (p.canonicalProductId) return false;
+      const d = resolveCanonicalProductDetail(p.id, matchAliasIndex);
+      return d.found && !d.cycleDetected && d.canonicalId === p.id;
+    });
 
     for (let idx = 0; idx < parseRes.offers.length; idx++) {
       const raw = parseRes.offers[idx];
@@ -662,31 +683,41 @@ export class CatalogStagingManager {
       itemsWithoutPriceCount = targetOffers.filter(o => !o.effectivePrice || o.effectivePrice <= 0 || isNaN(o.effectivePrice)).length;
     }
 
-    const [existingProducts, existingOffers, aliasMap] = usePostgres
+    const [existingProducts, existingOffers, aliasIndex]: [
+      Product[],
+      ProductOffer[],
+      CanonicalAliasIndex
+    ] = usePostgres
       ? await Promise.all([
           DatabaseService.getProducts(),
           DatabaseService.getOffers(),
-          DatabaseService.getProductAliasMap()
+          DatabaseService.getProductAliasIndex()
         ])
       : [
           StorageService.getAllProducts(),
           StorageService.getProductOffers(),
-          new Map<string, string>(
-            StorageService.getAllProducts()
-              .filter(p => p.canonicalProductId)
-              .map(p => [p.id, p.canonicalProductId as string])
-          )
+          buildCanonicalAliasIndex(StorageService.getAllProducts())
         ];
 
-    const canonicalProducts = existingProducts.filter(p => !p.canonicalProductId);
+    const canonicalProducts = existingProducts.filter(p => {
+      if (p.canonicalProductId) return false;
+      const d = resolveCanonicalProductDetail(p.id, aliasIndex);
+      return d.found && !d.cycleDetected && d.canonicalId === p.id;
+    });
     const productsById = new Map(canonicalProducts.map(p => [p.id, p]));
+    const knownProductIds = new Set(productsById.keys());
     const productsByBarcode = new Map<string, Product>();
     for (const prod of canonicalProducts) {
       if (prod.barcode && prod.barcode.trim().length >= 8) {
         productsByBarcode.set(prod.barcode.trim(), prod);
       }
     }
-    const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
+    const existingOfferMap = new Map<string, ProductOffer>();
+    for (const o of existingOffers) {
+      const offerDetail = resolveCanonicalProductDetail(o.productId, aliasIndex, { knownProductIds });
+      if (!offerDetail.found || offerDetail.cycleDetected || !offerDetail.canonicalId) continue;
+      existingOfferMap.set(`${offerDetail.canonicalId}__${o.storeId}`, o);
+    }
 
     let newProductsCount = 0;
     let existingUpdatedCount = 0;
@@ -698,20 +729,40 @@ export class CatalogStagingManager {
     const retailers = new Set<string>();
     const errors: string[] = [];
     const items: PublishPreviewItem[] = [];
+    const rejectedItems: PublishPreviewRejectedItem[] = [];
+    const validToPublish: CatalogExtractedOffer[] = [];
 
     for (const item of toPublish) {
       retailers.add(item.retailerId);
 
       let resolvedProduct: Product | undefined;
       if (item.matchedProductId) {
-        const resolvedCanonicalId =
-          resolveCanonicalProductId(item.matchedProductId, aliasMap) || item.matchedProductId;
-        resolvedProduct = productsById.get(resolvedCanonicalId);
+        const matchDetail = resolveCanonicalProductDetail(item.matchedProductId, aliasIndex, {
+          knownProductIds
+        });
+        if (matchDetail.cycleDetected || !matchDetail.found || !matchDetail.canonicalId) {
+          const reason = matchDetail.cycleDetected
+            ? 'ciclu canonic sau lanț de aliasuri peste limită'
+            : matchDetail.wasAlias && !matchDetail.found
+            ? 'alias orfan fără rădăcină canonică validă'
+            : 'produs canonic inexistent';
+          const errMsg = `[UNCONFIDENT] Oferta "${item.rawTitle}" (${item.id}) are referință canonică invalidă (${item.matchedProductId}): ${reason}.`;
+          errors.push(errMsg);
+          rejectedItems.push({
+            id: item.id,
+            title: item.rawTitle,
+            originalMatchedProductId: item.matchedProductId,
+            confidenceStatus: 'unconfident',
+            error: errMsg
+          });
+          continue;
+        }
+        resolvedProduct = productsById.get(matchDetail.canonicalId);
       }
-      if (!resolvedProduct && item.rawBarcode && item.rawBarcode.trim().length >= 8) {
+      if (!item.matchedProductId && !resolvedProduct && item.rawBarcode && item.rawBarcode.trim().length >= 8) {
         resolvedProduct = productsByBarcode.get(item.rawBarcode.trim());
       }
-      if (!resolvedProduct) {
+      if (!item.matchedProductId && !resolvedProduct) {
         const matchRes = ProductMatcher.matchProduct(
           {
             rawName: item.rawTitle,
@@ -724,7 +775,12 @@ export class CatalogStagingManager {
           canonicalProducts
         );
         if (matchRes.matchedProduct && matchRes.confidence >= 0.75) {
-          resolvedProduct = matchRes.matchedProduct;
+          const autoDetail = resolveCanonicalProductDetail(matchRes.matchedProduct.id, aliasIndex, {
+            knownProductIds
+          });
+          if (autoDetail.found && !autoDetail.cycleDetected && autoDetail.canonicalId) {
+            resolvedProduct = productsById.get(autoDetail.canonicalId);
+          }
         }
       }
 
@@ -766,6 +822,7 @@ export class CatalogStagingManager {
           ? Math.round(((np - ep) / np) * 100)
           : undefined;
 
+      validToPublish.push(item);
       items.push({
         id: item.id,
         title: item.rawTitle,
@@ -782,8 +839,8 @@ export class CatalogStagingManager {
         packageQuantity: item.packageQuantity,
         packageUnit: item.packageUnit,
         imageUrl: sanitizeImageUrl(item.imageUrl) || sanitizeImageUrl(resolvedProduct?.imageUrl),
-        matchedProductId: resolvedProduct?.id || item.matchedProductId,
-        matchedProductName: resolvedProduct?.name || item.matchedProductName,
+        matchedProductId: resolvedProduct?.id,
+        matchedProductName: resolvedProduct?.name,
         canonicalStatus: isNewProduct ? 'PRODUS NOU' : 'PRODUS EXISTENT',
         offerAction,
         stagingStatus: String(item.stagingStatus || 'APPROVED').toUpperCase(),
@@ -791,11 +848,12 @@ export class CatalogStagingManager {
         documentTitle: item.documentTitle,
         documentUrl: item.documentUrl,
         validUntil: item.validUntil,
-        isNewProduct
+        isNewProduct,
+        confidenceStatus: 'confident'
       });
     }
 
-    const previewSnapshotHash = this.computePreviewSnapshotHash(toPublish);
+    const previewSnapshotHash = this.computePreviewSnapshotHash(validToPublish);
 
     return {
       toPublishCount: items.length,
@@ -811,6 +869,7 @@ export class CatalogStagingManager {
       retailersInvolved: Array.from(retailers),
       items,
       sampleItems: items,
+      rejectedItems,
       eligibleOfferIds: items.map(i => i.id),
       cleanupOfferIds: items.map(i => i.id),
       previewSnapshotHash,
@@ -984,24 +1043,62 @@ export class CatalogStagingManager {
     const newOffers: ProductOffer[] = [];
     const newObservations: PriceObservation[] = [];
     const publishedOfferIds: string[] = [];
+    const errors: string[] = [];
     const perRetailerResults: Record<string, { published: number; errors: string[] }> = {};
     const existingOffers = StorageService.getProductOffers();
     const allLocalProducts = StorageService.getAllProducts();
-    const productsForMatching = allLocalProducts.filter(p => !p.canonicalProductId);
-    const localAliasIndex = allLocalProducts;
+    const localAliasIndex = buildCanonicalAliasIndex(allLocalProducts);
+    const productsForMatching = allLocalProducts.filter(p => {
+      if (p.canonicalProductId) return false;
+      const d = resolveCanonicalProductDetail(p.id, localAliasIndex);
+      return d.found && !d.cycleDetected && d.canonicalId === p.id;
+    });
+    const knownProductIds = new Set(productsForMatching.map(p => p.id));
     const existingOfferMap = new Map(existingOffers.map(o => [`${o.productId}__${o.storeId}`, o]));
 
     for (const item of toPublish) {
       const safeItemImageUrl = sanitizeImageUrl(item.imageUrl);
-      const resolvedMatchId = item.matchedProductId
-        ? resolveCanonicalProductId(item.matchedProductId, localAliasIndex)
-        : undefined;
-      const persistedMatch = resolvedMatchId
-        ? productsForMatching.find(product => product.id === resolvedMatchId)
-        : undefined;
-      if (persistedMatch) {
-        item.matchedProductId = persistedMatch.id;
-        item.matchedProductName = persistedMatch.name;
+      let resolvedCanonicalProductId: string | undefined;
+      let resolvedCanonicalProductName: string | undefined;
+
+      if (item.matchedProductId) {
+        const matchDetail = resolveCanonicalProductDetail(item.matchedProductId, localAliasIndex, {
+          knownProductIds
+        });
+        if (matchDetail.cycleDetected || !matchDetail.found || !matchDetail.canonicalId) {
+          const reason = matchDetail.cycleDetected
+            ? 'ciclu canonic sau lanț peste limită'
+            : matchDetail.wasAlias && !matchDetail.found
+            ? 'alias orfan'
+            : 'produs canonic inexistent';
+          const errMsg = `Ofertă blocată la publicare (${item.rawTitle} / ${item.id}): referință canonică invalidă (${item.matchedProductId}) — ${reason}.`;
+          errors.push(errMsg);
+          const rEntry = perRetailerResults[item.retailerId] || { published: 0, errors: [] };
+          rEntry.errors.push(errMsg);
+          perRetailerResults[item.retailerId] = rEntry;
+          StorageService.updateCatalogExtractedOffer(item.id, {
+            stagingStatus: 'NEEDS_REVIEW',
+            validationErrors: [errMsg],
+            updatedAt: new Date().toISOString()
+          });
+          continue;
+        }
+        const persistedMatch = productsForMatching.find(product => product.id === matchDetail.canonicalId);
+        if (!persistedMatch) {
+          const errMsg = `Ofertă blocată la publicare (${item.rawTitle} / ${item.id}): produsul canonic (${matchDetail.canonicalId}) lipsește din catalog.`;
+          errors.push(errMsg);
+          const rEntry = perRetailerResults[item.retailerId] || { published: 0, errors: [] };
+          rEntry.errors.push(errMsg);
+          perRetailerResults[item.retailerId] = rEntry;
+          StorageService.updateCatalogExtractedOffer(item.id, {
+            stagingStatus: 'NEEDS_REVIEW',
+            validationErrors: [errMsg],
+            updatedAt: new Date().toISOString()
+          });
+          continue;
+        }
+        resolvedCanonicalProductId = persistedMatch.id;
+        resolvedCanonicalProductName = persistedMatch.name;
         if (!persistedMatch.imageUrl && safeItemImageUrl) {
           persistedMatch.imageUrl = safeItemImageUrl;
           StorageService.addCustomProduct({ ...persistedMatch, imageUrl: safeItemImageUrl });
@@ -1015,9 +1112,9 @@ export class CatalogStagingManager {
           packageUnit: item.packageUnit as UnitType,
           category: item.rawCategory
         }, productsForMatching);
-        item.matchedProductId = matchResult.matchedProduct?.id;
-        item.matchedProductName = matchResult.matchedProduct?.name;
-        if (matchResult.matchedProduct) {
+        if (matchResult.matchedProduct && matchResult.confidence >= 0.75) {
+          resolvedCanonicalProductId = matchResult.matchedProduct.id;
+          resolvedCanonicalProductName = matchResult.matchedProduct.name;
           item.matchConfidence = matchResult.confidence;
           if (!matchResult.matchedProduct.imageUrl && safeItemImageUrl) {
             matchResult.matchedProduct.imageUrl = safeItemImageUrl;
@@ -1026,7 +1123,7 @@ export class CatalogStagingManager {
         }
       }
 
-      if (!item.matchedProductId) {
+      if (!resolvedCanonicalProductId) {
         const { category, subcategory } = mapRetailerCategoryToStandard(item.rawTitle);
         const normUnit: 'kg' | 'l' | 'buc' = ['kg', 'g'].includes(item.packageUnit || '')
           ? 'kg'
@@ -1052,16 +1149,20 @@ export class CatalogStagingManager {
         };
         StorageService.addCustomProduct(newProduct);
         productsForMatching.push(newProduct);
-        item.matchedProductId = newProductId;
-        item.matchedProductName = newProduct.name;
+        knownProductIds.add(newProductId);
+        resolvedCanonicalProductId = newProductId;
+        resolvedCanonicalProductName = newProduct.name;
       }
 
-      const offerKey = `${item.matchedProductId}__${item.retailerId}`;
+      item.matchedProductId = resolvedCanonicalProductId;
+      item.matchedProductName = resolvedCanonicalProductName;
+
+      const offerKey = `${resolvedCanonicalProductId}__${item.retailerId}`;
       const existing = existingOfferMap.get(offerKey);
 
       const offer: ProductOffer = {
-        id: existing?.id || `off-${item.retailerId}-${item.matchedProductId}`,
-        productId: item.matchedProductId,
+        id: existing?.id || `off-${item.retailerId}-${resolvedCanonicalProductId}`,
+        productId: resolvedCanonicalProductId,
         storeId: item.retailerId,
         sourceId: `src-${item.retailerId}-catalog`,
         price: item.effectivePrice,
@@ -1090,7 +1191,7 @@ export class CatalogStagingManager {
 
       newObservations.push({
         id: `obs-cat-${crypto.createHash('sha256').update(item.id).digest('hex').slice(0, 48)}`,
-        productId: item.matchedProductId,
+        productId: resolvedCanonicalProductId,
         storeId: item.retailerId,
         sourceId: `src-${item.retailerId}-catalog`,
         price: item.effectivePrice,
@@ -1103,8 +1204,8 @@ export class CatalogStagingManager {
 
       StorageService.updateCatalogExtractedOffer(item.id, {
         stagingStatus: 'PUBLISHED',
-        matchedProductId: item.matchedProductId,
-        matchedProductName: item.matchedProductName,
+        matchedProductId: resolvedCanonicalProductId,
+        matchedProductName: resolvedCanonicalProductName,
         validationErrors: undefined,
         updatedAt: new Date().toISOString()
       });
@@ -1121,7 +1222,7 @@ export class CatalogStagingManager {
     return {
       publishedCount: publishedOfferIds.length,
       publishedOfferIds,
-      errors: [],
+      errors,
       perRetailerResults
     };
   }

@@ -551,7 +551,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
               )}
             </button>
 
-            {activeList.items.length > 0 && (
+            {(activeList.items.length > 0 || showOptimizer) && (
               <button
                 type="button"
                 onClick={() => setShowOptimizer(prev => !prev)}
@@ -560,7 +560,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                     ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
                     : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-600'
                 }`}
-                title="Optimizează coșul pe 1, 2 sau 3 magazine"
+                title="Optimizează coșul într-un singur supermarket"
               >
                 <Split className="w-3.5 h-3.5" />
                 <span>{showOptimizer ? 'Vezi lista' : 'Optimizează coșul'}</span>
@@ -781,7 +781,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
         </div>
       )}
 
-      {showOptimizer && activeList.items.length > 0 ? (
+      {showOptimizer ? (
         <div ref={optimizerSectionRef} className="no-print scroll-mt-24">
           <BasketOptimizerPanel
             lists={lists}
@@ -792,6 +792,8 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
             offers={catalogOffers}
             stores={catalogStores}
             initialTransportCost={0}
+            initialMaxStores={1}
+            singleStoreOnly={true}
             defaultRegion={userCity}
           />
         </div>
@@ -987,8 +989,14 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                 <div className="flex items-center gap-2 self-end sm:self-auto">
                   <button
                     type="button"
-                    onClick={() => setShowOptimizer(true)}
+                    onClick={() => {
+                      setShowOptimizer(true);
+                      requestAnimationFrame(() => {
+                        optimizerSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      });
+                    }}
                     className="py-2.5 px-4 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/70 transition-colors cursor-pointer"
+                    title="Optimizează coșul într-un singur supermarket"
                   >
                     <Split className="w-4 h-4" />
                     <span>Optimizează coșul</span>

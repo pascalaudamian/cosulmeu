@@ -320,6 +320,82 @@ function latestCanonicalOffers(offers: ProductOffer[]): ProductOffer[] {
   return Array.from(offersByProductAndStore.values());
 }
 
+function formatDateOnlyValue(raw: unknown): string | undefined {
+  if (!raw) return undefined;
+  if (raw instanceof Date && Number.isFinite(raw.getTime())) {
+    return raw.toISOString().split('T')[0];
+  }
+  const str = String(raw).trim();
+  if (!str) return undefined;
+  return str.slice(0, 10);
+}
+
+function enrichOffersWithPromotionDates(
+  offers: ProductOffer[],
+  promoRows: any[],
+  aliasIndex?: CanonicalAliasIndex
+): ProductOffer[] {
+  if (!offers.length) return offers;
+
+  const promosByKey = new Map<
+    string,
+    Array<{ startsAt?: string; endsAt?: string; conditions?: string; discoveredAt: string }>
+  >();
+
+  for (const row of promoRows || []) {
+    const rawPid = String(row.canonical_product_id || row.product_id || row.productId || '').trim();
+    const rawStore = String(row.retailer_id || row.retailerId || '').trim();
+    if (!rawPid || !rawStore) continue;
+
+    const canonicalPid = aliasIndex
+      ? resolveCanonicalProductId(rawPid, aliasIndex) || rawPid
+      : rawPid;
+    const storeKey = normalizeStoreIdKey(rawStore);
+    if (!storeKey) continue;
+
+    const startsAt = formatDateOnlyValue(row.starts_at ?? row.startsAt);
+    const endsAt = formatDateOnlyValue(row.ends_at ?? row.endsAt);
+    const conditions = (row.conditions ? String(row.conditions).trim() : '') || undefined;
+    if (!startsAt && !endsAt && !conditions) continue;
+
+    const key = `${canonicalPid}__${storeKey}`;
+    const list = promosByKey.get(key) || [];
+    list.push({
+      startsAt,
+      endsAt,
+      conditions,
+      discoveredAt: String(row.discovered_at ?? row.discoveredAt ?? '')
+    });
+    promosByKey.set(key, list);
+  }
+
+  return offers.map(offer => {
+    const baseCurrency = offer.currency || 'RON';
+    if (!offer.isPromo) {
+      return offer.currency ? offer : { ...offer, currency: baseCurrency };
+    }
+
+    const key = `${offer.productId}__${normalizeStoreIdKey(offer.storeId)}`;
+    const candidates = promosByKey.get(key);
+    if (!candidates || candidates.length === 0) {
+      return offer.currency ? offer : { ...offer, currency: baseCurrency };
+    }
+
+    const matched =
+      (offer.validUntil
+        ? candidates.find(c => !c.endsAt || c.endsAt === offer.validUntil)
+        : undefined) || candidates[0];
+
+    return {
+      ...offer,
+      currency: baseCurrency,
+      validFrom: offer.validFrom || matched.startsAt,
+      validUntil: offer.validUntil || matched.endsAt,
+      promoDetails: offer.promoDetails || matched.conditions
+    };
+  });
+}
+
 // ============================================================================
 // SAFE PUBLIC CATALOG CACHE (60s TTL — STRICTLY PUBLIC READ-ONLY CATALOG DATA)
 // User lists, prices per basket, and preferences are NEVER cached here.
@@ -767,24 +843,70 @@ export class DatabaseService {
   /**
    * Returnează mapările retailer_products cu coduri de bare (rezolvate canonic) pentru scanerul de coduri de bare.
    */
-  static async getRetailerProductsWithBarcodes(): Promise<RetailerProductRecord[]> {
+  static async getRetailerProductsWithBarcodes(options?: {
+    poolOverride?: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> } | null;
+    supabaseClientOverride?: any;
+    aliasIndexOverride?: CanonicalAliasIndex;
+  }): Promise<RetailerProductRecord[]> {
+    const resolveSafeProductId = (
+      rawProductId: unknown,
+      aliasIndex: CanonicalAliasIndex
+    ): string | null => {
+      const candidate =
+        typeof rawProductId === 'string'
+          ? rawProductId.trim()
+          : String(rawProductId ?? '').trim();
+      if (!candidate) return null;
+      const detail = resolveCanonicalProductDetail(candidate, aliasIndex);
+      if (!detail.found || detail.cycleDetected || !detail.canonicalId) {
+        return null;
+      }
+      return detail.canonicalId;
+    };
+
+    const loadAliasIndex = async (): Promise<CanonicalAliasIndex> => {
+      if (options?.aliasIndexOverride) {
+        return options.aliasIndexOverride;
+      }
+      if (options?.poolOverride) {
+        const aliasRes = await options.poolOverride.query(
+          'SELECT id, canonical_product_id FROM products'
+        );
+        return buildCanonicalAliasIndex(aliasRes.rows);
+      }
+      if (options?.supabaseClientOverride) {
+        return this.getProductAliasIndex({ supabaseClient: options.supabaseClientOverride });
+      }
+      return this.getProductAliasIndex();
+    };
+
     const readLocalRetailerProducts = async (): Promise<RetailerProductRecord[]> => {
       const [{ StorageService }, aliasIndex] = await Promise.all([
         import('../services/StorageService.ts'),
-        this.getProductAliasIndex()
+        loadAliasIndex()
       ]);
       return StorageService.getRetailerProducts()
         .filter(r => Boolean(r?.barcode && r?.productId))
         .map(r => ({
           ...r,
-          productId: r.productId ? (resolveCanonicalProductId(String(r.productId), aliasIndex) || String(r.productId)) : null
+          productId: resolveSafeProductId(r.productId, aliasIndex)
         }));
     };
 
-    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+    if (
+      process.env.COSUL_MEU_ISOLATED_TEST === '1' &&
+      !options?.poolOverride &&
+      !options?.supabaseClientOverride
+    ) {
       return readLocalRetailerProducts();
     }
-    const pool = getPool();
+
+    const pool =
+      options?.poolOverride !== undefined
+        ? options.poolOverride
+        : options?.supabaseClientOverride
+        ? null
+        : getPool();
     if (pool) {
       try {
         const [rpRes, aliasIndex] = await Promise.all([
@@ -793,12 +915,12 @@ export class DatabaseService {
              FROM retailer_products
              WHERE barcode IS NOT NULL AND product_id IS NOT NULL`
           ),
-          this.getProductAliasIndex()
+          loadAliasIndex()
         ]);
         return rpRes.rows.map(r => ({
           id: String(r.id),
           retailerId: String(r.retailer_id),
-          productId: r.product_id ? (resolveCanonicalProductId(String(r.product_id), aliasIndex) || String(r.product_id)) : null,
+          productId: resolveSafeProductId(r.product_id, aliasIndex),
           externalSku: r.external_sku || undefined,
           url: r.url || undefined,
           scrapedName: r.scraped_name || 'Produs',
@@ -811,23 +933,24 @@ export class DatabaseService {
       }
     }
 
+    const client = options?.supabaseClientOverride || supabase;
     try {
       const [rpRes, aliasIndex] = await Promise.all([
         fetchAllSupabaseRows((from, to) =>
-          supabase
+          client
             .from('retailer_products')
             .select('id, retailer_id, product_id, external_sku, url, scraped_name, scraped_brand, barcode, status')
             .not('barcode', 'is', null)
             .not('product_id', 'is', null)
             .range(from, to)
         ),
-        this.getProductAliasIndex()
+        loadAliasIndex()
       ]);
       if (!rpRes.error && Array.isArray(rpRes.data)) {
         return rpRes.data.map(r => ({
           id: String(r.id),
           retailerId: String(r.retailer_id),
-          productId: r.product_id ? (resolveCanonicalProductId(String(r.product_id), aliasIndex) || String(r.product_id)) : null,
+          productId: resolveSafeProductId(r.product_id, aliasIndex),
           externalSku: r.external_sku || undefined,
           url: r.url || undefined,
           scrapedName: r.scraped_name || 'Produs',
@@ -1050,7 +1173,8 @@ export class DatabaseService {
           normalizedOffers.push(o);
         }
       }
-      return latestCanonicalOffers(normalizedOffers);
+        const normalized = latestCanonicalOffers(normalizedOffers);
+        return enrichOffersWithPromotionDates(normalized, StorageService.getPromotions(), aliasIndex);
     }
     const pool = getPool();
     if (pool) {
@@ -1082,11 +1206,12 @@ export class DatabaseService {
            ORDER BY po.observation_date ASC, po.last_checked ASC`
         );
         if (res.rows.length > 0) {
-          const offers = res.rows.map(r => ({
+          const offers: ProductOffer[] = res.rows.map(r => ({
             id: r.id,
             productId: r.canonical_product_id || r.product_id,
             storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
             sourceId: r.source_id || undefined,
+            currency: r.currency || 'RON',
             price: parseFloat(r.price),
             originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
             normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
@@ -1098,6 +1223,7 @@ export class DatabaseService {
             promoDetails: r.promo_details || undefined,
             loyaltyCardRequired: Boolean(r.loyalty_card_required),
             loyaltyCardName: r.loyalty_card_name || undefined,
+            validFrom: r.valid_from ? (r.valid_from.toISOString?.().split('T')[0] || String(r.valid_from).slice(0, 10)) : undefined,
             validUntil: r.valid_until ? (r.valid_until.toISOString?.().split('T')[0] || String(r.valid_until).slice(0, 10)) : undefined,
             observationDate: r.observation_date ? (r.observation_date.toISOString?.().split('T')[0] || String(r.observation_date).slice(0, 10)) : new Date().toISOString().split('T')[0],
             source: r.source,
@@ -1110,7 +1236,22 @@ export class DatabaseService {
             isFlaggedAnomaly: Boolean(r.is_flagged_anomaly),
             anomalyReason: r.anomaly_reason || undefined
           }));
-          return latestCanonicalOffers(offers);
+          const latest = latestCanonicalOffers(offers);
+          if (latest.some(o => o.isPromo && !o.validFrom)) {
+            const [promoRes, aliasIndex] = await Promise.all([
+              pool
+                .query(
+                  `SELECT product_id, retailer_id, starts_at, ends_at, conditions, discovered_at
+                   FROM promotions
+                   WHERE product_id IS NOT NULL
+                   ORDER BY discovered_at DESC`
+                )
+                .catch(() => ({ rows: [] })),
+              this.getProductAliasIndex().catch(() => undefined)
+            ]);
+            return enrichOffersWithPromotionDates(latest, promoRes.rows, aliasIndex);
+          }
+          return latest;
         }
       } catch (err: any) {
         console.warn('Postgres pool getOffers failed, falling back to Supabase:', err.message);
@@ -1145,6 +1286,7 @@ export class DatabaseService {
             productId: detail.canonicalId,
             storeId: r.store_id ? r.store_id.replace(/^store-/, '') : '',
             sourceId: r.source_id || undefined,
+            currency: r.currency || 'RON',
             price: parseFloat(r.price),
             originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
             normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
@@ -1156,6 +1298,7 @@ export class DatabaseService {
             promoDetails: r.promo_details || undefined,
             loyaltyCardRequired: Boolean(r.loyalty_card_required),
             loyaltyCardName: r.loyalty_card_name || undefined,
+            validFrom: r.valid_from ? String(r.valid_from).slice(0, 10) : undefined,
             validUntil: r.valid_until ? String(r.valid_until).slice(0, 10) : undefined,
             observationDate: r.observation_date ? String(r.observation_date).slice(0, 10) : new Date().toISOString().split('T')[0],
             source: r.source || 'verified',
@@ -1169,7 +1312,23 @@ export class DatabaseService {
             anomalyReason: r.anomaly_reason || undefined
           });
         }
-        return latestCanonicalOffers(offers);
+        const latest = latestCanonicalOffers(offers);
+        if (latest.some(o => o.isPromo && !o.validFrom)) {
+          try {
+            const promoRes = await supabase
+              .from('promotions')
+              .select('product_id, retailer_id, starts_at, ends_at, conditions, discovered_at')
+              .not('product_id', 'is', null)
+              .order('discovered_at', { ascending: false })
+              .limit(1000);
+            if (!promoRes.error && promoRes.data) {
+              return enrichOffersWithPromotionDates(latest, promoRes.data, aliasIndex);
+            }
+          } catch {
+            // Optional promo enrichment failure must not break getOffers
+          }
+        }
+        return latest;
       }
     } catch (err: any) {
       console.warn('Supabase getOffers failed:', err.message);
@@ -2537,18 +2696,25 @@ export class DatabaseService {
         const barcodeVariants = item.rawBarcode ? normalizeBarcodeCandidates(item.rawBarcode) : [];
 
         let canonicalProduct: Product | undefined = undefined;
+        const knownCanonicalIds = new Set(canonicalProductsById.keys());
 
         // Pas 1: Căutare produs canonic (rezolvând strict eventualele aliasuri până la rădăcina canonică)
-        // 1.1 După matchedProductId dacă este specificat
+        // 1.1 După matchedProductId dacă este specificat -> fără fallback dacă referința explicită e invalidă
         if (item.matchedProductId) {
-          const resolvedId = resolveCanonicalProductId(item.matchedProductId, aliasIndex);
-          if (resolvedId) {
-            canonicalProduct = canonicalProductsById.get(resolvedId);
+          const matchDetail = resolveCanonicalProductDetail(item.matchedProductId, aliasIndex, {
+            knownProductIds: knownCanonicalIds
+          });
+          if (matchDetail.cycleDetected || !matchDetail.found || !matchDetail.canonicalId) {
+            stats.errors.push(
+              `Ofertă blocată la publicare (${item.rawTitle} / ${item.id}): referință canonică invalidă (${item.matchedProductId}).`
+            );
+            continue;
           }
+          canonicalProduct = canonicalProductsById.get(matchDetail.canonicalId);
         }
 
         // 1.2 După cod de bare (GTIN / EAN, inclusiv variante UPC-A/EAN-13 și aliasuri)
-        if (!canonicalProduct && barcodeVariants.length > 0) {
+        if (!item.matchedProductId && !canonicalProduct && barcodeVariants.length > 0) {
           for (const bc of barcodeVariants) {
             const matchedRootId = allProductBarcodes.get(bc);
             if (matchedRootId && canonicalProductsById.has(matchedRootId)) {
@@ -2559,7 +2725,7 @@ export class DatabaseService {
         }
 
         // 1.3 După retailer_products mapping (rezolvând orice alias spre rădăcina canonică)
-        if (!canonicalProduct) {
+        if (!item.matchedProductId && !canonicalProduct) {
           const mapRes = await client.query(
             `SELECT rp.product_id
              FROM retailer_products rp
@@ -2573,15 +2739,17 @@ export class DatabaseService {
             [params.retailerId, deterministicSku, barcodeVariants.length > 0 ? barcodeVariants : null]
           );
           if (mapRes.rows.length > 0 && mapRes.rows[0].product_id) {
-            const resolvedFromRp = resolveCanonicalProductId(String(mapRes.rows[0].product_id), aliasIndex);
-            if (resolvedFromRp) {
-              canonicalProduct = canonicalProductsById.get(resolvedFromRp);
+            const rpDetail = resolveCanonicalProductDetail(String(mapRes.rows[0].product_id), aliasIndex, {
+              knownProductIds: knownCanonicalIds
+            });
+            if (rpDetail.found && !rpDetail.cycleDetected && rpDetail.canonicalId) {
+              canonicalProduct = canonicalProductsById.get(rpDetail.canonicalId);
             }
           }
         }
 
         // 1.4 După similaritate text & atribute prin ProductMatcher (strict pe produse canonice)
-        if (!canonicalProduct) {
+        if (!item.matchedProductId && !canonicalProduct) {
           const matchResult = ProductMatcher.matchProduct({
             rawName: item.rawTitle,
             barcode: item.rawBarcode,
@@ -4125,18 +4293,49 @@ export class DatabaseService {
     let deletedCount = 0;
 
     try {
-      const { data: prodNodes, error: prodNodesError } = await fetchAllSupabaseRows((from, to) =>
-        client.from('products').select('id, canonical_product_id').range(from, to)
-      );
-      if (prodNodesError || !Array.isArray(prodNodes)) {
-        return {
-          deletedCount: 0,
-          blockedCount: uniqueRequestedIds.length,
-          blockedIds: uniqueRequestedIds,
-          partialModification: false,
-          partialDeletions: [],
-          error: `Ștergerea a fost oprită: nu am putut verifica arborele produselor (${prodNodesError?.message || 'răspuns invalid sau ambiguu la products'}).`
-        };
+      const prodNodes: CanonicalProductNode[] = [];
+      const PROD_PAGE_SIZE = 1000;
+      let prodOffset = 0;
+
+      while (true) {
+        const { data: prodPage, error: prodNodesError } = await client
+          .from('products')
+          .select('id, canonical_product_id')
+          .range(prodOffset, prodOffset + PROD_PAGE_SIZE - 1);
+
+        if (prodNodesError || !Array.isArray(prodPage)) {
+          return {
+            deletedCount: 0,
+            blockedCount: uniqueRequestedIds.length,
+            blockedIds: uniqueRequestedIds,
+            partialModification: false,
+            partialDeletions: [],
+            error: `Ștergerea a fost oprită: nu am putut verifica arborele produselor (${prodNodesError?.message || 'răspuns invalid sau ambiguu la products'}).`
+          };
+        }
+
+        if (prodPage.length === 0) {
+          break;
+        }
+
+        for (const r of prodPage) {
+          if (!r || typeof r.id !== 'string' || !r.id.trim()) {
+            return {
+              deletedCount: 0,
+              blockedCount: uniqueRequestedIds.length,
+              blockedIds: uniqueRequestedIds,
+              partialModification: false,
+              partialDeletions: [],
+              error: 'Ștergerea a fost oprită: rând ambiguu fără id valid returnat de products.'
+            };
+          }
+          prodNodes.push({
+            id: r.id,
+            canonical_product_id: r.canonical_product_id ?? null
+          });
+        }
+
+        prodOffset += prodPage.length;
       }
 
       const aliasIdx = buildCanonicalAliasIndex(prodNodes);
@@ -5935,6 +6134,8 @@ export class DatabaseService {
       packageUnit?: string | null;
       validUntil?: string | null;
       matchedProductId?: string | null;
+      matchMethod?: 'gtin_exact' | 'name_brand_similarity' | 'manual' | 'unmatched' | string | null;
+      matchConfidence?: number | null;
       stagingStatus: string;
     };
     validStoreIds: Set<string>;
@@ -6024,20 +6225,31 @@ export class DatabaseService {
       errors.push(`Oferta este expirată (valabilă până la ${offer.validUntil}).`);
     }
 
-    // Canonical product resolution (promovează aliasurile multi-hop la produsul canonic rădăcină, blochează ciclurile)
+    // Canonical product resolution (promovează aliasurile multi-hop la produsul canonic rădăcină, blochează ciclurile și orfanii)
     let resolvedProductId: string | undefined;
     let resolvedProductName: string | undefined;
     let resolvedMatchMethod: 'gtin_exact' | 'name_brand_similarity' | 'manual' | 'unmatched' = 'unmatched';
     let resolvedMatchConfidence = 0;
 
     const canonicalPool = allProducts.filter(p => !p.canonicalProductId);
-    const targetProductId = requestedMatchedProductId || offer.matchedProductId || undefined;
+    const knownProductIds = new Set(productsById.keys());
+    const hasExplicitRequestedMatch = Boolean(requestedMatchedProductId && requestedMatchedProductId.trim().length > 0);
+    const targetProductId = hasExplicitRequestedMatch
+      ? requestedMatchedProductId!.trim()
+      : offer.matchedProductId
+      ? offer.matchedProductId.trim()
+      : undefined;
+
     if (targetProductId) {
       const detail = aliasIndex
-        ? resolveCanonicalProductDetail(targetProductId, aliasIndex)
+        ? resolveCanonicalProductDetail(targetProductId, aliasIndex, { knownProductIds })
         : null;
       if (detail?.cycleDetected) {
         errors.push(`Produsul asociat (${targetProductId}) face parte dintr-un lanț canonic ciclic invalid.`);
+      } else if (detail && detail.wasAlias && !detail.found) {
+        errors.push(`Produsul asociat (${targetProductId}) este un alias orfan fără rădăcină canonică validă.`);
+      } else if (detail && !detail.found) {
+        errors.push(`Produsul canonic asociat (${targetProductId}) nu a fost găsit ca rădăcină validă în catalog.`);
       } else {
         const canonicalTargetId =
           detail && detail.found && detail.canonicalId ? detail.canonicalId : targetProductId;
@@ -6047,8 +6259,72 @@ export class DatabaseService {
         } else {
           resolvedProductId = existingProd.id;
           resolvedProductName = existingProd.name;
-          resolvedMatchMethod = requestedMatchedProductId ? 'manual' : 'gtin_exact';
-          resolvedMatchConfidence = 1.0;
+
+          const offerBarcodeSet =
+            cleanBarcode.length >= 8 ? new Set(normalizeBarcodeCandidates(cleanBarcode)) : null;
+          const prodBarcodeCandidates = existingProd.barcode
+            ? normalizeBarcodeCandidates(existingProd.barcode)
+            : [];
+          const hasVerifiableGtinProof = Boolean(
+            offerBarcodeSet &&
+              prodBarcodeCandidates.length > 0 &&
+              prodBarcodeCandidates.some(bc => offerBarcodeSet.has(bc))
+          );
+
+          if (hasExplicitRequestedMatch) {
+            resolvedMatchMethod = 'manual';
+            resolvedMatchConfidence = 1.0;
+          } else if (offer.matchMethod === 'manual') {
+            resolvedMatchMethod = 'manual';
+            resolvedMatchConfidence =
+              typeof offer.matchConfidence === 'number' && Number.isFinite(offer.matchConfidence) && offer.matchConfidence > 0
+                ? offer.matchConfidence
+                : 1.0;
+          } else if (offer.matchMethod === 'name_brand_similarity') {
+            resolvedMatchMethod = 'name_brand_similarity';
+            resolvedMatchConfidence =
+              typeof offer.matchConfidence === 'number' && Number.isFinite(offer.matchConfidence) && offer.matchConfidence > 0
+                ? offer.matchConfidence
+                : 0.75;
+          } else if (hasVerifiableGtinProof) {
+            resolvedMatchMethod = 'gtin_exact';
+            resolvedMatchConfidence =
+              offer.matchMethod === 'gtin_exact' &&
+              typeof offer.matchConfidence === 'number' &&
+              Number.isFinite(offer.matchConfidence) &&
+              offer.matchConfidence > 0
+                ? offer.matchConfidence
+                : 1.0;
+          } else {
+            // Fără dovadă verificabilă GTIN NU promovăm niciodată la gtin_exact / confidence 1.0
+            resolvedMatchMethod = 'name_brand_similarity';
+            if (
+              offer.matchMethod !== 'gtin_exact' &&
+              typeof offer.matchConfidence === 'number' &&
+              Number.isFinite(offer.matchConfidence) &&
+              offer.matchConfidence > 0 &&
+              offer.matchConfidence < 1.0
+            ) {
+              resolvedMatchConfidence = offer.matchConfidence;
+            } else {
+              const simCheck = titleTrimmed.length >= 2
+                ? ProductMatcher.matchProduct(
+                    {
+                      rawName: titleTrimmed,
+                      brand: offer.rawBrand || undefined,
+                      packageWeightOrVolume: offer.packageQuantity || undefined,
+                      packageUnit: (offer.packageUnit as any) || undefined,
+                      category: offer.rawCategory || undefined
+                    },
+                    [existingProd]
+                  )
+                : null;
+              resolvedMatchConfidence =
+                simCheck && simCheck.matchedProduct?.id === existingProd.id && simCheck.confidence > 0
+                  ? Math.min(0.95, simCheck.confidence)
+                  : 0.75;
+            }
+          }
         }
       }
     } else if (titleTrimmed.length >= 2) {
@@ -6064,15 +6340,18 @@ export class DatabaseService {
         canonicalPool
       );
       if (matchRes.matchedProduct && matchRes.confidence >= 0.75) {
-        const safeCanonId = aliasIndex
-          ? resolveCanonicalProductId(matchRes.matchedProduct.id, aliasIndex) || matchRes.matchedProduct.id
-          : matchRes.matchedProduct.id;
-        const canonicalMatch = productsById.get(safeCanonId) || matchRes.matchedProduct;
-        if (!canonicalMatch.canonicalProductId) {
-          resolvedProductId = canonicalMatch.id;
-          resolvedProductName = canonicalMatch.name;
-          resolvedMatchMethod = matchRes.matchMethod;
-          resolvedMatchConfidence = matchRes.confidence;
+        const safeDetail = aliasIndex
+          ? resolveCanonicalProductDetail(matchRes.matchedProduct.id, aliasIndex, { knownProductIds })
+          : null;
+        if (!safeDetail || (safeDetail.found && !safeDetail.cycleDetected && safeDetail.canonicalId)) {
+          const safeCanonId = safeDetail?.canonicalId || matchRes.matchedProduct.id;
+          const canonicalMatch = productsById.get(safeCanonId) || matchRes.matchedProduct;
+          if (!canonicalMatch.canonicalProductId) {
+            resolvedProductId = canonicalMatch.id;
+            resolvedProductName = canonicalMatch.name;
+            resolvedMatchMethod = matchRes.matchMethod;
+            resolvedMatchConfidence = matchRes.confidence;
+          }
         }
       }
     }
@@ -6274,6 +6553,8 @@ export class DatabaseService {
           packageUnit: row.package_unit,
           validUntil: validUntilStr,
           matchedProductId: row.matched_product_id,
+          matchMethod: row.match_method,
+          matchConfidence: row.match_confidence != null ? parseFloat(row.match_confidence) : null,
           stagingStatus: row.staging_status
         },
         validStoreIds,
@@ -6510,6 +6791,8 @@ export class DatabaseService {
               packageUnit: row.package_unit,
               validUntil: validUntilStr,
               matchedProductId: row.matched_product_id,
+              matchMethod: row.match_method,
+              matchConfidence: row.match_confidence != null ? parseFloat(row.match_confidence) : null,
               stagingStatus: row.staging_status
             },
             validStoreIds,
@@ -6707,6 +6990,51 @@ export class DatabaseService {
             allProdRows.map(r => ({ id: r.id, canonicalProductId: r.canonical_product_id || null }))
           );
 
+          const allTargetProductIds = Array.from(new Set(allProdRows.map(r => r.id)));
+          const [offersRes, promoRes, rpRes] = await Promise.all([
+            pool.query(
+              `SELECT po.*
+               FROM product_offers po
+               WHERE po.product_id = ANY($1::text[])
+                 AND po.source != 'demo'
+                 AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
+                 AND COALESCE(po.is_flagged_anomaly, false) = false
+                 AND po.price > 0
+               ORDER BY po.observation_date ASC, po.last_checked ASC`,
+              [allTargetProductIds]
+            ),
+            pool
+              .query(
+                `SELECT product_id, retailer_id, starts_at, ends_at, conditions, discovered_at
+                 FROM promotions
+                 WHERE product_id = ANY($1::text[])
+                 ORDER BY discovered_at DESC`,
+                [allTargetProductIds]
+              )
+              .catch(() => ({ rows: [] })),
+            barcodes.length > 0
+              ? pool
+                  .query(
+                    `SELECT product_id, barcode
+                     FROM retailer_products
+                     WHERE barcode = ANY($1::text[])
+                       AND product_id = ANY($2::text[])
+                       AND COALESCE(status, 'active') = 'active'`,
+                    [barcodes, allTargetProductIds]
+                  )
+                  .catch(() => ({ rows: [] }))
+              : Promise.resolve({ rows: [] })
+          ]);
+
+          const rpBarcodeByRootId = new Map<string, string>();
+          for (const rp of rpRes.rows || []) {
+            if (!rp.product_id || !rp.barcode) continue;
+            const rootId = resolveCanonicalProductId(String(rp.product_id), aliasIndex) || String(rp.product_id);
+            if (!rpBarcodeByRootId.has(rootId)) {
+              rpBarcodeByRootId.set(rootId, String(rp.barcode).trim());
+            }
+          }
+
           const canonicalProducts: Product[] = [];
           const seenProdIds = new Set<string>();
           for (const r of allProdRows) {
@@ -6721,7 +7049,7 @@ export class DatabaseService {
               packageWeightOrVolume: parseFloat(r.package_weight_or_volume) || 1,
               packageUnit: r.package_unit || 'buc',
               normalizedUnit: r.normalized_unit || 'buc',
-              barcode: r.barcode || undefined,
+              barcode: r.barcode || rpBarcodeByRootId.get(r.id) || undefined,
               imageUrl: r.image_url || undefined,
               isBio: Boolean(r.is_bio),
               isRomanianProduct: Boolean(r.is_romanian_product),
@@ -6730,24 +7058,12 @@ export class DatabaseService {
             });
           }
 
-          const allTargetProductIds = Array.from(new Set(allProdRows.map(r => r.id)));
-          const offersRes = await pool.query(
-            `SELECT po.*
-             FROM product_offers po
-             WHERE po.product_id = ANY($1::text[])
-               AND po.source != 'demo'
-               AND COALESCE(po.verification_status, 'verified') NOT IN ('demo', 'isolated', 'rejected')
-               AND COALESCE(po.is_flagged_anomaly, false) = false
-               AND po.price > 0
-             ORDER BY po.observation_date ASC, po.last_checked ASC`,
-            [allTargetProductIds]
-          );
-
           const mappedOffers: ProductOffer[] = offersRes.rows.map(r => ({
             id: r.id,
             productId: resolveCanonicalProductId(r.product_id, aliasIndex) || r.product_id,
             storeId: normalizeStoreIdKey(r.store_id),
             sourceId: r.source_id || undefined,
+            currency: r.currency || 'RON',
             price: parseFloat(r.price),
             originalPrice: r.original_price ? parseFloat(r.original_price) : undefined,
             normalPrice: r.normal_price ? parseFloat(r.normal_price) : undefined,
@@ -6759,6 +7075,7 @@ export class DatabaseService {
             promoDetails: r.promo_details || undefined,
             loyaltyCardRequired: Boolean(r.loyalty_card_required),
             loyaltyCardName: r.loyalty_card_name || undefined,
+            validFrom: r.valid_from ? (r.valid_from.toISOString?.().split('T')[0] || String(r.valid_from).slice(0, 10)) : undefined,
             validUntil: r.valid_until ? (r.valid_until.toISOString?.().split('T')[0] || String(r.valid_until).slice(0, 10)) : undefined,
             observationDate: r.observation_date ? (r.observation_date.toISOString?.().split('T')[0] || String(r.observation_date).slice(0, 10)) : new Date().toISOString().split('T')[0],
             source: r.source,
@@ -6774,7 +7091,11 @@ export class DatabaseService {
 
           return {
             products: canonicalProducts,
-            offers: latestCanonicalOffers(mappedOffers),
+            offers: enrichOffersWithPromotionDates(
+              latestCanonicalOffers(mappedOffers),
+              promoRes.rows || [],
+              aliasIndex
+            ),
             stores: storesRes.stores,
             cacheHit: storesRes.hit,
             batchQueryMode: 'targeted_batch'

@@ -309,7 +309,30 @@ async function runTests() {
     assert.ok(resChunkFail.partialDeletions?.some(d => d.table === 'products' && d.targetIdsCount === 100));
     assert.equal(chunk2FailClient.deleteCalls.some(c => c.table === 'price_observations'), false);
     assert.equal(getCatalogOptimizationCacheStats().version, cacheBeforeChunkErr, 'Cache NU este invalidat când chunk 2 eșuează');
-    pass('Finding #2 (5/6): Eșec parțial pe tabel copil și chunk 2 păstrează contoarele reale + partialModification + cache neatins');
+
+    // 5b-bis: Chunk 1 șterge complet (100 produse), Chunk 2 eșuează pe tabel copil (promotions callIndex=2 după product_offers callIndex=2)
+    const cacheBeforeChunkChildErr = getCatalogOptimizationCacheStats().version;
+    const chunk2ChildFailClient = createFakeSupabaseClient({
+      productsRows: bulk120,
+      priceObservationsRows: [],
+      failChildTableOnCallIndex: {
+        table: 'promotions',
+        callIndex: 2,
+        error: { message: 'Injected chunk 2 promotions DELETE failure' }
+      }
+    });
+    const resChunkChildFail = await DatabaseService.deleteProductsViaSupabase(
+      bulk120.map(p => p.id),
+      chunk2ChildFailClient
+    );
+    assert.equal(resChunkChildFail.deletedCount, 100, 'Chunk 1 șters integral (100), chunk 2 blocat la tabel copil');
+    assert.equal(resChunkChildFail.blockedCount, 20);
+    assert.equal(resChunkChildFail.partialModification, true);
+    assert.ok(resChunkChildFail.partialDeletions?.some(d => d.table === 'products' && d.targetIdsCount === 100));
+    assert.ok(resChunkChildFail.partialDeletions?.some(d => d.table === 'product_offers' && d.targetIdsCount === 20));
+    assert.equal(chunk2ChildFailClient.deleteCalls.some(c => c.table === 'price_observations'), false);
+    assert.equal(getCatalogOptimizationCacheStats().version, cacheBeforeChunkChildErr, 'Cache NU este invalidat când chunk 2 eșuează pe tabel copil');
+    pass('Finding #2 (5/6): Eșec parțial pe tabel copil (inclusiv chunk 2 via failChildTableOnCallIndex) și chunk 2 păstrează contoarele reale + partialModification + cache neatins');
 
     // 5c: Rutele admin HTTP (/api/admin/products/:id & /api/admin/products/bulk-delete) nu returnează success: true la eșec parțial
     const { app } = await import('../server.ts');
@@ -458,9 +481,9 @@ async function runTests() {
         name: 'Lapte Bio 1L DB',
         brand: 'FermaDB',
         category: 'Lactate și ouă',
-        defaultUnit: 'L',
+        defaultUnit: 'l',
         packageWeightOrVolume: 1,
-        packageUnit: 'L',
+        packageUnit: 'l',
         normalizedUnit: 'l',
         baseReferencePrice: 7.5
       },
@@ -481,7 +504,11 @@ async function runTests() {
         name: 'Lapte Bio 1L DB',
         brand: 'FermaDB',
         category: 'Lactate și ouă',
-        defaultUnit: 'L',
+        defaultUnit: 'l',
+        packageWeightOrVolume: 1,
+        packageUnit: 'l',
+        normalizedUnit: 'l',
+        baseReferencePrice: 7.5,
         canonicalProductId: 'f3b14-cyc-b'
       },
       {
@@ -489,7 +516,11 @@ async function runTests() {
         name: 'Auto Referință DB',
         brand: 'FermaDB',
         category: 'Lactate și ouă',
-        defaultUnit: 'L',
+        defaultUnit: 'l',
+        packageWeightOrVolume: 1,
+        packageUnit: 'l',
+        normalizedUnit: 'l',
+        baseReferencePrice: 7.5,
         canonicalProductId: 'f3b14-self'
       },
       {
@@ -497,7 +528,11 @@ async function runTests() {
         name: 'Produs Orfan DB',
         brand: 'FermaDB',
         category: 'Lactate și ouă',
-        defaultUnit: 'L',
+        defaultUnit: 'l',
+        packageWeightOrVolume: 1,
+        packageUnit: 'l',
+        normalizedUnit: 'l',
+        baseReferencePrice: 7.5,
         canonicalProductId: 'f3b14-missing-root'
       }
     ];
@@ -511,7 +546,7 @@ async function runTests() {
         unitPrice: 6.4,
         unitPriceMeasure: 'lei/l',
         isPromo: true,
-        source: 'scraper_live',
+        source: 'official_feed',
         confidenceLevel: 'high',
         verificationStatus: 'verified',
         observationDate: '2026-11-23',
@@ -525,7 +560,7 @@ async function runTests() {
         unitPrice: 1.0,
         unitPriceMeasure: 'lei/l',
         isPromo: true,
-        source: 'scraper_live',
+        source: 'official_feed',
         confidenceLevel: 'high',
         verificationStatus: 'verified',
         observationDate: '2026-11-23',
@@ -539,7 +574,7 @@ async function runTests() {
         unitPrice: 1.2,
         unitPriceMeasure: 'lei/l',
         isPromo: false,
-        source: 'scraper_live',
+        source: 'official_feed',
         confidenceLevel: 'high',
         verificationStatus: 'verified',
         observationDate: '2026-11-23',
@@ -560,14 +595,14 @@ async function runTests() {
         productId: pid,
         category: 'Lactate și ouă',
         quantity: 1,
-        unit: 'L',
+        unit: 'l',
         checked: false
       };
       const m = BasketOptimizerService.matchItemToProduct(item, dbProducts, rawAliasIndex);
       assert.equal(m.status, 'unconfident', `BasketOptimizerService.matchItemToProduct respinge ${label} ca unconfident`);
     }
     const validMatch = BasketOptimizerService.matchItemToProduct(
-      { id: 'it-ok', name: 'Lapte', productId: 'f3b14-leaf', category: 'Lactate și ouă', quantity: 1, unit: 'L', checked: false },
+      { id: 'it-ok', name: 'Lapte', productId: 'f3b14-leaf', category: 'Lactate și ouă', quantity: 1, unit: 'l', checked: false },
       dbProducts,
       rawAliasIndex
     );
@@ -624,21 +659,17 @@ async function runTests() {
     const origGetProducts = DatabaseService.getProducts;
     const origGetOffers = DatabaseService.getOffers;
     const origGetStores = DatabaseService.getStores;
+    const origGetPriceObs = DatabaseService.getPriceObservations;
     const origGetUser = supabase.auth.getUser;
     const origFetch = globalThis.fetch;
 
     try {
       DatabaseService.getProductAliasIndex = async () => rawAliasIndex;
       DatabaseService.getProducts = async () => dbProducts.filter(p => !p.canonicalProductId);
-      DatabaseService.getOffers = async () =>
-        dbOffers
-          .map(o => {
-            const d = resolveCanonicalProductDetail(o.productId, rawAliasIndex);
-            if (!d.found || d.cycleDetected || !d.canonicalId) return null;
-            return { ...o, productId: d.canonicalId };
-          })
-          .filter((x): x is ProductOffer => Boolean(x));
+      // Fără prefiltrare în test: returnăm dbOffers BRUT (inclusiv oferte ciclice 1.0 lei și orfane 1.2 lei)
+      DatabaseService.getOffers = async () => dbOffers;
       DatabaseService.getStores = async () => STORES;
+      DatabaseService.getPriceObservations = async () => [];
 
       const { app } = await import('../server.ts');
       const srv = http.createServer(app);
@@ -689,6 +720,9 @@ async function runTests() {
         // Pregătim mock auth & Supabase REST pentru rutele autentificate
         let capturedSaveReceiptPayload: any = null;
         let capturedAlertInsertPayload: any = null;
+        const capturedBulkAlertInserts: any[] = [];
+        let forceUserPriceObsError = false;
+        const testListUuid = '00000000-0000-4000-8000-000000003b15';
 
         (supabase.auth as any).getUser = async (token: string) => {
           if (token === 'token-f3b14') {
@@ -701,7 +735,53 @@ async function runTests() {
           const urlStr = typeof input === 'string' ? input : input?.url || '';
           const method = (init?.method || 'GET').toUpperCase();
 
+          if (urlStr.includes('supabase.co/rest/v1/shopping_list_items')) {
+            return new Response(
+              JSON.stringify([
+                { id: 'sli-1', list_id: testListUuid, product_id: 'f3b14-cyc-a', product_name: 'Lapte Bio 1L DB', quantity: 1, unit: 'l', is_checked: false },
+                { id: 'sli-2', list_id: testListUuid, product_id: 'f3b14-self', product_name: 'Lapte Bio 1L DB', quantity: 1, unit: 'l', is_checked: false },
+                { id: 'sli-3', list_id: testListUuid, product_id: 'f3b14-deep-0', product_name: 'Lapte Bio 1L DB', quantity: 1, unit: 'l', is_checked: false },
+                { id: 'sli-4', list_id: testListUuid, product_id: 'f3b14-orphan', product_name: 'Lapte Bio 1L DB', quantity: 1, unit: 'l', is_checked: false },
+                { id: 'sli-5', list_id: testListUuid, product_id: 'f3b14-other-alias', product_name: 'Unt 82% DB', quantity: 1, unit: 'buc', is_checked: false }
+              ]),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          if (urlStr.includes('supabase.co/rest/v1/shopping_lists')) {
+            return new Response(
+              JSON.stringify({ id: testListUuid, user_id: '00000000-0000-4000-8000-000000003b14', name: 'Lista Test 3B14' }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
           if (urlStr.includes('supabase.co/rest/v1/receipts')) {
+            if (forceUserPriceObsError) {
+              return new Response(
+                JSON.stringify([
+                  {
+                    id: 'rec-fb-1',
+                    store_id: 'lidl',
+                    merchant_name: 'Lidl',
+                    purchased_at: '2026-11-22',
+                    total_amount: 26.4,
+                    status: 'processed',
+                    created_at: '2026-11-22T10:00:00Z',
+                    extracted_data: {
+                      storeId: 'lidl',
+                      subtotal: 26.4,
+                      discountTotal: 0,
+                      items: [
+                        { id: 'fb-1', rawName: 'Ciclu Fallback', quantity: 1, unit: 'buc', unitPrice: 5, totalPrice: 5, discount: 0, isWeighted: false, isSgr: false, matchedProductId: 'f3b14-cyc-a', matchStatus: 'matched' },
+                        { id: 'fb-2', rawName: 'Orfan Fallback', quantity: 1, unit: 'buc', unitPrice: 5, totalPrice: 5, discount: 0, isWeighted: false, isSgr: false, matchedProductId: 'f3b14-orphan', matchStatus: 'matched' },
+                        { id: 'fb-3', rawName: 'Self Fallback', quantity: 1, unit: 'buc', unitPrice: 5, totalPrice: 5, discount: 0, isWeighted: false, isSgr: false, matchedProductId: 'f3b14-self', matchStatus: 'matched' },
+                        { id: 'fb-4', rawName: 'Deep Fallback', quantity: 1, unit: 'buc', unitPrice: 5, totalPrice: 5, discount: 0, isWeighted: false, isSgr: false, matchedProductId: 'f3b14-deep-0', matchStatus: 'matched' },
+                        { id: 'fb-5', rawName: 'Valid Fallback', quantity: 1, unit: 'buc', unitPrice: 6.4, totalPrice: 6.4, discount: 0, isWeighted: false, isSgr: false, matchedProductId: 'f3b14-leaf', matchStatus: 'matched' }
+                      ]
+                    }
+                  }
+                ]),
+                { status: 200, headers: { 'Content-Type': 'application/json' } }
+              );
+            }
             return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
           }
           if (urlStr.includes('supabase.co/rest/v1/rpc/save_receipt_v2')) {
@@ -709,6 +789,12 @@ async function runTests() {
             return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
           }
           if (urlStr.includes('supabase.co/rest/v1/user_price_observations')) {
+            if (forceUserPriceObsError) {
+              return new Response(
+                JSON.stringify({ message: 'Simulated user_price_observations unavailable' }),
+                { status: 500, headers: { 'Content-Type': 'application/json' } }
+              );
+            }
             return new Response(
               JSON.stringify([
                 {
@@ -785,13 +871,15 @@ async function runTests() {
           }
           if (urlStr.includes('supabase.co/rest/v1/price_alerts')) {
             if (method === 'POST') {
-              capturedAlertInsertPayload = init?.body ? JSON.parse(String(init.body)) : null;
+              const payload = init?.body ? JSON.parse(String(init.body)) : null;
+              capturedAlertInsertPayload = payload;
+              capturedBulkAlertInserts.push(payload);
               return new Response(
                 JSON.stringify({
-                  id: capturedAlertInsertPayload?.id || 'al-created',
+                  id: payload?.id || 'al-created',
                   user_id: '00000000-0000-4000-8000-000000003b14',
-                  product_id: capturedAlertInsertPayload?.product_id,
-                  target_price: capturedAlertInsertPayload?.target_price,
+                  product_id: payload?.product_id,
+                  target_price: payload?.target_price,
                   is_active: true,
                   created_at: new Date().toISOString()
                 }),
@@ -804,6 +892,15 @@ async function runTests() {
                   id: 'al-row-cyc',
                   user_id: '00000000-0000-4000-8000-000000003b14',
                   product_id: 'f3b14-cyc-a',
+                  target_price: 5.0,
+                  is_active: true,
+                  created_at: '2026-11-20T00:00:00Z',
+                  alert_type: 'below_target'
+                },
+                {
+                  id: 'al-row-orphan',
+                  user_id: '00000000-0000-4000-8000-000000003b14',
+                  product_id: 'f3b14-orphan',
                   target_price: 5.0,
                   is_active: true,
                   created_at: '2026-11-20T00:00:00Z',
@@ -879,9 +976,27 @@ async function runTests() {
         assert.equal((obsMap.get('obs-2') as any).product_id, null);
         assert.equal((obsMap.get('obs-3') as any).product_id, null);
         assert.equal((obsMap.get('obs-4') as any).product_id, 'f3b14-root');
-        pass('Finding #1 (5/6): POST /api/receipts/save + GET /api/receipts/personal-history siguri la ciclu, self-ref, depth>16 și orfan');
 
-        // /api/alerts* (POST respinge ciclu/orfan cu 400, GET/evaluate nu crapă și nu acceptă oferte ciclice)
+        // GET /api/receipts/personal-history pe ramura receipts_fallback (când user_price_observations eșuează)
+        forceUserPriceObsError = true;
+        const histFbRes = await origFetch(`${baseUrl}/api/receipts/personal-history`, {
+          headers: { Authorization: 'Bearer token-f3b14' }
+        });
+        forceUserPriceObsError = false;
+        assert.equal(histFbRes.status, 200);
+        const histFbJson = await histFbRes.json();
+        assert.equal(histFbJson.source, 'receipts_fallback');
+        const byProdName = new Map(histFbJson.observations.map((o: any) => [o.productName, o]));
+        for (const badName of ['Ciclu Fallback', 'Orfan Fallback', 'Self Fallback', 'Deep Fallback']) {
+          const row = byProdName.get(badName) as any;
+          assert.ok(row, `Obs fallback prezent pentru ${badName}`);
+          assert.equal(row.productId, undefined, `receipts_fallback anulează productId pentru ${badName}`);
+          assert.ok(row.originalProductId, `receipts_fallback păstrează originalProductId pentru ${badName}`);
+        }
+        assert.equal((byProdName.get('Valid Fallback') as any).productId, 'f3b14-root');
+        pass('Finding #1 (5/6): POST /api/receipts/save + GET /api/receipts/personal-history (inclusiv receipts_fallback) siguri');
+
+        // /api/alerts* (POST respinge ciclu/orfan cu 400, GET/evaluate/from-list ignoră oferte ciclice/orfane brute)
         for (const badPid of ['f3b14-cyc-a', 'f3b14-self', 'f3b14-deep-0', 'f3b14-orphan']) {
           const badAlertRes = await origFetch(`${baseUrl}/api/alerts`, {
             method: 'POST',
@@ -901,18 +1016,34 @@ async function runTests() {
         assert.equal(goodAlertJson.alert.productId, 'f3b14-other-root');
         assert.equal(capturedAlertInsertPayload?.product_id, 'f3b14-other-root');
 
-        // POST /api/alerts cu alias valid f3b14-leaf (cu existing empty temporarily? Notice existing returns al-row-leaf, so check GET & evaluate, and check with empty existing by pointing to root after verifying duplicate check or custom product!)
-        // Mai întâi verificăm GET /api/alerts & POST /api/alerts/evaluate pe mock rows care conțin și ciclu, și alias valid
+        // POST /api/alerts/from-list/:listId cu elemente ciclice, self-ref, depth>16, orfan + alias valid
+        capturedBulkAlertInserts.length = 0;
+        const fromListRes = await origFetch(`${baseUrl}/api/alerts/from-list/${testListUuid}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token-f3b14' },
+          body: JSON.stringify({ alertType: 'below_target' })
+        });
+        assert.equal(fromListRes.status, 201);
+        const fromListJson = await fromListRes.json();
+        assert.equal(fromListJson.createdCount, 1, 'Doar elementul cu alias valid creează alertă din listă');
+        assert.equal(fromListJson.createdAlerts[0].productId, 'f3b14-other-root');
+        assert.equal(capturedBulkAlertInserts.length, 1);
+        assert.equal(capturedBulkAlertInserts[0].product_id, 'f3b14-other-root');
+        assert.equal(fromListJson.unmatchedItemNames.length, 4, 'Toate cele 4 referințe invalide din listă sunt raportate unmatched');
+
+        // GET /api/alerts & POST /api/alerts/evaluate pe oferte brute (cu 1.0 lei ciclu și 1.2 lei orfan în dbOffers)
         const getAlertsRes = await origFetch(`${baseUrl}/api/alerts`, {
           headers: { Authorization: 'Bearer token-f3b14' }
         });
         assert.equal(getAlertsRes.status, 200);
         const getAlertsJson = await getAlertsRes.json();
         const cycAlert = getAlertsJson.alerts.find((a: any) => a.id === 'al-row-cyc');
+        const orphanAlert = getAlertsJson.alerts.find((a: any) => a.id === 'al-row-orphan');
         const leafAlert = getAlertsJson.alerts.find((a: any) => a.id === 'al-row-leaf');
-        assert.equal(cycAlert.currentLowestPrice, 0, 'GET /api/alerts nu rezolvă produsul/oferta ciclică');
+        assert.equal(cycAlert.currentLowestPrice, 0, 'GET /api/alerts nu folosește oferta ciclică (1.0 lei)');
+        assert.equal(orphanAlert.currentLowestPrice, 0, 'GET /api/alerts nu folosește oferta orfană (1.2 lei)');
         assert.equal(leafAlert.productId, 'f3b14-root', 'GET /api/alerts normalizează aliasul valid spre root');
-        assert.equal(leafAlert.currentLowestPrice, 6.4);
+        assert.equal(leafAlert.currentLowestPrice, 6.4, 'Oferta validă este 6.4 lei, nepoluată de 1.0/1.2');
 
         const evalRes = await origFetch(`${baseUrl}/api/alerts/evaluate`, {
           method: 'POST',
@@ -922,6 +1053,20 @@ async function runTests() {
         const evalJson = await evalRes.json();
         assert.equal(evalJson.newNotificationsCount, 1);
         assert.equal(evalJson.newNotifications[0].productId, 'f3b14-root');
+        assert.equal(evalJson.newNotifications[0].observedPrice, 6.4);
+
+        // GET /api/catalog/history/:productId pe alias valid, ciclu, self-ref, depth>16, orfan, inexistent
+        const histValidRes = await origFetch(`${baseUrl}/api/catalog/history/f3b14-leaf?days=30`);
+        assert.equal(histValidRes.status, 200);
+        const histValidJson = await histValidRes.json();
+        assert.equal(histValidJson.productId, 'f3b14-root');
+        assert.equal(histValidJson.currentLowestPrice, 6.4);
+        for (const badHistId of ['f3b14-cyc-a', 'f3b14-self', 'f3b14-deep-0', 'f3b14-orphan']) {
+          const badHistRes = await origFetch(`${baseUrl}/api/catalog/history/${badHistId}?days=30`);
+          assert.equal(badHistRes.status, 400, `GET /api/catalog/history respinge ${badHistId} cu HTTP 400`);
+        }
+        const missingHistRes = await origFetch(`${baseUrl}/api/catalog/history/f3b14-nu-exista?days=30`);
+        assert.equal(missingHistRes.status, 404, 'GET /api/catalog/history întoarce HTTP 404 pentru produs inexistent');
 
         // POST /api/assistant/query: respinge selectedProductId ciclu/orfan cu 400; la optimize_list marchează invalidele unconfident
         for (const badSel of ['f3b14-cyc-a', 'f3b14-self', 'f3b14-deep-0', 'f3b14-orphan']) {
@@ -944,22 +1089,26 @@ async function runTests() {
             prompt: 'Optimizează lista mea',
             intent: 'optimize_list',
             items: [
-              { id: 'i1', name: 'Lapte Ciclu', productId: 'f3b14-cyc-a', category: 'Lactate și ouă', quantity: 1, unit: 'L', checked: false },
-              { id: 'i2', name: 'Lapte Self', productId: 'f3b14-self', category: 'Lactate și ouă', quantity: 1, unit: 'L', checked: false },
-              { id: 'i3', name: 'Lapte Deep', productId: 'f3b14-deep-0', category: 'Lactate și ouă', quantity: 1, unit: 'L', checked: false },
-              { id: 'i4', name: 'Lapte Orfan', productId: 'f3b14-orphan', category: 'Lactate și ouă', quantity: 1, unit: 'L', checked: false },
-              { id: 'i5', name: 'Lapte Valid', productId: 'f3b14-leaf', category: 'Lactate și ouă', quantity: 1, unit: 'L', checked: false }
+              { id: 'i1', name: 'Lapte Ciclu', productId: 'f3b14-cyc-a', category: 'Lactate și ouă', quantity: 1, unit: 'l', checked: false },
+              { id: 'i2', name: 'Lapte Self', productId: 'f3b14-self', category: 'Lactate și ouă', quantity: 1, unit: 'l', checked: false },
+              { id: 'i3', name: 'Lapte Deep', productId: 'f3b14-deep-0', category: 'Lactate și ouă', quantity: 1, unit: 'l', checked: false },
+              { id: 'i4', name: 'Lapte Orfan', productId: 'f3b14-orphan', category: 'Lactate și ouă', quantity: 1, unit: 'l', checked: false },
+              { id: 'i5', name: 'Lapte Valid', productId: 'f3b14-leaf', category: 'Lactate și ouă', quantity: 1, unit: 'l', checked: false }
             ]
           })
         });
-        assert.ok(optAstRes.status === 200 || optAstRes.status === 503);
+        assert.ok(
+          optAstRes.status === 200 || optAstRes.status === 502 || optAstRes.status === 503,
+          `Status așteptat 200/502/503, primit ${optAstRes.status}`
+        );
         const optAstJson = await optAstRes.json();
         const plan = optAstJson.deterministicPlan || optAstJson;
         const recs = plan.items || plan.recommendedItems || [];
         assert.equal(recs.length, 1, 'Doar aliasul valid ajunge în planul determinist');
         assert.equal(recs[0].productId, 'f3b14-root');
+        assert.equal(recs[0].unitPrice, 6.4, 'Asistentul folosește prețul valid 6.4 lei, nu ofertele ciclice/orfane');
         assert.equal(plan.optimizationSummary?.unconfidentMatchesCount, 4, 'Toate cele 4 referințe invalide (ciclu, self, deep, orfan) sunt unconfident');
-        pass('Finding #1 (6/6): /api/alerts* + POST /api/assistant/query validate fără StorageService');
+        pass('Finding #1 (6/6): /api/alerts* (inclusiv from-list), /api/catalog/history, și POST /api/assistant/query validate pe oferte brute fără StorageService');
       } finally {
         await new Promise<void>(resolve => srv.close(() => resolve()));
       }
@@ -968,6 +1117,7 @@ async function runTests() {
       DatabaseService.getProducts = origGetProducts;
       DatabaseService.getOffers = origGetOffers;
       DatabaseService.getStores = origGetStores;
+      DatabaseService.getPriceObservations = origGetPriceObs;
       (supabase.auth as any).getUser = origGetUser;
       globalThis.fetch = origFetch;
     }

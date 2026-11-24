@@ -316,10 +316,10 @@ export function collectProductIdsForCanonical(
 ): string[] {
   const index = buildCanonicalAliasIndex(indexOrSource);
   const resolved = resolveCanonicalProductDetail(productId, index, options);
-  const rootId = resolved.found && resolved.canonicalId ? resolved.canonicalId : typeof productId === 'string' ? productId.trim() : '';
-  if (!rootId || resolved.cycleDetected) {
+  if (resolved.cycleDetected || !resolved.found || !resolved.canonicalId) {
     return [];
   }
+  const rootId = resolved.canonicalId;
 
   const collected = new Set<string>([rootId]);
   const queue: string[] = [rootId];

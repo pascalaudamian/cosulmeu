@@ -443,12 +443,29 @@ export class BasketOptimizerService {
         }
         return false;
       });
-      // Preferăm rădăcina canonică dacă există; în lipsă, promovăm un alias valid non-ciclic
+      // Preferăm rădăcina canonică dacă există; blocăm potrivirile ambigue pe același cod de bare
+      const resolvedByBarcode = new Map<string, Product>();
       for (const candidate of barcodeMatches) {
         const resolved = refMap.get(candidate.id);
         if (resolved) {
-          return { status: 'matched', product: resolved, confidence: 'exact_ean' };
+          resolvedByBarcode.set(resolved.id, resolved);
         }
+      }
+      if (resolvedByBarcode.size === 1) {
+        return {
+          status: 'matched',
+          product: Array.from(resolvedByBarcode.values())[0],
+          confidence: 'exact_ean'
+        };
+      }
+      if (resolvedByBarcode.size > 1) {
+        return {
+          status: 'unconfident',
+          reasonRo: `Codul de bare ${cleanBarcode} corespunde la ${resolvedByBarcode.size} produse distincte în catalog.`,
+          candidates: Array.from(resolvedByBarcode.values())
+            .slice(0, 4)
+            .map(p => ({ id: p.id, name: p.name, brand: p.brand }))
+        };
       }
     }
 
@@ -774,6 +791,14 @@ export class BasketOptimizerService {
     let displayUnitPrice = offer.unitPrice;
     if (offer.price > 0 && offer.unitPrice > 0 && Math.abs(effectivePackPrice - offer.price) > 0.001) {
       displayUnitPrice = Math.round(offer.unitPrice * (effectivePackPrice / offer.price) * 100) / 100;
+    } else if ((!Number.isFinite(displayUnitPrice) || displayUnitPrice <= 0) && Number.isFinite(pkgWeight) && pkgWeight > 0) {
+      const baseUnits =
+        normUnit === 'kg' || normUnit === 'l'
+          ? toBaseAmount(pkgWeight, pkgUnit) / 1000
+          : pkgWeight;
+      if (baseUnits > 0) {
+        displayUnitPrice = Math.round((effectivePackPrice / baseUnits) * 100) / 100;
+      }
     }
 
     const packageSizeLabel = multipack
@@ -924,11 +949,16 @@ export class BasketOptimizerService {
 
     const allProducts = params.products && params.products.length > 0 ? params.products : PRODUCTS;
     const aliasIndex = buildCanonicalAliasIndex(params.aliasMap ?? allProducts);
+    const knownProductIds = new Set(allProducts.map(p => p.id));
     const rawOffers = params.offers !== undefined ? params.offers : PRODUCT_OFFERS;
-    const allOffers = rawOffers.map(o => {
-      const canonId = resolveCanonicalProductId(o.productId, aliasIndex);
-      return canonId && canonId !== o.productId ? { ...o, productId: canonId } : o;
-    });
+    const allOffers: ProductOffer[] = [];
+    for (const o of rawOffers) {
+      if (!o || !o.productId) continue;
+      const detail = resolveCanonicalProductDetail(o.productId, aliasIndex, { knownProductIds });
+      if (detail.cycleDetected || (detail.wasAlias && !detail.found)) continue;
+      const resolvedId = detail.canonicalId || o.productId;
+      allOffers.push(resolvedId !== o.productId ? { ...o, productId: resolvedId } : o);
+    }
     const rawStores = params.stores && params.stores.length > 0 ? params.stores : STORES;
     const canonicalStores = this.canonicalizeStores(rawStores);
 
@@ -1099,7 +1129,8 @@ export class BasketOptimizerService {
           conditionalPromoType: cost.conditionalPromoType,
           conditionalPromoApplied: cost.conditionalPromoApplied,
           conditionalPromoNoteRo: cost.conditionalPromoNoteRo,
-          regionMatched: best.offer.region || 'Național'
+          regionMatched: best.offer.region || 'Național',
+          currency: 'RON'
         });
       }
       allocationsByStoreId.set(store.id, storeMap);

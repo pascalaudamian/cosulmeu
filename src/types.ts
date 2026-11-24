@@ -74,6 +74,7 @@ export interface ProductOffer {
   storeId: string;
   sourceId?: string;
   price: number; // RON per packaging unit
+  currency?: string; // Expected 'RON'
   originalPrice?: number;
   unitPrice: number; // normalized (e.g. RON / kg, RON / l, RON / buc)
   unitPriceMeasure: 'lei/kg' | 'lei/l' | 'lei/buc';
@@ -84,6 +85,7 @@ export interface ProductOffer {
   couponRequired?: boolean;
   couponCode?: string;
   minQuantityForPromo?: number;
+  validFrom?: string; // YYYY-MM-DD
   validUntil?: string; // YYYY-MM-DD
   observationDate: string; // YYYY-MM-DD
   source: DataSourceType;
@@ -962,6 +964,7 @@ export interface BasketItemAllocation {
   conditionalPromoApplied?: boolean;
   conditionalPromoNoteRo?: string;
   regionMatched?: string;
+  currency?: 'RON';
 }
 
 export interface BasketUnconfidentMatch {

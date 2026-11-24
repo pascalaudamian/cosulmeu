@@ -195,25 +195,42 @@ export class PriceQualityClassifier {
       reasons.push('Sursă de date neacreditată oficial.');
     }
 
-    // 3. Promo validity
-    const isPromoExpired = Boolean(offer.validUntil && offer.validUntil < todayStr);
+    // 3. Promo validity (inclusiv verificare validFrom .. validUntil)
+    const validFromStr = offer.validFrom ? String(offer.validFrom).slice(0, 10) : undefined;
+    const validUntilStr = offer.validUntil ? String(offer.validUntil).slice(0, 10) : undefined;
+    const isPromoExpired = Boolean(validUntilStr && validUntilStr < todayStr);
+    const isPromoNotYetActive = Boolean(validFromStr && validFromStr > todayStr);
+    const hasInvalidPromoRange = Boolean(validFromStr && validUntilStr && validFromStr > validUntilStr);
     const hasInvalidPromoBounds =
+      hasInvalidPromoRange ||
       Boolean(offer.isPromo && offer.normalPrice && offer.promoPrice && offer.promoPrice > offer.normalPrice + 0.01) ||
       Boolean(offer.loyaltyCardRequired && !offer.loyaltyCardName) ||
       Boolean(offer.loyaltyPrice && offer.normalPrice && offer.loyaltyPrice >= offer.normalPrice);
 
     let promoScore = 100;
     let promoDetail = 'Fără promoție sau promoție în termen.';
-    if (isPromoExpired) {
+    if (hasInvalidPromoRange) {
       promoScore = 0;
-      promoDetail = `Promoție/ofertă expirată la ${offer.validUntil}.`;
-      reasons.push(`Oferta a expirat la data de ${offer.validUntil}.`);
+      promoDetail = `Perioadă promoție invalidă (${validFromStr} – ${validUntilStr}).`;
+      reasons.push(`Perioada promoției este invalidă (${validFromStr} > ${validUntilStr}).`);
+    } else if (isPromoExpired) {
+      promoScore = 0;
+      promoDetail = `Promoție/ofertă expirată la ${validUntilStr}.`;
+      reasons.push(`Oferta a expirat la data de ${validUntilStr}.`);
+    } else if (isPromoNotYetActive) {
+      promoScore = 0;
+      promoDetail = `Promoție/ofertă neactivă încă (începe la ${validFromStr}).`;
+      reasons.push(`Promoția nu este încă activă (începe la ${validFromStr}).`);
     } else if (hasInvalidPromoBounds) {
       promoScore = 25;
       promoDetail = 'Date promoționale sau card de fidelitate inconsistente.';
       reasons.push('Condițiile promoției sau ale cardului de fidelitate sunt inconsistente.');
-    } else if (offer.isPromo && offer.validUntil) {
-      promoDetail = `Promoție activă până la ${offer.validUntil}.`;
+    } else if (offer.isPromo && validFromStr && validUntilStr) {
+      promoDetail = `Promoție activă în perioada ${validFromStr} – ${validUntilStr}.`;
+    } else if (offer.isPromo && validUntilStr) {
+      promoDetail = `Promoție activă până la ${validUntilStr}.`;
+    } else if (offer.isPromo && validFromStr) {
+      promoDetail = `Promoție activă din ${validFromStr}.`;
     }
 
     // 4. Product validity
@@ -231,10 +248,16 @@ export class PriceQualityClassifier {
       productDetail = 'Lipsește unitatea normalizată a produsului.';
     }
 
-    // 5. Unit consistency
+    // 5. Unit & currency consistency
     let unitScore = 100;
     let unitDetail = 'Preț unitar și unitate de măsură consecvente.';
-    if (!Number.isFinite(offer.unitPrice) || offer.unitPrice <= 0 || !offer.unitPriceMeasure) {
+    const rawMeasure = String(offer.unitPriceMeasure || '').trim();
+    const hasForeignMeasureCurrency = /^(eur|usd|gbp|€|\$)\b/i.test(rawMeasure);
+    if (hasForeignMeasureCurrency) {
+      unitScore = 0;
+      unitDetail = `Unitate de măsură în altă monedă decât RON (${rawMeasure}).`;
+      reasons.push(`Moneda prețului unitar (${rawMeasure}) nu este RON.`);
+    } else if (!Number.isFinite(offer.unitPrice) || offer.unitPrice <= 0 || !offer.unitPriceMeasure) {
       unitScore = 40;
       unitDetail = 'Lipsește prețul unitar sau unitatea de măsură.';
       reasons.push('Lipsește prețul unitar normalizat.');
@@ -247,13 +270,21 @@ export class PriceQualityClassifier {
       }
     }
 
-    // 6. Price anomalies & structural validity
+    // 6. Price anomalies, currency & structural validity
     let anomalyScore = 100;
     let anomalyDetail = 'Fără anomalii detectate.';
     let hasFatalAnomaly = false;
     let hasSuspiciousAnomaly = false;
 
-    if (!Number.isFinite(offer.price) || offer.price <= 0) {
+    const normalizedCurrency = (offer.currency || 'RON').trim().toUpperCase();
+    const isSupportedCurrency = normalizedCurrency === 'RON' || normalizedCurrency === 'LEI';
+
+    if (!isSupportedCurrency || hasForeignMeasureCurrency) {
+      anomalyScore = 0;
+      hasFatalAnomaly = true;
+      anomalyDetail = `Monedă nesuportată (${offer.currency || rawMeasure}); optimizarea acceptă exclusiv RON.`;
+      reasons.push(anomalyDetail);
+    } else if (!Number.isFinite(offer.price) || offer.price <= 0) {
       anomalyScore = 0;
       hasFatalAnomaly = true;
       anomalyDetail = 'Preț 0, negativ sau NaN.';
@@ -310,6 +341,10 @@ export class PriceQualityClassifier {
       confirmScore = 0;
       hasFatalAnomaly = true;
       confirmDetail = 'Ofertă exclusiv demonstrativă.';
+      reasons.push(confirmDetail);
+    } else {
+      confirmScore = 20;
+      confirmDetail = `Status verificare necunoscut (${String(verifStatus || 'nespecificat')}).`;
       reasons.push(confirmDetail);
     }
 
@@ -395,7 +430,7 @@ export class PriceQualityClassifier {
       (!hasFutureValidUntil && ageHours !== null && ageHours > expiredThresholdHours)
     ) {
       status = 'EXPIRED';
-    } else if (missingSource || verifStatus === 'pending' || sourceKey === 'estimated' || ageHours === null) {
+    } else if (missingSource || isPromoNotYetActive || verifStatus === 'pending' || sourceKey === 'estimated' || ageHours === null) {
       status = 'UNVERIFIED';
     } else if (ageHours > cfg.verifiedMaxHours) {
       status = 'STALE';
@@ -408,6 +443,7 @@ export class PriceQualityClassifier {
     const isUsableForComparison =
       !hasFatalAnomaly &&
       !missingSource &&
+      !isPromoNotYetActive &&
       status !== 'EXPIRED' &&
       status !== 'SUSPICIOUS' &&
       offer.price > 0 &&

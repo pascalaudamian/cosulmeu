@@ -2402,10 +2402,31 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
       });
     }
     const intervalDays = queryCheck.data.days;
+    const requestedProductId = req.params.productId;
     const aliasIndex = await loadServerProductAliasIndex();
-    const canonicalProductId =
-      resolveCanonicalProductId(req.params.productId, aliasIndex) || req.params.productId;
+    const detail = resolveCanonicalProductDetail(requestedProductId, aliasIndex);
+    if (detail.cycleDetected) {
+      return res.status(400).json({
+        success: false,
+        error: 'Identificator de produs invalid (ciclu canonic sau lanț de aliasuri peste limită).'
+      });
+    }
+    if (detail.wasAlias && !detail.found) {
+      return res.status(400).json({
+        success: false,
+        error: 'Identificator de produs invalid (alias orfan fără produs canonic rădăcină).'
+      });
+    }
+    if (!detail.found || !detail.canonicalId) {
+      return res.status(404).json({
+        success: false,
+        error: 'Produsul solicitat nu a fost găsit în catalog.'
+      });
+    }
+
+    const canonicalProductId = detail.canonicalId;
     const equivalentIds = new Set(collectProductIdsForCanonical(canonicalProductId, aliasIndex));
+    equivalentIds.add(canonicalProductId);
 
     const [observations, offers, stores] = isPostgresConfigured()
       ? await Promise.all([
@@ -2436,20 +2457,25 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
     const activeIntervalStats = fullStats.intervalStats[intervalDays];
     const cutoffMs = Date.now() - intervalDays * 24 * 60 * 60 * 1000;
     const realFilteredObservations = observations
-      .filter(o => {
-        if (!o || !Number.isFinite(o.price) || o.price <= 0) return false;
-        if (o.source === 'demo' || o.source === 'estimated') return false;
+      .reduce<Array<typeof observations[number] & { storeName: string }>>((acc, o) => {
+        if (!o || !Number.isFinite(o.price) || o.price <= 0) return acc;
+        if (o.source === 'demo' || o.source === 'estimated') return acc;
+        const obsDetail = resolveCanonicalProductDetail(o.productId, aliasIndex);
+        if (obsDetail.cycleDetected || !obsDetail.found || !obsDetail.canonicalId) {
+          return acc;
+        }
         const ts = new Date(o.date.length === 10 ? `${o.date}T12:00:00Z` : o.date).getTime();
-        return Number.isFinite(ts) && ts >= cutoffMs && ts <= Date.now() + 24 * 60 * 60 * 1000;
-      })
-      .map(o => {
+        if (!Number.isFinite(ts) || ts < cutoffMs || ts > Date.now() + 24 * 60 * 60 * 1000) {
+          return acc;
+        }
         const key = (o.storeId || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
-        return {
+        acc.push({
           ...o,
-          productId: resolveCanonicalProductId(o.productId, aliasIndex) || o.productId,
+          productId: obsDetail.canonicalId,
           storeName: normalizedStoresMap.get(key) || o.storeId
-        };
-      });
+        });
+        return acc;
+      }, []);
 
     res.json({
       success: true,
