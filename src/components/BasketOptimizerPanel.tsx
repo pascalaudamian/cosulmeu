@@ -169,8 +169,7 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
   const [useCoupons, setUseCoupons] = useState<boolean>(false);
   const [stalePolicy, setStalePolicy] = useState<'include_warn' | 'exclude_7d' | 'strict_3d'>('include_warn');
   const [selectedRegion, setSelectedRegion] = useState<string>('Național');
-  const [transportCost, setTransportCost] = useState<number>(isSingleStoreOnly ? 0 : initialTransportCost);
-  const [showLimitations, setShowLimitations] = useState<boolean>(isSingleStoreOnly);
+  const [showLimitations, setShowLimitations] = useState<boolean>(true);
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
 
   const [serverSyncEntry, setServerSyncEntry] = useState<{
@@ -215,8 +214,18 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
     [resolvedProducts.length, resolvedOffers.length, resolvedStores.length]
   );
 
+  const eligibleStoresCount = useMemo(
+    () => Math.max(1, resolvedStores.filter(s => !excludedStoreIds.includes(s.id)).length),
+    [resolvedStores, excludedStoreIds]
+  );
+  const allEligibleLimitValue = useMemo(
+    () => Math.max(4, Math.min(20, resolvedStores.length)),
+    [resolvedStores.length]
+  );
+
   const effectiveMaxStores = isSingleStoreOnly ? 1 : maxStores;
-  const effectiveTransportCost = isSingleStoreOnly ? 0 : transportCost;
+  // Regula FAZA 2.2: nu inventăm costuri sau estimări de transport; optimizarea folosește exclusiv prețul produselor.
+  const effectiveTransportCost = isSingleStoreOnly ? 0 : Math.max(0, initialTransportCost || 0);
 
   const optimizerOptions: BasketOptimizationOptions = useMemo(
     () => ({
@@ -505,7 +514,7 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
               <h2 className="font-display text-lg sm:text-xl font-bold text-slate-900 dark:text-slate-100">
                 {isSingleStoreOnly
                   ? `Optimizare Coș (1 supermarket) · ${activeList.name}`
-                  : `Optimizare Coș · ${activeList.name}`}
+                  : `Optimizator Multi-Magazin · ${activeList.name}`}
               </h2>
             </div>
             {optimization.isEstimative && (
@@ -653,21 +662,25 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
                   { val: 1, label: '1 magazin' },
                   { val: 2, label: 'Max 2' },
                   { val: 3, label: 'Max 3' },
-                  { val: 8, label: '3+ (nelimitat)' }
-                ].map(opt => (
-                  <button
-                    key={opt.val}
-                    type="button"
-                    onClick={() => setMaxStores(opt.val)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                      maxStores === opt.val
-                        ? 'bg-emerald-600 text-white'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+                  { val: allEligibleLimitValue, label: `Toate eligibile (${eligibleStoresCount})` }
+                ].map(opt => {
+                  const isActiveOption =
+                    opt.val >= 4 ? maxStores >= 4 : maxStores === opt.val;
+                  return (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      onClick={() => setMaxStores(opt.val)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                        isActiveOption
+                          ? 'bg-emerald-600 text-white'
+                          : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -736,29 +749,11 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
               </select>
             </div>
 
-            {!isSingleStoreOnly && (
-              <div className="flex items-center gap-1.5">
-                <label htmlFor="optimizer-transport" className="font-semibold whitespace-nowrap">
-                  Deplasare/oprire:
-                </label>
-                <input
-                  id="optimizer-transport"
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={transportCost}
-                  onChange={e => setTransportCost(Math.max(0, Number(e.target.value) || 0))}
-                  className="w-16 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-900 dark:text-slate-100 tabular-nums text-right"
-                />
-                <span>lei</span>
-              </div>
-            )}
           </div>
 
-          {!isSingleStoreOnly && transportCost === 0 && (
+          {!isSingleStoreOnly && (
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Calcul strict pe prețul produselor (costul de deplasare nu este inventat; îl poți introduce manual).
+              Costurile de transport, carburantul și timpul de deplasare nu sunt incluse (nu sunt calculate sau estimate distanțe); calcul exclusiv pe prețurile produselor.
             </p>
           )}
           {isSingleStoreOnly && (
@@ -838,13 +833,20 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
           {/* Card 1: Best Single Store */}
           <div className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/80 flex flex-col justify-between">
             <div>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-2 gap-2">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                   1. Cel mai ieftin magazin unic
                 </span>
                 {singleBest && (
-                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 tabular-nums">
-                    {singleBest.coveredItemsCount}/{optimization.distinctNormalizedItemsCount} ({singleBest.completenessPercentage}%)
+                  <span
+                    className={`text-[11px] font-bold tabular-nums ${
+                      singleBest.isComplete
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-amber-700 dark:text-amber-400'
+                    }`}
+                  >
+                    {singleBest.isComplete ? 'COMPLET' : 'PARȚIAL'} · {singleBest.coveredItemsCount}/
+                    {optimization.distinctNormalizedItemsCount} ({singleBest.completenessPercentage}%)
                   </span>
                 )}
               </div>
@@ -877,7 +879,7 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
                     )}
                     {singleBest.missingItems.length > 0 && (
                       <p className="text-amber-700 dark:text-amber-400">
-                        {singleBest.missingItems.length} articole fără ofertă în acest magazin
+                        PARȚIAL: {singleBest.missingItems.length} articole fără ofertă în acest magazin
                       </p>
                     )}
                   </div>
@@ -899,12 +901,19 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
             }`}
           >
             <div>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-2 gap-2">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                   2. Varianta optimă în 2 magazine
                 </span>
                 {twoStorePlan && (
-                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 tabular-nums">
+                  <span
+                    className={`text-[11px] font-bold tabular-nums ${
+                      twoStorePlan.isComplete
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-amber-700 dark:text-amber-400'
+                    }`}
+                  >
+                    {twoStorePlan.coverageStatusRo || (twoStorePlan.isComplete ? 'COMPLET' : 'PARȚIAL')} ·{' '}
                     {twoStorePlan.coveredItemsCount}/{optimization.distinctNormalizedItemsCount} · {twoStorePlan.storeCount}{' '}
                     {twoStorePlan.storeCount === 1 ? 'oprire' : 'opriri'}
                   </span>
@@ -913,7 +922,7 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
 
               {maxStores < 2 ? (
                 <p className="text-xs text-slate-500 dark:text-slate-400 py-4">
-                  Selectează „Max 2” sau „Max 3” mai sus pentru a compara împărțirea în două magazine.
+                  Selectează „Max 2”, „Max 3” sau „Toate eligibile” mai sus pentru a compara împărțirea în două magazine.
                 </p>
               ) : twoStorePlan ? (
                 <>
@@ -942,8 +951,14 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
                           : 'Fără economie suplimentară față de 1 magazin'}
                       </p>
                     ) : (
-                      <p className="text-slate-500 dark:text-slate-400">
-                        Acoperire extinsă (fără magazin unic comun pentru comparație).
+                      <p className="text-amber-700 dark:text-amber-400">
+                        {twoStorePlan.savingsBasisRo ||
+                          'Acoperire diferită (fără magazin unic echivalent pentru calculul economiei).'}
+                      </p>
+                    )}
+                    {!twoStorePlan.isComplete && twoStorePlan.missingItems.length > 0 && (
+                      <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                        PARȚIAL ({twoStorePlan.missingItems.length} articole lipsă — nu sunt calculate ca 0 RON)
                       </p>
                     )}
                   </div>
@@ -956,7 +971,7 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
             </div>
           </div>
 
-          {/* Card 3: Optimal Max-3 (or Unlimited) Store Plan */}
+          {/* Card 3: Optimal Max-3 (or All Eligible) Store Plan */}
           <div
             className={`p-4 sm:p-5 rounded-2xl border flex flex-col justify-between ${
               maxStores >= 3 && activeRecommendedPlan
@@ -965,13 +980,22 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
             }`}
           >
             <div>
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-2 gap-2">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                  3. Varianta optimă (max {maxStores > 3 ? optimization.maxStoresApplied : 3} magazine)
+                  3. Varianta optimă ({maxStores > 3 ? `toate max ${optimization.maxStoresApplied}` : 'max 3'} magazine)
                 </span>
                 {(maxStores > 3 ? activeRecommendedPlan : threeStorePlan) && (
-                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 tabular-nums">
-                    {(maxStores > 3 ? activeRecommendedPlan : threeStorePlan)!.coveredItemsCount}/{optimization.distinctNormalizedItemsCount} ·{' '}
+                  <span
+                    className={`text-[11px] font-bold tabular-nums ${
+                      (maxStores > 3 ? activeRecommendedPlan : threeStorePlan)!.isComplete
+                        ? 'text-emerald-700 dark:text-emerald-400'
+                        : 'text-amber-700 dark:text-amber-400'
+                    }`}
+                  >
+                    {(maxStores > 3 ? activeRecommendedPlan : threeStorePlan)!.coverageStatusRo ||
+                      ((maxStores > 3 ? activeRecommendedPlan : threeStorePlan)!.isComplete ? 'COMPLET' : 'PARȚIAL')}{' '}
+                    · {(maxStores > 3 ? activeRecommendedPlan : threeStorePlan)!.coveredItemsCount}/
+                    {optimization.distinctNormalizedItemsCount} ·{' '}
                     {(maxStores > 3 ? activeRecommendedPlan : threeStorePlan)!.storeCount}{' '}
                     {(maxStores > 3 ? activeRecommendedPlan : threeStorePlan)!.storeCount === 1 ? 'oprire' : 'opriri'}
                   </span>
@@ -980,7 +1004,7 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
 
               {maxStores < 3 ? (
                 <p className="text-xs text-slate-500 dark:text-slate-400 py-4">
-                  Selectează „Max 3” sau „3+ (nelimitat)” pentru optimizarea pe maximum 3 magazine.
+                  Selectează „Max 3” sau „Toate eligibile” pentru optimizarea pe 3 sau mai multe magazine.
                 </p>
               ) : (maxStores > 3 ? activeRecommendedPlan : threeStorePlan) ? (
                 (() => {
@@ -1009,11 +1033,16 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
                           >
                             {plan.savingsVsBestSingleStore > 0
                               ? `Economie ${PriceComparisonService.formatRon(plan.savingsVsBestSingleStore)} (${plan.savingsPercentVsBestSingleStore}%) vs. ${plan.baselineSingleStore?.store.name}`
-                              : `Egal cu ${plan.baselineSingleStore?.store.name}`}
+                              : `Egal cu ${plan.baselineSingleStore?.store.name} (fără economie suplimentară)`}
                           </p>
                         ) : (
-                          <p className="text-slate-500 dark:text-slate-400">
-                            Acoperire maximă în limita selectată.
+                          <p className="text-amber-700 dark:text-amber-400">
+                            {plan.savingsBasisRo || 'Acoperire maximă în limita selectată (fără reper unic comun).'}
+                          </p>
+                        )}
+                        {!plan.isComplete && plan.missingItems.length > 0 && (
+                          <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                            PARȚIAL ({plan.missingItems.length} articole lipsă — nu sunt calculate ca 0 RON)
                           </p>
                         )}
                       </div>
@@ -1425,16 +1454,30 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
       {!isSingleStoreOnly && activeRecommendedPlan && activeRecommendedPlan.stops.length > 0 && !compact && (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-              Lista produselor pe magazine ({activeRecommendedPlan.stops.length}{' '}
-              {activeRecommendedPlan.stops.length === 1 ? 'magazin' : 'magazine'})
-            </h3>
-            {activeRecommendedPlan.savingsBasisRo && (
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                {activeRecommendedPlan.savingsBasisRo}
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Lista produselor pe magazine ({activeRecommendedPlan.stops.length}{' '}
+                {activeRecommendedPlan.stops.length === 1 ? 'magazin' : 'magazine'}) ·{' '}
+                {activeRecommendedPlan.coverageStatusRo || (activeRecommendedPlan.isComplete ? 'COMPLET' : 'PARȚIAL')}
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                {activeRecommendedPlan.explanationRo}
+              </p>
+            </div>
+            <div className="text-right tabular-nums">
+              <span className="text-xs font-bold text-slate-900 dark:text-slate-100 block">
+                Total produse: {PriceComparisonService.formatRon(activeRecommendedPlan.productsTotal)}
               </span>
-            )}
+              <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                Transport și timp deplasare: neincluse
+              </span>
+            </div>
           </div>
+          {activeRecommendedPlan.savingsBasisRo && (
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {activeRecommendedPlan.savingsBasisRo}
+            </p>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {activeRecommendedPlan.stops.map(stop => (
               <div
@@ -1448,7 +1491,10 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
                     >
                       {stop.store.name.charAt(0)}
                     </div>
-                    <span className="font-bold text-sm text-slate-900 dark:text-slate-100">{stop.store.name}</span>
+                    <span className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                      {stop.store.name}
+                      {stop.isFavorite ? ' ★' : ''}
+                    </span>
                     <span className="text-xs text-slate-500 dark:text-slate-400">({stop.itemsCount} art.)</span>
                   </div>
                   <span className="font-display font-bold text-sm text-slate-900 dark:text-slate-100 tabular-nums">
@@ -1501,6 +1547,22 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
               </div>
             ))}
           </div>
+
+          {activeRecommendedPlan.missingItems.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-800/60 text-xs">
+              <div className="font-bold text-amber-900 dark:text-amber-300 flex items-center gap-1.5 mb-1">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Produse neacoperite în planul selectat ({activeRecommendedPlan.missingItems.length})
+              </div>
+              <ul className="space-y-1 text-amber-800 dark:text-amber-200">
+                {activeRecommendedPlan.missingItems.map(m => (
+                  <li key={`plan-missing-${m.item.id}`}>
+                    <span className="font-semibold">{m.item.name}</span> — {m.reasonRo}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 
@@ -1578,6 +1640,7 @@ export const BasketOptimizerPanel: React.FC<BasketOptimizerPanelProps> = ({
           </button>
           {showLimitations && (
             <ul className="mt-2.5 space-y-1 text-xs text-slate-600 dark:text-slate-400 list-disc pl-5">
+              {optimization.solverMetadata?.noteRo && <li>{optimization.solverMetadata.noteRo}</li>}
               {optimization.limitations.map((lim, idx) => (
                 <li key={idx}>{lim}</li>
               ))}

@@ -429,7 +429,7 @@ export const basketItemInputSchema = z.object({
 export const basketOptimizeOptionsSchema = z.object({
   useLoyaltyCards: z.boolean().optional(),
   useCoupons: z.boolean().optional(),
-  maxStores: z.coerce.number().int().min(1).max(8).optional(),
+  maxStores: z.coerce.number().int().min(1).max(20).optional(),
   excludedStoreIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   favoriteStoreIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   includeStaleOffers: z.boolean().optional(),
@@ -454,11 +454,23 @@ export const priceHistoryIntervalSchema = z
     message: 'Intervalul de istoric trebuie să fie 30, 90, 180 sau 365 zile.'
   });
 
+export const priceHistoryProductParamSchema = z
+  .string()
+  .trim()
+  .min(1, 'ID-ul produsului este obligatoriu.')
+  .max(64, 'ID-ul produsului depășește lungimea maximă permisă.')
+  .refine(val => !/[\s/\\<>'"`]/.test(val), {
+    message: 'ID-ul produsului conține caractere nepermise.'
+  });
+
 export const priceHistoryQuerySchema = z.object({
-  days: priceHistoryIntervalSchema.default(90)
+  days: priceHistoryIntervalSchema.default(90),
+  storeId: z.string().trim().min(1).max(64).optional(),
+  limit: z.coerce.number().int().min(1).max(5000).default(2000),
+  offset: z.coerce.number().int().min(0).max(50000).default(0)
 });
 
-export const priceAlertTypeSchema = z.enum(['below_target', 'any_drop', 'interval_low']);
+export const priceAlertTypeSchema = z.enum(['below_target', 'any_drop', 'interval_low', 'product_watch']);
 
 export const priceAlertCreateSchema = z
   .object({
@@ -466,6 +478,8 @@ export const priceAlertCreateSchema = z
     alertType: priceAlertTypeSchema.default('below_target'),
     targetPrice: z.coerce.number().min(0.01, 'Prețul țintă trebuie să fie > 0.').max(50000).optional(),
     intervalDays: priceHistoryIntervalSchema.optional(),
+    minDropPercent: z.coerce.number().min(0.1, 'Procentul minim de scădere trebuie să fie ≥ 0.1%.').max(90).optional(),
+    cooldownHours: z.coerce.number().int().min(0).max(720).optional(),
     sourceListId: z.string().trim().uuid('ID-ul listei sursă este invalid.').optional()
   })
   .superRefine((val, ctx) => {
@@ -483,6 +497,8 @@ export const priceAlertUpdateSchema = z
     alertType: priceAlertTypeSchema.optional(),
     targetPrice: z.coerce.number().min(0.01, 'Prețul țintă trebuie să fie > 0.').max(50000).optional(),
     intervalDays: priceHistoryIntervalSchema.nullable().optional(),
+    minDropPercent: z.coerce.number().min(0.1).max(90).nullable().optional(),
+    cooldownHours: z.coerce.number().int().min(0).max(720).nullable().optional(),
     isActive: z.boolean().optional()
   })
   .refine(
@@ -490,6 +506,8 @@ export const priceAlertUpdateSchema = z
       val.alertType !== undefined ||
       val.targetPrice !== undefined ||
       val.intervalDays !== undefined ||
+      val.minDropPercent !== undefined ||
+      val.cooldownHours !== undefined ||
       val.isActive !== undefined,
     { message: 'Trebuie furnizat cel puțin un câmp pentru actualizare.' }
   );
@@ -497,6 +515,8 @@ export const priceAlertUpdateSchema = z
 export const priceAlertsFromListSchema = z.object({
   alertType: priceAlertTypeSchema.default('below_target'),
   intervalDays: priceHistoryIntervalSchema.optional(),
+  minDropPercent: z.coerce.number().min(0.1).max(90).optional(),
+  cooldownHours: z.coerce.number().int().min(0).max(720).optional(),
   discountPercentForTarget: z.coerce.number().min(1).max(80).default(10)
 });
 

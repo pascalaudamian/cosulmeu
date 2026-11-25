@@ -113,6 +113,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
   const [newListName, setNewListName] = useState('');
   const [copiedFeedback, setCopiedFeedback] = useState(false);
   const [showOptimizer, setShowOptimizer] = useState(false);
+  const [optimizerScope, setOptimizerScope] = useState<'single' | 'multi'>('multi');
   const [showListAlertsMenu, setShowListAlertsMenu] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showBarcodeModal, setShowBarcodeModal] = useState(false);
@@ -560,7 +561,7 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                     ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
                     : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-600'
                 }`}
-                title="Optimizează coșul într-un singur supermarket"
+                title="Optimizează coșul (1 supermarket sau multi-magazin)"
               >
                 <Split className="w-3.5 h-3.5" />
                 <span>{showOptimizer ? 'Vezi lista' : 'Optimizează coșul'}</span>
@@ -782,20 +783,66 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
       )}
 
       {showOptimizer ? (
-        <div ref={optimizerSectionRef} className="no-print scroll-mt-24">
-          <BasketOptimizerPanel
-            lists={lists}
-            activeList={activeList}
-            onSelectActiveList={onSelectActiveList}
-            onBackToList={() => setShowOptimizer(false)}
-            products={catalogProducts}
-            offers={catalogOffers}
-            stores={catalogStores}
-            initialTransportCost={0}
-            initialMaxStores={1}
-            singleStoreOnly={true}
-            defaultRegion={userCity}
-          />
+        <div ref={optimizerSectionRef} className="no-print scroll-mt-24 space-y-3">
+          <div className="surface-card p-3 sm:px-5 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Mod optimizare coș
+            </span>
+            <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setOptimizerScope('single')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  optimizerScope === 'single'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700'
+                }`}
+              >
+                1 supermarket (FAZA 2.1)
+              </button>
+              <button
+                type="button"
+                onClick={() => setOptimizerScope('multi')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  optimizerScope === 'multi'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700'
+                }`}
+              >
+                Multi-magazin (2–3+ / toate)
+              </button>
+            </div>
+          </div>
+
+          {optimizerScope === 'single' ? (
+            <BasketOptimizerPanel
+              lists={lists}
+              activeList={activeList}
+              onSelectActiveList={onSelectActiveList}
+              onBackToList={() => setShowOptimizer(false)}
+              products={catalogProducts}
+              offers={catalogOffers}
+              stores={catalogStores}
+              initialTransportCost={0}
+              initialMaxStores={1}
+              singleStoreOnly={true}
+              defaultRegion={userCity}
+            />
+          ) : (
+            <BasketOptimizerPanel
+              lists={lists}
+              activeList={activeList}
+              onSelectActiveList={onSelectActiveList}
+              onBackToList={() => setShowOptimizer(false)}
+              products={catalogProducts}
+              offers={catalogOffers}
+              stores={catalogStores}
+              initialTransportCost={0}
+              initialMaxStores={3}
+              singleStoreOnly={false}
+              defaultRegion={userCity}
+            />
+          )}
         </div>
       ) : (
         <>

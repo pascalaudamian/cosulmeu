@@ -13,6 +13,7 @@ import type {
   BasketOptimizationOptions,
   BasketOptimizationResult,
   BasketSingleStorePlan,
+  BasketSolverMetadata,
   BasketUnconfidentMatch,
   BasketUnitConflict,
   ConditionalPromoType,
@@ -937,13 +938,14 @@ export class BasketOptimizerService {
     aliasMap?: Map<string, string> | Record<string, string> | CanonicalAliasIndex;
     options?: BasketOptimizationOptions;
   }): BasketOptimizationResult {
+    const startedAtMs = Date.now();
     const now = params.options?.now || new Date();
     const useLoyaltyCards = params.options?.useLoyaltyCards ?? true;
     const useCoupons = params.options?.useCoupons ?? false;
     const includeStaleOffers = params.options?.includeStaleOffers ?? true;
     const maxOfferAgeDays = params.options?.maxOfferAgeDays;
     const appliedRegion = params.options?.region?.trim() || null;
-    const maxStoresApplied = Math.max(1, Math.min(8, Math.floor(params.options?.maxStores ?? 3)));
+    const maxStoresApplied = Math.max(1, Math.min(20, Math.floor(params.options?.maxStores ?? 3)));
     // Regula strictă: nu inventăm costuri de transport. Implicit = 0.
     const transportCostPerExtraStore = Math.max(0, Number(params.options?.transportCostPerExtraStore ?? 0) || 0);
 
@@ -1274,131 +1276,446 @@ export class BasketOptimizerService {
 
     const bestSingleStore = singleStoreRankings[0] || null;
 
-    // 4. Exact Combinatorial Solver for k stores (subsets <= k; exact up to 12 stores, documented pruning beyond 12)
-    let solverPrunedAboveLimit = false;
-    const solveForMaxStores = (limitK: number): BasketMultiStorePlan | null => {
-      if (priceableEntries.length === 0 || eligibleStores.length === 0) return null;
+    // 4. Hybrid Deterministic Multi-Store Solver:
+    //    - Exact Branch-and-Bound pe matrice pre-indexată pentru dimensiuni până la bugetul exact (4.500 combinații);
+    //    - Euristică deterministă (multi-start greedy + căutare locală 1-swap) peste prag, fără a pretinde optim global demonstrat.
+    const EXACT_SUBSET_BUDGET = 4500;
+    const countSubsetsUpTo = (m: number, k: number, cap: number): number => {
+      let total = 0;
+      const maxR = Math.min(m, k);
+      for (let r = 1; r <= maxR; r++) {
+        let comb = 1;
+        for (let j = 1; j <= r; j++) {
+          comb = (comb * (m - r + j)) / j;
+          if (total + comb > cap) return cap + 1;
+        }
+        total += Math.round(comb);
+        if (total > cap) return cap + 1;
+      }
+      return total;
+    };
 
-      const usefulStores = eligibleStores
-        .filter(st => {
-          const map = allocationsByStoreId.get(st.id);
-          return map && map.size > 0;
-        })
-        .sort((a, b) => {
-          const sizeA = allocationsByStoreId.get(a.id)?.size || 0;
-          const sizeB = allocationsByStoreId.get(b.id)?.size || 0;
-          return sizeB - sizeA;
-        });
+    const usefulStores = eligibleStores
+      .filter(st => {
+        const map = allocationsByStoreId.get(st.id);
+        return map && map.size > 0;
+      })
+      .sort((a, b) => {
+        const sizeA = allocationsByStoreId.get(a.id)?.size || 0;
+        const sizeB = allocationsByStoreId.get(b.id)?.size || 0;
+        if (sizeB !== sizeA) return sizeB - sizeA;
+        const favA =
+          favoriteSet.has(normalizeStoreKey(a.id)) || favoriteSet.has(normalizeStoreKey(a.slug || a.id));
+        const favB =
+          favoriteSet.has(normalizeStoreKey(b.id)) || favoriteSet.has(normalizeStoreKey(b.slug || b.id));
+        if (favA !== favB) return favA ? -1 : 1;
+        return a.name.localeCompare(b.name, 'ro');
+      });
 
-      if (usefulStores.length === 0) return null;
-      if (usefulStores.length > 12) {
-        solverPrunedAboveLimit = true;
+    const N = priceableEntries.length;
+    const M = usefulStores.length;
+    const priceableKeys = priceableEntries.map(
+      entry => `${entry.product.id}::${normalizeUnitToken(entry.representativeItem.unit)}`
+    );
+    const storeIsFav = usefulStores.map(
+      st => favoriteSet.has(normalizeStoreKey(st.id)) || favoriteSet.has(normalizeStoreKey(st.slug || st.id))
+    );
+    const storeAllocsMatrix: Array<Array<BasketItemAllocation | null>> = usefulStores.map(st => {
+      const storeMap = allocationsByStoreId.get(st.id);
+      return priceableKeys.map(k => storeMap?.get(k) || null);
+    });
+    const storeCostMatrix: Float64Array[] = storeAllocsMatrix.map(row => {
+      const arr = new Float64Array(N);
+      for (let i = 0; i < N; i++) {
+        const alloc = row[i];
+        arr[i] = alloc ? alloc.calculatedPrice : Infinity;
+      }
+      return arr;
+    });
+
+    // Precompute suffix minimum price per item for exact Branch-and-Bound lower bounds
+    const suffixMinCost: Float64Array[] = new Array(M + 1);
+    suffixMinCost[M] = new Float64Array(N);
+    suffixMinCost[M].fill(Infinity);
+    for (let s = M - 1; s >= 0; s--) {
+      const nextArr = suffixMinCost[s + 1];
+      const sCosts = storeCostMatrix[s];
+      const curArr = new Float64Array(N);
+      for (let i = 0; i < N; i++) {
+        curArr[i] = sCosts[i] < nextArr[i] ? sCosts[i] : nextArr[i];
+      }
+      suffixMinCost[s] = curArr;
+    }
+
+    let lastSolverMeta: BasketSolverMetadata = {
+      strategy: 'exact_branch_and_bound',
+      isProvenGlobalOptimum: true,
+      evaluatedSubsetsCount: 0,
+      eligibleUsefulStoresCount: M,
+      itemCount: N,
+      executionTimeMs: 0,
+      noteRo:
+        'Algoritm exact Branch-and-Bound pe matrice pre-indexată (acoperire prioritară, apoi cost minim în RON); optim global demonstrat în limita magazinelor eligibile.'
+    };
+
+    interface InternalSolverResult {
+      plan: BasketMultiStorePlan | null;
+      meta: BasketSolverMetadata;
+    }
+
+    const solveForMaxStores = (limitK: number): InternalSolverResult => {
+      const solveStartMs = Date.now();
+      if (N === 0 || M === 0) {
+        return {
+          plan: null,
+          meta: {
+            strategy: 'exact_branch_and_bound',
+            isProvenGlobalOptimum: true,
+            evaluatedSubsetsCount: 0,
+            eligibleUsefulStoresCount: M,
+            itemCount: N,
+            executionTimeMs: 0,
+            noteRo:
+              'Nu există articole cu preț valid în magazinele eligibile pentru rularea optimizării.'
+          }
+        };
       }
 
-      const cappedStores = usefulStores.length <= 12 ? usefulStores : usefulStores.slice(0, 12);
-      const effectiveLimit = Math.min(limitK, cappedStores.length);
+      const effectiveLimit = Math.min(limitK, M);
 
       interface CandidateSolution {
-        storeIndices: number[];
+        selectedStoreIndices: number[];
         coveredCount: number;
         totalProductsCost: number;
+        actualStopsCount: number;
         favCount: number;
         totalWithTransport: number;
-        allocsByEntryKey: Map<string, BasketItemAllocation>;
+        chosenStorePerItem: Int32Array;
       }
 
       let bestSolution: CandidateSolution | null = null;
+      let evaluatedSubsetsCount = 0;
 
-      const evaluateSubset = (indices: number[]) => {
-        const allocsByEntryKey = new Map<string, BasketItemAllocation>();
+      const isBetterCandidate = (
+        coveredCount: number,
+        totalWithTransport: number,
+        actualStopsCount: number,
+        favCount: number
+      ): boolean => {
+        if (!bestSolution) return true;
+        if (coveredCount !== bestSolution.coveredCount) {
+          return coveredCount > bestSolution.coveredCount;
+        }
+        if (Math.abs(totalWithTransport - bestSolution.totalWithTransport) > 0.009) {
+          return totalWithTransport < bestSolution.totalWithTransport;
+        }
+        if (actualStopsCount !== bestSolution.actualStopsCount) {
+          return actualStopsCount < bestSolution.actualStopsCount;
+        }
+        return favCount > bestSolution.favCount;
+      };
+
+      const evaluateStoreSet = (indices: number[]): CandidateSolution | null => {
+        if (indices.length === 0) return null;
+        evaluatedSubsetsCount += 1;
+
+        const chosenStorePerItem = new Int32Array(N);
+        chosenStorePerItem.fill(-1);
+        let coveredCount = 0;
         let totalProductsCost = 0;
+        const usedStoreFlags = new Uint8Array(M);
+        let actualStopsCount = 0;
+        let favCount = 0;
 
-        for (const entry of priceableEntries) {
-          const entryKey = `${entry.product.id}::${normalizeUnitToken(entry.representativeItem.unit)}`;
-          let cheapest: BasketItemAllocation | null = null;
-          for (const idx of indices) {
-            const store = cappedStores[idx];
-            const alloc = allocationsByStoreId.get(store.id)?.get(entryKey);
-            if (!alloc) continue;
-            if (!cheapest) {
-              cheapest = alloc;
-            } else if (alloc.calculatedPrice < cheapest.calculatedPrice - 0.001) {
-              cheapest = alloc;
-            } else if (Math.abs(alloc.calculatedPrice - cheapest.calculatedPrice) <= 0.001) {
-              const allocFav = favoriteSet.has(normalizeStoreKey(alloc.store.id));
-              const cheapFav = favoriteSet.has(normalizeStoreKey(cheapest.store.id));
-              if (allocFav && !cheapFav) cheapest = alloc;
+        for (let i = 0; i < N; i++) {
+          let bestS = -1;
+          let bestPrice = Infinity;
+          let bestFav = false;
+          for (let k = 0; k < indices.length; k++) {
+            const sIdx = indices[k];
+            const p = storeCostMatrix[sIdx][i];
+            if (p === Infinity) continue;
+            const fav = storeIsFav[sIdx];
+            if (bestS === -1) {
+              bestS = sIdx;
+              bestPrice = p;
+              bestFav = fav;
+            } else if (p < bestPrice - 0.001) {
+              bestS = sIdx;
+              bestPrice = p;
+              bestFav = fav;
+            } else if (Math.abs(p - bestPrice) <= 0.001 && fav && !bestFav) {
+              bestS = sIdx;
+              bestPrice = p;
+              bestFav = fav;
             }
           }
-          if (cheapest) {
-            allocsByEntryKey.set(entryKey, cheapest);
-            totalProductsCost += cheapest.calculatedPrice;
+          if (bestS !== -1) {
+            chosenStorePerItem[i] = bestS;
+            coveredCount += 1;
+            totalProductsCost += bestPrice;
+            if (!usedStoreFlags[bestS]) {
+              usedStoreFlags[bestS] = 1;
+              actualStopsCount += 1;
+              if (storeIsFav[bestS]) favCount += 1;
+            }
           }
         }
 
-        const usedStoreIds = new Set<string>();
-        for (const alloc of allocsByEntryKey.values()) {
-          usedStoreIds.add(alloc.store.id);
-        }
-        const actualStopsCount = usedStoreIds.size;
-        if (actualStopsCount === 0) return;
-
+        if (actualStopsCount === 0) return null;
         const extraStops = Math.max(0, actualStopsCount - 1);
-        const totalWithTransport = Math.round((totalProductsCost + extraStops * transportCostPerExtraStore) * 100) / 100;
         const roundedProducts = Math.round(totalProductsCost * 100) / 100;
-        const coveredCount = allocsByEntryKey.size;
-        const favCount = Array.from(usedStoreIds).filter(id => favoriteSet.has(normalizeStoreKey(id))).length;
+        const totalWithTransport =
+          Math.round((totalProductsCost + extraStops * transportCostPerExtraStore) * 100) / 100;
 
-        const isBetter = (): boolean => {
-          if (!bestSolution) return true;
-          if (coveredCount !== bestSolution.coveredCount) {
-            return coveredCount > bestSolution.coveredCount;
-          }
-          if (Math.abs(totalWithTransport - bestSolution.totalWithTransport) > 0.009) {
-            return totalWithTransport < bestSolution.totalWithTransport;
-          }
-          const bestUsedCount = new Set(Array.from(bestSolution.allocsByEntryKey.values()).map(a => a.store.id)).size;
-          if (actualStopsCount !== bestUsedCount) {
-            return actualStopsCount < bestUsedCount;
-          }
-          return favCount > bestSolution.favCount;
+        const cand: CandidateSolution = {
+          selectedStoreIndices: indices.filter(sIdx => usedStoreFlags[sIdx] === 1),
+          coveredCount,
+          totalProductsCost: roundedProducts,
+          actualStopsCount,
+          favCount,
+          totalWithTransport,
+          chosenStorePerItem
         };
 
-        if (isBetter()) {
-          bestSolution = {
-            storeIndices: indices,
-            coveredCount,
-            totalProductsCost: roundedProducts,
-            favCount,
-            totalWithTransport,
-            allocsByEntryKey
-          };
+        if (isBetterCandidate(coveredCount, totalWithTransport, actualStopsCount, favCount)) {
+          bestSolution = cand;
         }
+        return cand;
       };
 
-      const backtrack = (start: number, current: number[], targetLen: number) => {
-        if (current.length === targetLen) {
-          evaluateSubset([...current]);
-          return;
-        }
-        for (let i = start; i < cappedStores.length; i++) {
-          current.push(i);
-          backtrack(i + 1, current, targetLen);
-          current.pop();
-        }
-      };
-
-      for (let len = 1; len <= effectiveLimit; len++) {
-        backtrack(0, [], len);
+      // Seed strong deterministic incumbent (single stores + greedy coverage/savings up to effectiveLimit)
+      for (let s = 0; s < M; s++) {
+        evaluateStoreSet([s]);
       }
 
-      if (!bestSolution) return null;
+      const buildGreedyFromSeed = (seedStoreIdx: number | null): number[] => {
+        const chosen: number[] = [];
+        const chosenMask = new Uint8Array(M);
+        const curCosts = new Float64Array(N);
+        curCosts.fill(Infinity);
+
+        if (seedStoreIdx !== null) {
+          chosen.push(seedStoreIdx);
+          chosenMask[seedStoreIdx] = 1;
+          const sc = storeCostMatrix[seedStoreIdx];
+          for (let i = 0; i < N; i++) curCosts[i] = sc[i];
+          evaluateStoreSet([...chosen]);
+        }
+
+        while (chosen.length < effectiveLimit) {
+          let bestNext = -1;
+          let bestNewCov = -1;
+          let bestGain = -Infinity;
+
+          for (let s = 0; s < M; s++) {
+            if (chosenMask[s]) continue;
+            const sc = storeCostMatrix[s];
+            let newCov = 0;
+            let costSave = 0;
+            for (let i = 0; i < N; i++) {
+              const p = sc[i];
+              if (p === Infinity) continue;
+              if (curCosts[i] === Infinity) {
+                newCov += 1;
+              } else if (p < curCosts[i] - 0.001) {
+                costSave += curCosts[i] - p;
+              }
+            }
+            if (newCov === 0 && costSave <= 0.001) continue;
+            const netGain = costSave - (chosen.length > 0 ? transportCostPerExtraStore : 0);
+            if (
+              newCov > bestNewCov ||
+              (newCov === bestNewCov &&
+                (netGain > bestGain + 0.001 ||
+                  (Math.abs(netGain - bestGain) <= 0.001 &&
+                    storeIsFav[s] &&
+                    bestNext !== -1 &&
+                    !storeIsFav[bestNext])))
+            ) {
+              bestNewCov = newCov;
+              bestGain = netGain;
+              bestNext = s;
+            }
+          }
+
+          if (bestNext === -1) break;
+          if (bestNewCov === 0 && bestGain <= 0.001) break;
+
+          chosen.push(bestNext);
+          chosenMask[bestNext] = 1;
+          const sc = storeCostMatrix[bestNext];
+          for (let i = 0; i < N; i++) {
+            if (sc[i] < curCosts[i]) curCosts[i] = sc[i];
+          }
+          evaluateStoreSet([...chosen]);
+        }
+
+        return chosen;
+      };
+
+      const totalCombEstimate = countSubsetsUpTo(M, effectiveLimit, EXACT_SUBSET_BUDGET);
+      const useExactBranchAndBound = totalCombEstimate <= EXACT_SUBSET_BUDGET;
+
+      if (useExactBranchAndBound) {
+        // Seed quick greedy incumbent so B&B pruning starts tight
+        if (effectiveLimit >= 2) {
+          buildGreedyFromSeed(null);
+          const seedLimit = Math.min(3, M);
+          for (let s = 0; s < seedLimit; s++) buildGreedyFromSeed(s);
+        }
+
+        if (effectiveLimit >= 2) {
+          const costStack: Float64Array[] = Array.from({ length: effectiveLimit + 1 }, () => {
+            const arr = new Float64Array(N);
+            arr.fill(Infinity);
+            return arr;
+          });
+          const chosenStack: number[] = [];
+
+          const dfsBranchAndBound = (pos: number, depth: number) => {
+            const curCosts = costStack[depth];
+            if (depth >= 2) {
+              evaluateStoreSet([...chosenStack]);
+            }
+            if (depth === effectiveLimit || pos >= M) return;
+
+            for (let next = pos; next < M; next++) {
+              // Exact admissibility check over remaining universe [next .. M-1]
+              const suf = suffixMinCost[next];
+              let maxReachableCov = 0;
+              let lowerBoundProductsCost = 0;
+              for (let i = 0; i < N; i++) {
+                const c = curCosts[i];
+                const sMin = suf[i];
+                const minVal = c < sMin ? c : sMin;
+                if (minVal < Infinity) {
+                  maxReachableCov += 1;
+                  lowerBoundProductsCost += minVal;
+                }
+              }
+
+              // Since [next2 .. M-1] is a strict subset of [next .. M-1], failing here prunes ALL remaining next..M-1!
+              if (bestSolution && maxReachableCov < bestSolution.coveredCount) {
+                break;
+              }
+              if (
+                bestSolution &&
+                transportCostPerExtraStore === 0 &&
+                maxReachableCov === bestSolution.coveredCount &&
+                lowerBoundProductsCost > bestSolution.totalWithTransport + 0.015
+              ) {
+                break;
+              }
+
+              // Store dominance/redundancy skip: skip store `next` if it cannot improve ANY item over `curCosts`
+              const nextCosts = storeCostMatrix[next];
+              let improvesAnything = false;
+              for (let i = 0; i < N; i++) {
+                const np = nextCosts[i];
+                if (np === Infinity) continue;
+                const cp = curCosts[i];
+                if (np < cp - 0.001 || (Math.abs(np - cp) <= 0.001 && storeIsFav[next])) {
+                  improvesAnything = true;
+                  break;
+                }
+              }
+              if (!improvesAnything) continue;
+
+              const childCosts = costStack[depth + 1];
+              for (let i = 0; i < N; i++) {
+                const cp = curCosts[i];
+                const np = nextCosts[i];
+                childCosts[i] = np < cp ? np : cp;
+              }
+
+              chosenStack.push(next);
+              dfsBranchAndBound(next + 1, depth + 1);
+              chosenStack.pop();
+            }
+          };
+
+          dfsBranchAndBound(0, 0);
+        }
+      } else {
+        // Deterministic multi-start greedy + 1-swap local refinement when M, k exceed EXACT_SUBSET_BUDGET
+        const seedCandidates: number[][] = [buildGreedyFromSeed(null)];
+        const seedCount = Math.min(M, 6);
+        for (let s = 0; s < seedCount; s++) {
+          seedCandidates.push(buildGreedyFromSeed(s));
+        }
+
+        // Local 1-swap + drop refinement from current bestSolution
+        const initialBest = bestSolution as CandidateSolution | null;
+        if (initialBest) {
+          let currentBest: CandidateSolution = initialBest;
+          let currentSet = [...currentBest.selectedStoreIndices];
+          for (let iter = 0; iter < 40; iter++) {
+            let improved = false;
+            const beforeBest = currentBest;
+            // Try adding a store if below limit
+            if (currentSet.length < effectiveLimit) {
+              for (let s = 0; s < M; s++) {
+                if (currentSet.includes(s)) continue;
+                evaluateStoreSet([...currentSet, s]);
+              }
+            }
+            // Try 1-swap between chosen and outside stores
+            for (let idx = 0; idx < currentSet.length; idx++) {
+              for (let candS = 0; candS < M; candS++) {
+                if (currentSet.includes(candS)) continue;
+                const trial = [...currentSet];
+                trial[idx] = candS;
+                evaluateStoreSet(trial);
+              }
+            }
+            // Try dropping redundant stop
+            if (currentSet.length > 1) {
+              for (let idx = 0; idx < currentSet.length; idx++) {
+                const trial = currentSet.filter((_, j) => j !== idx);
+                evaluateStoreSet(trial);
+              }
+            }
+            const afterBest = bestSolution as CandidateSolution | null;
+            if (afterBest && afterBest !== beforeBest) {
+              currentBest = afterBest;
+              currentSet = [...afterBest.selectedStoreIndices];
+              improved = true;
+            }
+            if (!improved) break;
+          }
+        }
+      }
+
+      const elapsedMs = Math.max(0, Date.now() - solveStartMs);
+      const solverMeta: BasketSolverMetadata = {
+        strategy: useExactBranchAndBound ? 'exact_branch_and_bound' : 'deterministic_heuristic',
+        isProvenGlobalOptimum: useExactBranchAndBound,
+        evaluatedSubsetsCount,
+        eligibleUsefulStoresCount: M,
+        itemCount: N,
+        executionTimeMs: elapsedMs,
+        noteRo: useExactBranchAndBound
+          ? `Algoritm exact Branch-and-Bound pe matrice pre-indexată (${evaluatedSubsetsCount} combinații evaluate din ${M} magazine eligibile, ${N} articole); optim global demonstrat.`
+          : `Algoritm euristic determinist (multi-start greedy + căutare locală 1-swap, ${evaluatedSubsetsCount} evaluări din ${M} magazine eligibile, ${N} articole) aplicat pentru protejarea performanței; optimul global nu este garantat matematic.`
+      };
+
+      if (!bestSolution) {
+        return { plan: null, meta: solverMeta };
+      }
       const sol = bestSolution as CandidateSolution;
 
       const stopMap = new Map<string, BasketItemAllocation[]>();
       const verifiedDates: string[] = [];
       let totalSurplusItemsCount = 0;
-      for (const alloc of sol.allocsByEntryKey.values()) {
+      const allocatedByKey = new Map<string, BasketItemAllocation>();
+
+      for (let i = 0; i < N; i++) {
+        const sIdx = sol.chosenStorePerItem[i];
+        if (sIdx < 0) continue;
+        const alloc = storeAllocsMatrix[sIdx][i];
+        if (!alloc) continue;
+        allocatedByKey.set(priceableKeys[i], alloc);
         const arr = stopMap.get(alloc.store.id) || [];
         arr.push(alloc);
         stopMap.set(alloc.store.id, arr);
@@ -1430,12 +1747,11 @@ export class BasketOptimizerService {
         .sort((a, b) => b.subtotal - a.subtotal);
 
       const missingItems: BasketMissingPriceItem[] = [...itemsWithoutAnyValidPrice];
-      for (const entry of priceableEntries) {
-        const entryKey = `${entry.product.id}::${normalizeUnitToken(entry.representativeItem.unit)}`;
-        if (!sol.allocsByEntryKey.has(entryKey)) {
+      for (let i = 0; i < N; i++) {
+        if (sol.chosenStorePerItem[i] < 0) {
           missingItems.push({
-            item: entry.representativeItem,
-            product: entry.product,
+            item: priceableEntries[i].representativeItem,
+            product: priceableEntries[i].product,
             reasonRo: `Nu a putut fi acoperit în limita a ${limitK} magazine.`
           });
         }
@@ -1459,7 +1775,7 @@ export class BasketOptimizerService {
         let baselineSharedTotal = 0;
         let multiSharedTotal = 0;
 
-        for (const [entryKey, multiAlloc] of sol.allocsByEntryKey.entries()) {
+        for (const [entryKey, multiAlloc] of allocatedByKey.entries()) {
           const singleAlloc = singleByKey.get(entryKey);
           if (singleAlloc) {
             comparableItemsCountWithBaseline += 1;
@@ -1470,8 +1786,8 @@ export class BasketOptimizerService {
 
         if (
           comparableItemsCountWithBaseline > 0 &&
-          comparableItemsCountWithBaseline === sol.allocsByEntryKey.size &&
-          bestSingleStore.coveredItemsCount === sol.allocsByEntryKey.size &&
+          comparableItemsCountWithBaseline === allocatedByKey.size &&
+          bestSingleStore.coveredItemsCount === allocatedByKey.size &&
           baselineSharedTotal > 0
         ) {
           hasValidSavingsBaseline = true;
@@ -1480,15 +1796,29 @@ export class BasketOptimizerService {
           savingsVsBestSingleStore = netDiff;
           savingsPercentVsBestSingleStore = Math.round((netDiff / baselineSharedTotal) * 1000) / 10;
           savingsBasisRo = `Economie calculată pe acoperire egală (${comparableItemsCountWithBaseline}/${comparableItemsCountWithBaseline} articole comparabile), pe baza prețurilor observate în catalog.`;
+        } else if (bestSingleStore.coveredItemsCount !== sol.coveredCount) {
+          savingsBasisRo = `Acoperire diferită (${sol.coveredCount}/${comparableEntries.length} articole în varianta multi-magazin vs. ${bestSingleStore.coveredItemsCount}/${comparableEntries.length} în ${bestSingleStore.store.name}) — nu există magazin unic echivalent pentru calculul economiei.`;
         }
       }
 
       const totalTransportCost = Math.round(Math.max(0, stops.length - 1) * transportCostPerExtraStore * 100) / 100;
+      const isComplete =
+        sol.coveredCount === comparableEntries.length &&
+        comparableEntries.length > 0 &&
+        unconfidentMatches.length === 0 &&
+        unitConflicts.length === 0;
+      const completenessPercentage =
+        comparableEntries.length > 0 ? Math.round((sol.coveredCount / comparableEntries.length) * 100) : 0;
+      const coverageStatusRo: 'COMPLET' | 'PARȚIAL' | 'INDISPONIBIL' = isComplete
+        ? 'COMPLET'
+        : sol.coveredCount > 0
+        ? 'PARȚIAL'
+        : 'INDISPONIBIL';
       const isEstimative =
         missingItems.length > 0 ||
         unconfidentMatches.length > 0 ||
         unitConflicts.length > 0 ||
-        Array.from(sol.allocsByEntryKey.values()).some(a => !a.qualityAssessment.isReliableForOptimization);
+        Array.from(allocatedByKey.values()).some(a => !a.qualityAssessment.isReliableForOptimization);
 
       const explanationParts: string[] = [];
       if (stops.length === 1) {
@@ -1509,42 +1839,57 @@ export class BasketOptimizerService {
               `Costul la produse este egal cu varianta într-un singur magazin (${bestSingleStore?.store.name}).`
             );
           }
+        } else if (!isComplete) {
+          explanationParts.push(
+            `Plan parțial (${sol.coveredCount}/${comparableEntries.length} articole acoperite); produsele lipsă nu sunt calculate ca 0 RON.`
+          );
         }
       }
 
       return {
-        storeCount: stops.length,
-        maxStoresLimit: limitK,
-        stops,
-        coveredItemsCount: sol.coveredCount,
-        totalComparableItemsCount: comparableEntries.length,
-        missingItems,
-        isComplete:
-          sol.coveredCount === comparableEntries.length &&
-          comparableEntries.length > 0 &&
-          unconfidentMatches.length === 0 &&
-          unitConflicts.length === 0,
-        isEstimative,
-        productsTotal: sol.totalProductsCost,
-        transportCost: totalTransportCost,
-        includesTransportCost: transportCostPerExtraStore > 0,
-        totalWithTransport: sol.totalWithTransport,
-        baselineSingleStore: bestSingleStore,
-        comparableItemsCountWithBaseline,
-        hasValidSavingsBaseline,
-        savingsVsBestSingleStore,
-        savingsPercentVsBestSingleStore,
-        lastVerifiedAt: verifiedDates.length ? verifiedDates[verifiedDates.length - 1] : null,
-        oldestVerifiedAt: verifiedDates.length ? verifiedDates[0] : null,
-        explanationRo: explanationParts.join(' '),
-        totalSurplusItemsCount,
-        savingsBasisRo
+        meta: solverMeta,
+        plan: {
+          storeCount: stops.length,
+          maxStoresLimit: limitK,
+          stops,
+          coveredItemsCount: sol.coveredCount,
+          totalComparableItemsCount: comparableEntries.length,
+          completenessPercentage,
+          coverageStatusRo,
+          unconfidentMatchesCount: unconfidentMatches.length,
+          unitConflictsCount: unitConflicts.length,
+          missingItems,
+          isComplete,
+          isEstimative,
+          productsTotal: sol.totalProductsCost,
+          transportCost: totalTransportCost,
+          includesTransportCost: transportCostPerExtraStore > 0,
+          totalWithTransport: sol.totalWithTransport,
+          baselineSingleStore: bestSingleStore,
+          comparableItemsCountWithBaseline,
+          hasValidSavingsBaseline,
+          savingsVsBestSingleStore,
+          savingsPercentVsBestSingleStore,
+          lastVerifiedAt: verifiedDates.length ? verifiedDates[verifiedDates.length - 1] : null,
+          oldestVerifiedAt: verifiedDates.length ? verifiedDates[0] : null,
+          explanationRo: explanationParts.join(' '),
+          totalSurplusItemsCount,
+          savingsBasisRo
+        }
       };
     };
 
-    const bestTwoStores = maxStoresApplied >= 2 ? solveForMaxStores(2) : null;
-    const bestThreeStores = maxStoresApplied >= 3 ? solveForMaxStores(3) : null;
-    const recommendedMultiStore = solveForMaxStores(maxStoresApplied);
+    const twoRes = maxStoresApplied >= 2 ? solveForMaxStores(2) : null;
+    const threeRes = maxStoresApplied >= 3 ? solveForMaxStores(3) : null;
+    const recRes = solveForMaxStores(maxStoresApplied);
+
+    const bestTwoStores = twoRes ? twoRes.plan : null;
+    const bestThreeStores = threeRes ? threeRes.plan : null;
+    const recommendedMultiStore = recRes.plan;
+    lastSolverMeta = {
+      ...recRes.meta,
+      executionTimeMs: Math.max(recRes.meta.executionTimeMs, Date.now() - startedAtMs)
+    };
 
     const allDates = [
       ...singleStoreRankings.map(s => s.lastVerifiedAt),
@@ -1564,14 +1909,17 @@ export class BasketOptimizerService {
         'Varianta multi-magazin nu este întotdeauna cea mai bună alegere practică: evaluează dacă economia obținută justifică deplasarea în mai multe magazine.'
       );
     }
+    if (lastSolverMeta.strategy === 'deterministic_heuristic') {
+      limitations.push(lastSolverMeta.noteRo);
+    }
     if ((recommendedMultiStore?.totalSurplusItemsCount || 0) > 0) {
       limitations.push(
         'Pentru ambalajele indivizibile (ex: lapte 1L, unt 200g, multipack), cantitatea este rotunjită în sus la număr întreg de ambalaje, generând surplus afișat explicit.'
       );
     }
-    if (solverPrunedAboveLimit) {
+    if (recommendedMultiStore && !recommendedMultiStore.isComplete && recommendedMultiStore.missingItems.length > 0) {
       limitations.push(
-        'Numărul de retaileri eligibili depășește 12; motorul combinatorial exact a evaluat primele 12 magazine ordonate după acoperire (pentru seturi >12 retaileri este recomandat un solver MILP/branch-and-bound).'
+        `Planul recomandat este PARȚIAL (${recommendedMultiStore.coveredItemsCount}/${recommendedMultiStore.totalComparableItemsCount} articole comparabile acoperite); articolele lipsă nu sunt incluse în total și nu sunt considerate 0 RON.`
       );
     }
     if (unconfidentMatches.length > 0) {
@@ -1640,7 +1988,8 @@ export class BasketOptimizerService {
       maxOfferAgeDaysApplied: maxOfferAgeDays ?? null,
       useCouponsApplied: useCoupons,
       revisionToken: params.options?.clientRevision,
-      savingsMethodNoteRo
+      savingsMethodNoteRo,
+      solverMetadata: lastSolverMeta
     };
   }
 }

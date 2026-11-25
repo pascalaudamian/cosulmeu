@@ -1529,7 +1529,46 @@ export class DatabaseService {
     }
   }
 
-  static async getPriceObservations(productId?: string): Promise<PriceObservation[]> {
+  static async getPriceObservations(
+    productId?: string,
+    options?: {
+      days?: number;
+      limit?: number;
+      offset?: number;
+      storeId?: string;
+    }
+  ): Promise<PriceObservation[]> {
+    const safeLimit = Math.min(Math.max(1, Number(options?.limit ?? 2000) || 2000), 5000);
+    const safeOffset = Math.max(0, Number(options?.offset ?? 0) || 0);
+    const cutoffIso =
+      options?.days && Number.isFinite(options.days) && options.days > 0
+        ? new Date(Date.now() - options.days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        : undefined;
+    const normalizedStoreFilter = options?.storeId ? normalizeStoreIdKey(options.storeId) : undefined;
+
+    const mapObservationRow = (r: any, canonicalId?: string): PriceObservation => {
+      const rawProductId = String(r.product_id || canonicalId || '');
+      const effectiveProductId = canonicalId || rawProductId;
+      return {
+        id: r.id,
+        productId: effectiveProductId,
+        originalProductId: rawProductId && rawProductId !== effectiveProductId ? rawProductId : undefined,
+        storeId: normalizeStoreIdKey(r.store_id),
+        sourceId: r.source_id || undefined,
+        price: parseFloat(r.price),
+        currency: r.currency || 'RON',
+        date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
+        receiptId: r.receipt_id || undefined,
+        loyaltyCardUsed: Boolean(r.loyalty_card_used),
+        source: r.source || 'verified',
+        normalPrice: r.normal_price != null ? parseFloat(r.normal_price) : undefined,
+        promoPrice: r.promo_price != null ? parseFloat(r.promo_price) : undefined,
+        loyaltyPrice: r.loyalty_price != null ? parseFloat(r.loyalty_price) : undefined,
+        region: r.region || undefined,
+        batchId: r.batch_id || undefined
+      };
+    };
+
     const pool = getPool();
     if (pool) {
       try {
@@ -1542,38 +1581,38 @@ export class DatabaseService {
           }
           const canonicalProductId = resolvedDetail.canonicalId;
           const allEquivalentIds = collectProductIdsForCanonical(canonicalProductId, aliasIndex);
+          const params: any[] = [allEquivalentIds];
+          const whereParts: string[] = ['product_id = ANY($1::varchar[])'];
+
+          if (cutoffIso) {
+            params.push(cutoffIso);
+            whereParts.push(`date >= $${params.length}::date`);
+          }
+          if (normalizedStoreFilter) {
+            params.push(normalizedStoreFilter);
+            whereParts.push(
+              `LOWER(REGEXP_REPLACE(REGEXP_REPLACE(store_id, '^store-', '', 'i'), '-chain$', '', 'i')) = $${params.length}`
+            );
+          }
+
+          params.push(safeLimit);
+          const limitIdx = params.length;
+          params.push(safeOffset);
+          const offsetIdx = params.length;
+
           const res = await pool.query(
             `SELECT * FROM price_observations
-             WHERE product_id = ANY($1::varchar[])
-             ORDER BY date ASC, created_at ASC`,
-            [allEquivalentIds]
+             WHERE ${whereParts.join(' AND ')}
+             ORDER BY date ASC, created_at ASC
+             LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+            params
           );
-          return res.rows.map(r => ({
-            id: r.id,
-            productId: canonicalProductId,
-            storeId: normalizeStoreIdKey(r.store_id),
-            sourceId: r.source_id || undefined,
-            price: parseFloat(r.price),
-            date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
-            receiptId: r.receipt_id || undefined,
-            loyaltyCardUsed: r.loyalty_card_used,
-            source: r.source
-          }));
+          return res.rows.map(r => mapObservationRow(r, canonicalProductId));
         }
 
         const res = await pool.query('SELECT * FROM price_observations ORDER BY date DESC, created_at DESC LIMIT 200');
         if (res.rows.length > 0) {
-          return res.rows.map(r => ({
-            id: r.id,
-            productId: r.product_id,
-            storeId: r.store_id,
-            sourceId: r.source_id || undefined,
-            price: parseFloat(r.price),
-            date: r.date ? (r.date.toISOString?.().split('T')[0] || String(r.date).slice(0, 10)) : '',
-            receiptId: r.receipt_id || undefined,
-            loyaltyCardUsed: r.loyalty_card_used,
-            source: r.source
-          }));
+          return res.rows.map(r => mapObservationRow(r));
         }
       } catch (err: any) {
         console.warn('Postgres pool getPriceObservations failed, falling back to Supabase:', err.message);
@@ -1581,36 +1620,53 @@ export class DatabaseService {
     }
 
     try {
-      let query = supabase.from('price_observations').select('*');
-      let resolvedCanonicalId: string | undefined = productId;
       if (productId) {
-        const { data: prodNodes } = await fetchAllSupabaseRows((from, to) =>
+        const { data: prodNodes, error: prodErr } = await fetchAllSupabaseRows((from, to) =>
           supabase.from('products').select('id, canonical_product_id').range(from, to)
         );
+        if (prodErr) {
+          console.warn('Supabase getPriceObservations products fetch error:', prodErr.message);
+          return [];
+        }
         const aliasIndex = buildCanonicalAliasIndex(prodNodes || []);
         const resolvedDetail = resolveCanonicalProductDetail(productId, aliasIndex);
         if (resolvedDetail.cycleDetected || (prodNodes && prodNodes.length > 0 && (!resolvedDetail.found || !resolvedDetail.canonicalId))) {
           return [];
         }
-        resolvedCanonicalId = resolvedDetail.canonicalId || productId;
+        const resolvedCanonicalId = resolvedDetail.canonicalId || productId;
         const productIds = collectProductIdsForCanonical(resolvedCanonicalId, aliasIndex);
-        query = query.in('product_id', productIds.length > 0 ? productIds : [resolvedCanonicalId]).order('date', { ascending: true });
-      } else {
-        query = query.order('date', { ascending: false }).limit(200);
+        const targetIds = productIds.length > 0 ? productIds : [resolvedCanonicalId];
+
+        const { data, error } = await fetchAllSupabaseRows(async (from, to) => {
+          let q = supabase
+            .from('price_observations')
+            .select('*')
+            .in('product_id', targetIds);
+          if (cutoffIso) {
+            q = q.gte('date', cutoffIso);
+          }
+          return q.order('date', { ascending: true }).range(from, to);
+        });
+
+        if (error) {
+          console.warn('Supabase getPriceObservations query error:', error.message);
+          return [];
+        }
+
+        let mapped = (data || []).map(r => mapObservationRow(r, resolvedCanonicalId));
+        if (normalizedStoreFilter) {
+          mapped = mapped.filter(obs => normalizeStoreIdKey(obs.storeId) === normalizedStoreFilter);
+        }
+        return mapped.slice(safeOffset, safeOffset + safeLimit);
       }
-      const { data, error } = await query;
+
+      const { data, error } = await supabase
+        .from('price_observations')
+        .select('*')
+        .order('date', { ascending: false })
+        .limit(200);
       if (!error && data && data.length > 0) {
-        return data.map(r => ({
-          id: r.id,
-          productId: resolvedCanonicalId || r.product_id,
-          storeId: normalizeStoreIdKey(r.store_id),
-          sourceId: r.source_id || undefined,
-          price: parseFloat(r.price),
-          date: r.date ? String(r.date).slice(0, 10) : '',
-          receiptId: r.receipt_id || undefined,
-          loyaltyCardUsed: Boolean(r.loyalty_card_used),
-          source: r.source || 'verified'
-        }));
+        return data.map(r => mapObservationRow(r));
       }
     } catch (err: any) {
       console.warn('Supabase getPriceObservations failed:', err.message);
@@ -4561,7 +4617,12 @@ export class DatabaseService {
       );
       const priceHistory = StorageService.getPriceObservations()
         .filter(obs => equivalentIds.has(obs.productId))
-        .map(obs => ({ ...obs, productId: canonicalId }));
+        .map(obs => ({
+          ...obs,
+          productId: canonicalId,
+          originalProductId: obs.productId !== canonicalId ? obs.productId : obs.originalProductId,
+          currency: obs.currency || 'RON'
+        }));
       return {
         product: prod,
         offers: validOffers,
@@ -4706,13 +4767,20 @@ export class DatabaseService {
             priceHistory: historyRes.rows.map(h => ({
               id: h.id,
               productId: canonicalProductId,
+              originalProductId:
+                h.product_id && String(h.product_id) !== canonicalProductId ? String(h.product_id) : undefined,
               storeId: normalizeStoreIdKey(h.store_id),
               sourceId: h.source_id || undefined,
               price: parseFloat(h.price),
+              currency: h.currency || 'RON',
               date: h.date ? (h.date.toISOString?.().split('T')[0] || String(h.date).slice(0, 10)) : '',
               receiptId: h.receipt_id || undefined,
               loyaltyCardUsed: Boolean(h.loyalty_card_used),
-              source: h.source || 'verified'
+              source: h.source || 'verified',
+              normalPrice: h.normal_price != null ? parseFloat(h.normal_price) : undefined,
+              promoPrice: h.promo_price != null ? parseFloat(h.promo_price) : undefined,
+              loyaltyPrice: h.loyalty_price != null ? parseFloat(h.loyalty_price) : undefined,
+              region: h.region || undefined
             })),
             retailerMappings: retailerMappingRes.rows,
             promotions: promosRes.rows
@@ -4827,13 +4895,20 @@ export class DatabaseService {
       const priceHistory: PriceObservation[] = (historyData || []).map(h => ({
         id: h.id,
         productId: product.id,
+        originalProductId:
+          h.product_id && String(h.product_id) !== product.id ? String(h.product_id) : undefined,
         storeId: normalizeStoreIdKey(h.store_id),
         sourceId: h.source_id || undefined,
         price: parseFloat(h.price),
+        currency: h.currency || 'RON',
         date: h.date ? String(h.date).slice(0, 10) : '',
         receiptId: h.receipt_id || undefined,
         loyaltyCardUsed: Boolean(h.loyalty_card_used),
-        source: h.source || 'verified'
+        source: h.source || 'verified',
+        normalPrice: h.normal_price != null ? parseFloat(h.normal_price) : undefined,
+        promoPrice: h.promo_price != null ? parseFloat(h.promo_price) : undefined,
+        loyaltyPrice: h.loyalty_price != null ? parseFloat(h.loyalty_price) : undefined,
+        region: h.region || undefined
       }));
 
       return {

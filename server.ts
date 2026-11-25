@@ -51,6 +51,7 @@ import {
   priceAlertUpdateSchema,
   priceAuditQuerySchema,
   priceAuditRemediationRequestSchema,
+  priceHistoryProductParamSchema,
   priceHistoryQuerySchema,
   saveReceiptRequestSchema,
   scanReceiptRequestSchema,
@@ -63,7 +64,13 @@ import {
 } from './src/server/validation.ts';
 import { ShadowReviewService, type VerifiedAdminReviewer } from './src/services/ShadowReviewService.ts';
 import { BasketOptimizerService } from './src/services/BasketOptimizerService.ts';
-import { PriceHistoryService } from './src/services/PriceHistoryService.ts';
+import {
+  formatPriceSourceLabel,
+  isRonCurrency,
+  normalizeHistoryStoreKey,
+  parseStrictIsoDate,
+  PriceHistoryService
+} from './src/services/PriceHistoryService.ts';
 import { PriceAlertService } from './src/services/PriceAlertService.ts';
 import { PriceQualityClassifier } from './src/services/PriceQualityClassifier.ts';
 import {
@@ -2394,6 +2401,13 @@ app.get('/api/catalog/offers', async (req, res) => {
 // Price History per Product endpoint (strict 30 / 90 / 180 / 365 day interval filtering)
 app.get('/api/catalog/history/:productId', async (req, res) => {
   try {
+    const paramCheck = priceHistoryProductParamSchema.safeParse(req.params.productId);
+    if (!paramCheck.success) {
+      return res.status(400).json({
+        success: false,
+        error: paramCheck.error.issues[0]?.message || 'Identificator de produs invalid.'
+      });
+    }
     const queryCheck = priceHistoryQuerySchema.safeParse(req.query);
     if (!queryCheck.success) {
       return res.status(400).json({
@@ -2401,8 +2415,9 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
         error: queryCheck.error.issues[0]?.message || 'Interval invalid. Acceptat: 30, 90, 180 sau 365.'
       });
     }
-    const intervalDays = queryCheck.data.days;
-    const requestedProductId = req.params.productId;
+    const { days: intervalDays, storeId: rawStoreFilter, limit, offset } = queryCheck.data;
+    const normalizedStoreFilter = rawStoreFilter ? normalizeHistoryStoreKey(rawStoreFilter) : undefined;
+    const requestedProductId = paramCheck.data;
     const aliasIndex = await loadServerProductAliasIndex();
     const detail = resolveCanonicalProductDetail(requestedProductId, aliasIndex);
     if (detail.cycleDetected) {
@@ -2430,7 +2445,7 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
 
     const [observations, offers, stores] = isPostgresConfigured()
       ? await Promise.all([
-          DatabaseService.getPriceObservations(canonicalProductId),
+          DatabaseService.getPriceObservations(canonicalProductId, { days: 365, limit: 5000 }),
           DatabaseService.getOffers(),
           DatabaseService.getStores()
         ])
@@ -2442,55 +2457,126 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
 
     const normalizedStoresMap = new Map<string, string>();
     for (const s of stores) {
-      const k = (s.id || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+      const k = normalizeHistoryStoreKey(s.id);
       if (k) normalizedStoresMap.set(k, s.name);
-      if (s.slug) normalizedStoresMap.set(s.slug.toLowerCase(), s.name);
+      if (s.slug) normalizedStoresMap.set(normalizeHistoryStoreKey(s.slug), s.name);
     }
 
+    const matchedProduct =
+      (isPostgresConfigured() ? undefined : StorageService.getAllProducts().find(p => p.id === canonicalProductId)) ||
+      undefined;
+
     const fullStats = PriceHistoryService.getProductPriceStats(canonicalProductId, {
+      product: matchedProduct,
       observations,
       offers,
       stores,
       aliasMap: aliasIndex
     });
-    const filteredPoints = PriceHistoryService.filterPointsByDays(fullStats.historyPoints, intervalDays);
+
+    let filteredPoints = PriceHistoryService.filterPointsByDays(fullStats.historyPoints, intervalDays);
+    if (normalizedStoreFilter) {
+      filteredPoints = filteredPoints.filter(
+        pt => normalizeHistoryStoreKey(pt.storeId) === normalizedStoreFilter
+      );
+    }
+
     const activeIntervalStats = fullStats.intervalStats[intervalDays];
-    const cutoffMs = Date.now() - intervalDays * 24 * 60 * 60 * 1000;
+    const nowMs = Date.now();
+    const cutoffMs = nowMs - intervalDays * 24 * 60 * 60 * 1000;
+    const maxAllowedMs = nowMs + 24 * 60 * 60 * 1000;
+    const obsQualityById = fullStats.observationQualityById || {};
+
     const realFilteredObservations = observations
-      .reduce<Array<typeof observations[number] & { storeName: string }>>((acc, o) => {
-        if (!o || !Number.isFinite(o.price) || o.price <= 0) return acc;
+      .reduce<Array<typeof observations[number] & {
+        storeName: string;
+        sourceLabel: string;
+        qualityStatus?: string;
+        qualityLabelRo?: string;
+        qualityReasons?: string[];
+      }>>((acc, o, idx) => {
+        if (!o || !Number.isFinite(Number(o.price)) || Number(o.price) <= 0) return acc;
         if (o.source === 'demo' || o.source === 'estimated') return acc;
+        if (!isRonCurrency(o.currency)) return acc;
         const obsDetail = resolveCanonicalProductDetail(o.productId, aliasIndex);
         if (obsDetail.cycleDetected || !obsDetail.found || !obsDetail.canonicalId) {
           return acc;
         }
-        const ts = new Date(o.date.length === 10 ? `${o.date}T12:00:00Z` : o.date).getTime();
-        if (!Number.isFinite(ts) || ts < cutoffMs || ts > Date.now() + 24 * 60 * 60 * 1000) {
+        const obsKey = o.id || `obs-${idx}`;
+        const assessment = obsQualityById[obsKey];
+        if (assessment?.status === 'SUSPICIOUS') {
           return acc;
         }
-        const key = (o.storeId || '').toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
+        const parsedDate = parseStrictIsoDate(o.date);
+        if (!parsedDate || parsedDate.timestampMs < cutoffMs || parsedDate.timestampMs > maxAllowedMs) {
+          return acc;
+        }
+        const key = normalizeHistoryStoreKey(o.storeId || '');
+        if (normalizedStoreFilter && key !== normalizedStoreFilter) {
+          return acc;
+        }
+        const rawOriginalId =
+          o.originalProductId && o.originalProductId !== obsDetail.canonicalId
+            ? o.originalProductId
+            : o.productId !== obsDetail.canonicalId
+            ? o.productId
+            : undefined;
         acc.push({
           ...o,
+          date: parsedDate.isoDate,
+          currency: 'RON',
           productId: obsDetail.canonicalId,
-          storeName: normalizedStoresMap.get(key) || o.storeId
+          originalProductId: rawOriginalId,
+          storeName: normalizedStoresMap.get(key) || o.storeId,
+          sourceLabel: formatPriceSourceLabel(o.source),
+          ...(assessment
+            ? {
+                qualityStatus: assessment.status,
+                qualityLabelRo: assessment.labelRo,
+                qualityReasons: assessment.reasons
+              }
+            : {})
         });
         return acc;
-      }, []);
+      }, [])
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const paginatedPoints = filteredPoints.slice(offset, offset + limit);
+    const paginatedObservations = realFilteredObservations.slice(offset, offset + limit);
+    const filteredFlagged = normalizedStoreFilter
+      ? (fullStats.flaggedObservations || []).filter(
+          f => normalizeHistoryStoreKey(f.storeId) === normalizedStoreFilter
+        )
+      : fullStats.flaggedObservations || [];
 
     res.json({
       success: true,
       productId: canonicalProductId,
       requestedProductId: req.params.productId,
+      currency: 'RON',
       intervalDays,
-      count: filteredPoints.length,
+      storeFilter: normalizedStoreFilter || null,
+      count: paginatedPoints.length,
+      totalInIntervalCount: filteredPoints.length,
       totalObservationsCount: fullStats.observationsCount,
+      excludedForeignCurrencyCount: fullStats.excludedForeignCurrencyCount || 0,
       currentLowestPrice: fullStats.currentLowestPrice,
       currentLowestStoreName: fullStats.currentLowestStoreName,
       hasSufficientHistory: activeIntervalStats.hasSufficientHistory,
       intervalStats: activeIntervalStats,
+      storeBreakdown: activeIntervalStats.storeBreakdown || [],
       allIntervalStats: fullStats.intervalStats,
-      points: filteredPoints,
-      observations: realFilteredObservations
+      points: paginatedPoints,
+      observations: paginatedObservations,
+      flaggedObservations: filteredFlagged,
+      observationQualityById: obsQualityById,
+      qualitySummary: fullStats.qualitySummary,
+      pagination: {
+        limit,
+        offset,
+        returnedCount: paginatedPoints.length,
+        hasMore: offset + paginatedPoints.length < filteredPoints.length
+      }
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la preluarea istoricului de preț.' });
@@ -2696,7 +2782,7 @@ app.get('/api/basket/optimize/:listId', publicComputeLimiter, async (req, res) =
       return res.status(ownedResult.status).json({ success: false, error: ownedResult.error });
     }
 
-    const maxStores = Math.max(1, Math.min(8, Number(req.query.maxStores) || 3));
+    const maxStores = Math.max(1, Math.min(20, Number(req.query.maxStores) || 3));
     const useLoyaltyCards = req.query.useLoyaltyCards !== 'false';
     const useCoupons = req.query.useCoupons === 'true';
     const includeStaleOffers = req.query.includeStaleOffers !== 'false';
@@ -3764,7 +3850,13 @@ app.get('/api/products', async (req, res) => {
 // GET /api/products/:id - Detaliu produs & comparație multi-retailer completă
 app.get('/api/products/:id', async (req, res) => {
   try {
-    const { id } = req.params;
+    const paramCheck = priceHistoryProductParamSchema.safeParse(req.params.id);
+    if (!paramCheck.success) {
+      return res.status(400).json({
+        error: paramCheck.error.issues[0]?.message || 'Identificator de produs invalid.'
+      });
+    }
+    const id = paramCheck.data;
 
     // 1. Încercare din baza de date persistentă (PostgreSQL / Supabase) cu rezolvare multi-hop canonică
     const dbDetail = await DatabaseService.getProductDetailById(id);
@@ -3782,12 +3874,21 @@ app.get('/api/products/:id', async (req, res) => {
       observations = dbDetail.priceHistory || [];
     }
 
-    // 2. Fallback la memorie locală (cu rezolvare canonică și agregare observații across aliasuri)
+    // 2. Fallback la memorie locală (cu rezolvare canonică și agregare observații across aliasuri, fail-closed pe ciclu/orfan)
     if (!comparison) {
       const localProducts = StorageService.getAllProducts();
       const rawAliasIndex = await loadServerProductAliasIndex();
       const aliasIndex = mergeCanonicalAliasSources(rawAliasIndex, localProducts);
-      const canonicalProductId = resolveCanonicalProductId(id, aliasIndex) || id;
+      const idDetail = resolveCanonicalProductDetail(id, aliasIndex);
+      if (idDetail.cycleDetected || (idDetail.wasAlias && !idDetail.found)) {
+        return res.status(400).json({
+          error: 'Identificator de produs invalid (ciclu canonic sau alias orfan).'
+        });
+      }
+      if (!idDetail.found || !idDetail.canonicalId) {
+        return res.status(404).json({ error: 'Produsul nu a fost găsit în catalog.' });
+      }
+      const canonicalProductId = idDetail.canonicalId;
       comparison = PriceComparisonService.getProductComparisonDetails(
         canonicalProductId,
         undefined,
@@ -3801,7 +3902,9 @@ app.get('/api/products/:id', async (req, res) => {
           .filter(obs => equivalentIds.has(obs.productId))
           .map(obs => ({
             ...obs,
-            productId: comparison!.product.id
+            productId: comparison!.product.id,
+            originalProductId:
+              obs.productId !== comparison!.product.id ? obs.productId : obs.originalProductId
           }));
       }
     }
@@ -3826,15 +3929,42 @@ app.get('/api/products/:id', async (req, res) => {
       ])
     );
 
-    const sanitizedObservations = observations.filter(
-      o => o && Number.isFinite(o.price) && o.price > 0 && o.source !== 'demo' && o.source !== 'estimated'
-    );
-
     const historyStats = PriceHistoryService.getProductPriceStats(sanitizedProduct.id, {
+      product: comparison.product,
       offers: rawOffers,
-      observations: sanitizedObservations,
+      observations,
       stores: STORES
     });
+    const obsQualityById = historyStats.observationQualityById || {};
+
+    const nowMs = Date.now();
+    const maxAllowedMs = nowMs + 24 * 60 * 60 * 1000;
+    const sanitizedObservations = observations
+      .filter((o, idx) => {
+        if (!o || !Number.isFinite(Number(o.price)) || Number(o.price) <= 0) return false;
+        if (o.source === 'demo' || o.source === 'estimated') return false;
+        if (!isRonCurrency(o.currency)) return false;
+        const obsKey = o.id || `obs-${idx}`;
+        if (obsQualityById[obsKey]?.status === 'SUSPICIOUS') return false;
+        const parsed = parseStrictIsoDate(o.date);
+        return Boolean(parsed && parsed.timestampMs <= maxAllowedMs);
+      })
+      .map(o => {
+        const assessment = o.id ? obsQualityById[o.id] : undefined;
+        return {
+          ...o,
+          date: parseStrictIsoDate(o.date)?.isoDate || o.date,
+          currency: 'RON',
+          ...(assessment
+            ? {
+                qualityStatus: assessment.status,
+                qualityLabelRo: assessment.labelRo,
+                qualityReasons: assessment.reasons
+              }
+            : {})
+        };
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
 
     res.json({
       success: true,
@@ -3847,12 +3977,15 @@ app.get('/api/products/:id', async (req, res) => {
         product: sanitizedProduct
       },
       offerQualityByOfferId,
+      observationQualityById: obsQualityById,
+      flaggedObservations: historyStats.flaggedObservations || [],
+      qualitySummary: historyStats.qualitySummary,
       observationsCount: historyStats.observationsCount,
       distinctDaysCount: historyStats.distinctDaysCount,
       hasSufficientHistory: historyStats.hasSufficientHistory,
       intervalStats: historyStats.intervalStats,
       allIntervalStats: historyStats.intervalStats,
-      observations: sanitizedObservations.slice(0, 200)
+      observations: sanitizedObservations.slice(0, 500)
     });
   } catch (err: any) {
     console.error('Eroare GET /api/products/:id:', err);

@@ -111,9 +111,11 @@ export interface ProductOffer {
 export interface PriceObservation {
   id: string;
   productId: string;
+  originalProductId?: string;
   storeId: string;
   sourceId?: string;
   price: number;
+  currency?: string;
   date: string; // ISO format: YYYY-MM-DD
   receiptId?: string;
   loyaltyCardUsed?: boolean;
@@ -403,7 +405,38 @@ export interface UserPriceObservation {
   isSgr?: boolean;
 }
 
-export type PriceAlertType = 'below_target' | 'any_drop' | 'interval_low';
+export type PriceAlertType = 'below_target' | 'any_drop' | 'interval_low' | 'product_watch';
+
+export type PriceAlertRearmState = 'armed' | 'triggered_locked';
+
+export type PriceAlertEvaluationOutcome =
+  | 'triggered'
+  | 'skipped_duplicate'
+  | 'skipped_cooldown'
+  | 'skipped_cycle_locked'
+  | 'skipped_price_not_met'
+  | 'skipped_ineligible_price'
+  | 'skipped_canonical_invalid'
+  | 'rearmed_price_recovered'
+  | 'rearmed_offer_expired';
+
+export interface PriceAlertTriggerEvent {
+  id: string;
+  alertId: string;
+  productId: string;
+  outcome: PriceAlertEvaluationOutcome;
+  evaluatedAt: string;
+  observedPrice?: number;
+  targetPrice?: number;
+  previousPrice?: number;
+  storeId?: string;
+  storeName?: string;
+  sourceOfferId?: string;
+  sourceObservationId?: string;
+  qualityStatus?: PriceDataQualityStatus;
+  idempotencyKey?: string;
+  reasonRo: string;
+}
 
 export interface PriceAlert {
   id: string;
@@ -416,28 +449,47 @@ export interface PriceAlert {
   isActive: boolean;
   alertType?: PriceAlertType;
   intervalDays?: 30 | 90 | 180 | 365;
+  minDropPercent?: number;
+  cooldownHours?: number;
+  rearmState?: PriceAlertRearmState;
+  triggerCycle?: number;
   sourceListId?: string;
   lastTriggeredAt?: string;
   lastTriggeredPrice?: number;
   lastEvaluatedPrice?: number;
   lastNotifiedKey?: string;
+  lastTriggerReasonRo?: string;
+  lastSourceOfferId?: string;
+  lastSourceQualityStatus?: PriceDataQualityStatus;
+  lastRearmedAt?: string;
+  lastSkippedReasonRo?: string;
+  triggerHistory?: PriceAlertTriggerEvent[];
 }
 
 export interface InAppPriceNotification {
   id: string;
   alertId: string;
   dedupeKey: string;
+  idempotencyKey?: string;
   productId: string;
   originalProductId?: string;
   productName: string;
   alertType: PriceAlertType;
   title: string;
   message: string;
+  reasonRo?: string;
   observedPrice: number;
   previousPrice?: number;
   targetPrice?: number;
   storeId?: string;
   storeName?: string;
+  sourceOfferId?: string;
+  sourceObservationId?: string;
+  qualityStatus?: PriceDataQualityStatus;
+  qualityLabelRo?: string;
+  observedIntervalDays?: PriceHistoryInterval;
+  observedObservationsCount?: number;
+  triggerCycle?: number;
   triggeredAt: string;
   isRead: boolean;
 }
@@ -895,6 +947,8 @@ export interface PriceQualityClassifierConfig {
   verifiedMaxHours: number;
   staleMaxHours: number;
   expiredMaxHours?: number;
+  observationRecentlyVerifiedMaxDays?: number;
+  observationVerifiedMaxDays?: number;
   suspiciousDeviationHighRatio: number;
   suspiciousDropNoPromoRatio: number;
   minPlausiblePrice: number;
@@ -915,13 +969,56 @@ export interface PriceDataQualityAssessment {
   labelRo: string;
   descriptionRo: string;
   score: number; // 0..100 transparent weighted sum
+  hasEnoughDataForScore?: boolean;
+  subjectType?: 'offer' | 'observation';
   methodologyVersion: string;
   ageHours: number | null;
   lastVerifiedAt: string | null;
   isUsableForComparison: boolean;
   isReliableForOptimization: boolean;
+  historicalContextNoteRo?: string;
+  canonicalProductId?: string;
+  originalProductId?: string;
   factors: PriceQualityFactor[];
   reasons: string[];
+}
+
+export interface PriceObservationQualityInput extends Partial<Omit<PriceObservation, 'source'>> {
+  id: string;
+  productId: string;
+  storeId: string;
+  price: number;
+  date: string;
+  source: DataSourceType | string;
+  unit?: UnitType | string;
+  normalizedUnit?: string;
+  unitPriceMeasure?: string;
+  packageWeightOrVolume?: number;
+  packageUnit?: UnitType | string;
+  expectedUnit?: UnitType | string;
+  expectedPackageWeightOrVolume?: number;
+  expectedPackageUnit?: UnitType | string;
+  isPromo?: boolean;
+  verificationStatus?: VerificationStatus | string;
+  validFrom?: string;
+  validUntil?: string;
+  offerValidUntil?: string;
+  isFlaggedAnomaly?: boolean;
+  anomalyReason?: string;
+}
+
+export interface FlaggedPriceObservation {
+  id: string;
+  productId: string;
+  originalProductId?: string;
+  storeId: string;
+  storeName: string;
+  price: number;
+  currency?: string;
+  date: string;
+  source: DataSourceType | string;
+  sourceLabel: string;
+  qualityAssessment: PriceDataQualityAssessment;
 }
 
 // =========================================================================
@@ -1020,6 +1117,10 @@ export interface BasketMultiStorePlan {
   stops: BasketMultiStoreStop[];
   coveredItemsCount: number;
   totalComparableItemsCount: number;
+  completenessPercentage?: number;
+  coverageStatusRo?: 'COMPLET' | 'PARȚIAL' | 'INDISPONIBIL';
+  unconfidentMatchesCount?: number;
+  unitConflictsCount?: number;
   missingItems: BasketMissingPriceItem[];
   isComplete: boolean;
   isEstimative: boolean;
@@ -1053,6 +1154,16 @@ export interface BasketOptimizationOptions {
   now?: Date;
 }
 
+export interface BasketSolverMetadata {
+  strategy: 'exact_branch_and_bound' | 'deterministic_heuristic';
+  isProvenGlobalOptimum: boolean;
+  evaluatedSubsetsCount: number;
+  eligibleUsefulStoresCount: number;
+  itemCount: number;
+  executionTimeMs: number;
+  noteRo: string;
+}
+
 export interface BasketOptimizationResult {
   listId?: string;
   listName?: string;
@@ -1082,6 +1193,7 @@ export interface BasketOptimizationResult {
   useCouponsApplied?: boolean;
   revisionToken?: string;
   savingsMethodNoteRo?: string;
+  solverMetadata?: BasketSolverMetadata;
 }
 
 // =========================================================================
@@ -1089,6 +1201,29 @@ export interface BasketOptimizationResult {
 // =========================================================================
 
 export type PriceHistoryInterval = 30 | 90 | 180 | 365;
+
+export interface PriceHistoryStoreBreakdown {
+  storeId: string;
+  storeName: string;
+  observationsCount: number;
+  distinctDaysCount: number;
+  minPrice: number;
+  minPriceDate: string;
+  avgPrice: number;
+  maxPrice: number;
+  lastPrice: number;
+  lastDate: string;
+  lastSource: string;
+  lastSourceType: DataSourceType | string;
+  sources: string[];
+  hasMixedSources: boolean;
+  latestQualityStatus?: PriceDataQualityStatus;
+  latestQualityLabelRo?: string;
+  latestQualityReasonRo?: string;
+  verifiedCount?: number;
+  staleCount?: number;
+  unverifiedCount?: number;
+}
 
 export interface PriceHistoryIntervalStats {
   intervalDays: PriceHistoryInterval;
@@ -1106,9 +1241,13 @@ export interface PriceHistoryIntervalStats {
     storeId: string;
     storeName: string;
     source: string;
+    sourceType?: DataSourceType | string;
   } | null;
   hasSufficientHistory: boolean;
   noticeRo?: string;
+  storeBreakdown?: PriceHistoryStoreBreakdown[];
+  excludedForeignCurrencyCount?: number;
+  invalidObservationsCount?: number;
 }
 
 // =========================================================================
