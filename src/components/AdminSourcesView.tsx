@@ -1124,40 +1124,43 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       {/* 1. TOP HEADER & STATUS BAR */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
         <div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 dark:bg-slate-800 text-white text-xs font-semibold mb-2 border border-transparent dark:border-slate-700">
-            <Database className="w-3.5 h-3.5 text-emerald-400" />
-            Coșul Meu • Panou Operațional Administrativ
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
-            Dashboard Operațional & Catalog Importer ⚙️
+          <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5 mb-1.5">
+            <Database className="w-3.5 h-3.5" />
+            <span>Coșul Meu · Panou Operațional Administrativ</span>
+          </p>
+          <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
+            Dashboard Operațional & Catalog Importer
           </h1>
           <p className="text-slate-600 dark:text-slate-400 text-sm mt-0.5">
             Monitorizare surse, cataloage, produse canonice, oferte și sincronizare incrementală PostgreSQL.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/70 text-emerald-900 dark:text-emerald-200 text-xs font-semibold">
             <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             <span>Admin Autorizat</span>
           </div>
 
           <button
+            type="button"
+            aria-label="Reîmprospătează toate datele"
             onClick={() => {
               loadDashboard();
               loadSources();
               loadStaging();
               loadRunsAndErrors();
             }}
-            className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            className="min-w-[40px] min-h-[40px] flex items-center justify-center p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
             title="Reîmprospătează toate datele"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
 
           <button
+            type="button"
             onClick={handleAttemptLogout}
-            className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/70 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            className="min-h-[40px] px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/70 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors text-xs font-bold flex items-center gap-1.5 cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Deconectare</span>
@@ -1194,13 +1197,14 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       <div className="bg-white dark:bg-slate-900 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
         {/* Mobile Dropdown */}
         <div className="md:hidden">
-          <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase px-2 mb-1 block">
+          <label htmlFor="admin-mobile-tab-select" className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase px-2 mb-1 block">
             Secțiune Dashboard:
           </label>
           <select
+            id="admin-mobile-tab-select"
             value={activeTab}
             onChange={e => setActiveTab(e.target.value as AdminTabId)}
-            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100"
+            className="w-full min-h-[40px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 dark:text-slate-100"
           >
             {TABS.map(tab => (
               <option key={tab.id} value={tab.id}>
@@ -1484,10 +1488,10 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 <span className="text-[9px] text-slate-500 dark:text-slate-400">din {operationalData?.scheduler?.totalSchedulesCount ?? 0} total</span>
               </div>
 
-              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700">
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700 tabular-nums">
                 <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase block">În Desfășurare</span>
                 <span className={`text-lg font-extrabold mt-1 block ${
-                  (operationalData?.scheduler?.runningSchedulesCount ?? 0) > 0 ? 'text-blue-600 dark:text-blue-400 animate-pulse' : 'text-slate-900 dark:text-slate-100'
+                  (operationalData?.scheduler?.runningSchedulesCount ?? 0) > 0 ? 'text-blue-600 dark:text-blue-400' : 'text-slate-900 dark:text-slate-100'
                 }`}>
                   {operationalData?.scheduler?.runningSchedulesCount ?? 0}
                 </span>
@@ -1641,18 +1645,27 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
                 >
                   {/* Retailer Card Header */}
                   <div
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
                     onClick={() => toggleRetailerExpand(retailer.id)}
-                    className="p-4 flex items-center justify-between gap-4 cursor-pointer hover:bg-slate-50/70 dark:hover:bg-slate-800/60 transition-colors"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        toggleRetailerExpand(retailer.id);
+                      }
+                    }}
+                    className="p-4 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-4 cursor-pointer hover:bg-slate-50/70 dark:hover:bg-slate-800/60 transition-colors"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-extrabold text-slate-700 dark:text-slate-200 text-sm">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-extrabold text-slate-700 dark:text-slate-200 text-sm shrink-0">
                         {retailer.name.substring(0, 2).toUpperCase()}
                       </div>
-                      <div>
-                        <div className="flex items-center gap-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
                           <h3 className="font-extrabold text-slate-900 dark:text-slate-100 text-sm">{retailer.name}</h3>
                           <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
                               isBlocked
                                 ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300'
                                 : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300'
@@ -2199,7 +2212,11 @@ export const AdminSourcesView: React.FC<AdminSourcesViewProps> = ({ onRefreshAll
       {/* ========================================================================= */}
       {activeTab === 'offers' && (
         <div className="space-y-6">
-          <AdminIndexQualityTab adminToken={adminToken} onRefreshAll={loadDashboard} />
+          <AdminIndexQualityTab
+            adminToken={adminToken}
+            onRefreshAll={loadDashboard}
+            onSelectProduct={setSelectedProductId}
+          />
         </div>
       )}
 

@@ -58,7 +58,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
       aria-label="Navigație mobilă rapidă"
       className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-lg border-t border-slate-200/90 dark:border-slate-800 px-2 py-1 pb-safe no-print transition-colors"
     >
-      <div className="grid grid-cols-5 gap-1 items-center max-w-md mx-auto">
+      <div className="grid grid-cols-5 gap-0.5 sm:gap-1 items-center max-w-md mx-auto">
         {navItems.map(item => {
           const Icon = item.icon;
           return (
@@ -68,7 +68,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
               onClick={() => onSelectTab(item.id)}
               onTouchStart={() => onPrefetchTab?.(item.id)}
               onFocus={() => onPrefetchTab?.(item.id)}
-              className={`min-h-[48px] relative flex flex-col items-center justify-center py-1 px-1 rounded-xl transition-colors cursor-pointer ${
+              className={`min-h-[48px] min-w-0 relative flex flex-col items-center justify-center py-1 px-0.5 rounded-xl transition-colors cursor-pointer ${
                 item.isActive
                   ? 'text-emerald-700 dark:text-emerald-400 font-semibold'
                   : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 font-medium'
@@ -87,7 +87,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({
                   </span>
                 )}
               </div>
-              <span className="text-[10px] mt-0.5 tracking-tight whitespace-nowrap">{item.label}</span>
+              <span className="text-[10px] mt-0.5 tracking-tight truncate max-w-full">{item.label}</span>
             </button>
           );
         })}

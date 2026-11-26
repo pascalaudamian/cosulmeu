@@ -19,6 +19,7 @@ import { Navbar } from './components/Navbar.js';
 import { MobileNav } from './components/MobileNav.js';
 import { DashboardView } from './components/DashboardView.js';
 import { Footer } from './components/Footer.js';
+import { ErrorState } from './components/ui/StateFeedback.js';
 import { CookieConsentBanner } from './components/CookieConsentBanner.js';
 import { CookiePreferencesModal } from './components/CookiePreferencesModal.js';
 import {
@@ -163,6 +164,21 @@ export default function App() {
   } = useDashboardData(user?.id);
   const [isImportingLocalData, setIsImportingLocalData] = useState(false);
   const [dashboardImportError, setDashboardImportError] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
   const [dashboardImportResult, setDashboardImportResult] = useState<DashboardImportResult | null>(null);
   const [dataWriteError, setDataWriteError] = useState<string | null>(null);
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
@@ -331,7 +347,12 @@ export default function App() {
     const offersToCheck = catalogOffers.length > 0 ? catalogOffers : StorageService.getProductOffers();
     if (offersToCheck.length === 0) return;
 
-    const sig = `${alertsList.map(a => `${a.id}:${a.isActive}:${a.targetPrice}:${a.alertType || 'below_target'}:${a.intervalDays || ''}:${a.lastNotifiedKey || ''}`).join(',')}|${offersToCheck.length}`;
+    const sig = `${alertsList
+      .map(
+        a =>
+          `${a.id}:${a.isActive}:${a.targetPrice}:${a.alertType || 'below_target'}:${a.intervalDays || ''}:${a.minDropPercent ?? ''}:${a.cooldownHours ?? ''}:${a.rearmState || 'armed'}:${a.triggerCycle ?? 0}:${a.lastNotifiedKey || ''}`
+      )
+      .join(',')}|${offersToCheck.length}`;
     if (lastAlertEvalSigRef.current === sig) return;
     lastAlertEvalSigRef.current = sig;
 
@@ -360,7 +381,12 @@ export default function App() {
         !prevA ||
         nextA.lastNotifiedKey !== prevA.lastNotifiedKey ||
         nextA.currentLowestPrice !== prevA.currentLowestPrice ||
-        nextA.lastEvaluatedPrice !== prevA.lastEvaluatedPrice
+        nextA.lastEvaluatedPrice !== prevA.lastEvaluatedPrice ||
+        nextA.rearmState !== prevA.rearmState ||
+        nextA.triggerCycle !== prevA.triggerCycle ||
+        nextA.lastRearmedAt !== prevA.lastRearmedAt ||
+        nextA.lastSkippedReasonRo !== prevA.lastSkippedReasonRo ||
+        (nextA.triggerHistory?.length || 0) !== (prevA.triggerHistory?.length || 0)
       );
     });
 
@@ -1185,7 +1211,12 @@ export default function App() {
 
   const handleCreateAlertsFromList = (
     list: ShoppingList,
-    options?: { alertType?: 'below_target' | 'any_drop' | 'interval_low'; intervalDays?: 30 | 90 | 180 | 365 }
+    options?: {
+      alertType?: 'below_target' | 'any_drop' | 'interval_low' | 'product_watch';
+      intervalDays?: 30 | 90 | 180 | 365;
+      minDropPercent?: number;
+      cooldownHours?: number;
+    }
   ) => {
     const resolvedProducts = catalogProducts.length > 0 ? catalogProducts : StorageService.getAllProducts();
     const resolvedOffers = catalogOffers.length > 0 ? catalogOffers : StorageService.getProductOffers();
@@ -1212,9 +1243,16 @@ export default function App() {
   };
 
   const handleSaveProductAlert = (savedAlert: PriceAlert) => {
-    const existsById = dashboardAlerts.some(a => a.id === savedAlert.id);
-    if (existsById) {
-      const next = dashboardAlerts.map(a => (a.id === savedAlert.id ? savedAlert : a));
+    const existing = dashboardAlerts.find(a => a.id === savedAlert.id);
+    if (existing) {
+      const ruleChanged =
+        existing.targetPrice !== savedAlert.targetPrice ||
+        (existing.alertType || 'below_target') !== (savedAlert.alertType || 'below_target') ||
+        existing.intervalDays !== savedAlert.intervalDays ||
+        existing.minDropPercent !== savedAlert.minDropPercent ||
+        (!existing.isActive && savedAlert.isActive);
+      const nextAlert = ruleChanged ? PriceAlertService.rearmAlertManually(savedAlert) : savedAlert;
+      const next = dashboardAlerts.map(a => (a.id === savedAlert.id ? nextAlert : a));
       void handleUpdatePriceAlerts(next);
       setAlertFeedbackBanner(`Alerta pentru „${savedAlert.productName}” a fost actualizată.`);
       window.setTimeout(() => setAlertFeedbackBanner(null), 4000);
@@ -1241,7 +1279,11 @@ export default function App() {
   };
 
   const handleToggleProductAlert = (alertId: string) => {
-    const next = dashboardAlerts.map(a => (a.id === alertId ? { ...a, isActive: !a.isActive } : a));
+    const next = dashboardAlerts.map(a => {
+      if (a.id !== alertId) return a;
+      const nextActive = !a.isActive;
+      return nextActive ? PriceAlertService.rearmAlertManually({ ...a, isActive: true }) : { ...a, isActive: false };
+    });
     void handleUpdatePriceAlerts(next);
   };
 
@@ -1296,6 +1338,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC] dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans selection:bg-emerald-100 dark:selection:bg-emerald-900/60 selection:text-emerald-950 dark:selection:text-emerald-100 transition-colors">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[1200] focus:px-4 focus:py-2.5 focus:rounded-xl focus:bg-emerald-600 focus:text-white focus:text-sm focus:font-bold focus:shadow-lg"
+      >
+        Sari la conținutul principal
+      </a>
+
       {/* Top Navbar */}
       <Navbar
         currentTab={activeLegalRoute ? '' : currentTab}
@@ -1316,15 +1365,40 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8">
+      <main id="main-content" className="flex-1 max-w-7xl w-full mx-auto px-3.5 sm:px-6 lg:px-8 pt-5 sm:pt-8 pb-24 md:pb-8">
+        {!isOnline && (
+          <ErrorState
+            variant="offline"
+            compact
+            title="Conexiune offline"
+            message="Ești offline în acest moment. Datele locale rămân disponibile, iar sincronizarea se va relua automat când revine conexiunea."
+            className="mb-5"
+          />
+        )}
         {dataWriteError && (
-          <div role="alert" className="mb-5 rounded-xl border border-rose-200 dark:border-rose-800/70 bg-rose-50 dark:bg-rose-950/50 px-4 py-3 text-sm font-medium text-rose-800 dark:text-rose-200">
-            {dataWriteError}
-          </div>
+          <ErrorState
+            variant="generic"
+            compact
+            message={dataWriteError}
+            onDismiss={() => setDataWriteError(null)}
+            className="mb-5"
+          />
         )}
         {alertFeedbackBanner && (
-          <div role="status" className="mb-5 rounded-xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 px-4 py-3 text-sm font-medium text-emerald-800 dark:text-emerald-200">
-            {alertFeedbackBanner}
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-5 rounded-2xl border border-emerald-200 dark:border-emerald-800/70 bg-emerald-50 dark:bg-emerald-950/50 px-4 py-3 text-sm font-medium text-emerald-800 dark:text-emerald-200 flex items-center justify-between gap-3"
+          >
+            <span>{alertFeedbackBanner}</span>
+            <button
+              type="button"
+              onClick={() => setAlertFeedbackBanner(null)}
+              aria-label="Închide notificarea"
+              className="text-xs font-bold px-2.5 py-1 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 cursor-pointer shrink-0"
+            >
+              Închide
+            </button>
           </div>
         )}
 

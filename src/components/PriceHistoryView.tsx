@@ -15,7 +15,8 @@ import {
   Pause,
   Play,
   Info,
-  Clock
+  Clock,
+  X
 } from 'lucide-react';
 import {
   InAppPriceNotification,
@@ -99,6 +100,9 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
   const [alertTypeInput, setAlertTypeInput] = useState<PriceAlertType>('below_target');
   const [alertIntervalInput, setAlertIntervalInput] = useState<PriceHistoryInterval>(90);
   const [targetAlertPrice, setTargetAlertPrice] = useState<number>(6.0);
+  const [minDropPercentInput, setMinDropPercentInput] = useState<number>(5);
+  const [cooldownHoursInput, setCooldownHoursInput] = useState<number>(24);
+  const [expandedHistoryAlertId, setExpandedHistoryAlertId] = useState<string | null>(null);
   const [bulkFeedback, setBulkFeedback] = useState<string | null>(null);
 
   // Remote DB history sync
@@ -249,6 +253,8 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
     setEditingAlertId(null);
     setAlertTypeInput('below_target');
     setAlertIntervalInput(timeframeDays);
+    setMinDropPercentInput(5);
+    setCooldownHoursInput(24);
     const suggested =
       currentLowestPrice > 0
         ? Math.round(currentLowestPrice * 0.9 * 100) / 100
@@ -258,28 +264,66 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
   };
 
   const openEditAlertModal = (alert: PriceAlert) => {
+    const t = alert.alertType || 'below_target';
     setEditingAlertId(alert.id);
-    setAlertTypeInput(alert.alertType || 'below_target');
+    setAlertTypeInput(t);
     setAlertIntervalInput(alert.intervalDays || 90);
     setTargetAlertPrice(alert.targetPrice > 0 ? alert.targetPrice : 5);
+    setMinDropPercentInput(
+      alert.minDropPercent ?? (t === 'product_watch' ? 5 : t === 'any_drop' ? 3 : 5)
+    );
+    setCooldownHoursInput(alert.cooldownHours ?? PriceAlertService.getDefaultCooldownHours(t));
     setShowAddAlertModal(true);
+  };
+
+  const handleSelectAlertType = (nextType: PriceAlertType) => {
+    setAlertTypeInput(nextType);
+    if (!editingAlertId) {
+      if (nextType === 'product_watch') {
+        setMinDropPercentInput(5);
+        setCooldownHoursInput(72);
+      } else if (nextType === 'any_drop') {
+        setMinDropPercentInput(3);
+        setCooldownHoursInput(24);
+      } else {
+        setCooldownHoursInput(24);
+      }
+    }
   };
 
   const handleSaveAlert = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedProduct) return;
 
+    const effectiveMinDrop =
+      alertTypeInput === 'product_watch' || alertTypeInput === 'any_drop'
+        ? Math.max(0.1, Math.min(90, Number(minDropPercentInput) || PriceAlertService.getDefaultMinDropPercent(alertTypeInput)))
+        : undefined;
+    const effectiveCooldown = Math.max(0, Math.min(720, Math.round(Number(cooldownHoursInput) || 0)));
+
     if (editingAlertId) {
-      const updated = alerts.map(a =>
-        a.id === editingAlertId
-          ? {
-              ...a,
-              alertType: alertTypeInput,
-              intervalDays: alertTypeInput === 'interval_low' ? alertIntervalInput : undefined,
-              targetPrice: alertTypeInput === 'below_target' ? targetAlertPrice : a.targetPrice || currentLowestPrice || 1
-            }
-          : a
-      );
+      const updated = alerts.map(a => {
+        if (a.id !== editingAlertId) return a;
+        const nextDraft: PriceAlert = {
+          ...a,
+          alertType: alertTypeInput,
+          intervalDays: alertTypeInput === 'interval_low' ? alertIntervalInput : undefined,
+          targetPrice:
+            alertTypeInput === 'below_target'
+              ? targetAlertPrice
+              : alertTypeInput === 'product_watch'
+                ? 0
+                : a.targetPrice || currentLowestPrice || 1,
+          minDropPercent: effectiveMinDrop,
+          cooldownHours: effectiveCooldown
+        };
+        const ruleChanged =
+          nextDraft.targetPrice !== a.targetPrice ||
+          nextDraft.alertType !== (a.alertType || 'below_target') ||
+          nextDraft.intervalDays !== a.intervalDays ||
+          nextDraft.minDropPercent !== a.minDropPercent;
+        return ruleChanged ? PriceAlertService.rearmAlertManually(nextDraft) : nextDraft;
+      });
       onUpdateAlerts(updated);
       setShowAddAlertModal(false);
       setEditingAlertId(null);
@@ -306,13 +350,23 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
       id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `alert-${Date.now()}`,
       productId: selectedProduct.id,
       productName: `${selectedProduct.name}${selectedProduct.brand ? ` (${selectedProduct.brand})` : ''}`,
-      targetPrice: alertTypeInput === 'below_target' ? targetAlertPrice : Math.max(0.01, baselinePrice),
+      targetPrice:
+        alertTypeInput === 'below_target'
+          ? targetAlertPrice
+          : alertTypeInput === 'product_watch'
+            ? 0
+            : Math.max(0.01, baselinePrice),
       currentLowestPrice,
       lowestStoreId: localStats?.currentLowestStoreId,
       createdAt: new Date().toISOString().split('T')[0],
       isActive: true,
       alertType: alertTypeInput,
       intervalDays: alertTypeInput === 'interval_low' ? alertIntervalInput : undefined,
+      minDropPercent: effectiveMinDrop,
+      cooldownHours: effectiveCooldown,
+      rearmState: 'armed',
+      triggerCycle: 0,
+      triggerHistory: [],
       lastEvaluatedPrice: currentLowestPrice > 0 ? currentLowestPrice : undefined
     };
 
@@ -321,7 +375,15 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
   };
 
   const handleToggleAlertActive = (alertId: string) => {
-    onUpdateAlerts(alerts.map(a => (a.id === alertId ? { ...a, isActive: !a.isActive } : a)));
+    onUpdateAlerts(
+      alerts.map(a => {
+        if (a.id !== alertId) return a;
+        const nextActive = !a.isActive;
+        return nextActive
+          ? PriceAlertService.rearmAlertManually({ ...a, isActive: true })
+          : { ...a, isActive: false };
+      })
+    );
   };
 
   const handleDeleteAlert = (alertId: string) => {
@@ -435,17 +497,20 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Product Selector List */}
-        <div className="lg:col-span-4 surface-card p-4 sm:p-5 flex flex-col h-[600px]">
+        <div className="lg:col-span-4 surface-card p-4 sm:p-5 flex flex-col max-h-[320px] lg:max-h-none lg:h-[600px]">
           <div className="mb-3">
-            <h3 className="font-bold text-sm text-slate-900 dark:text-slate-50 mb-2">Alege un produs</h3>
+            <label htmlFor="price-history-search" className="font-bold text-sm text-slate-900 dark:text-slate-50 mb-2 block">
+              Alege un produs
+            </label>
             <div className="relative">
               <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3 top-3 pointer-events-none" />
               <input
+                id="price-history-search"
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder="Caută în catalog..."
-                className="w-full pl-9 pr-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-hidden focus:border-emerald-500"
+                className="w-full min-h-[40px] pl-9 pr-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-hidden focus:border-emerald-500"
               />
             </div>
           </div>
@@ -458,35 +523,38 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
               return (
                 <div
                   key={p.id}
-                  onClick={() => setSelectedProductId(p.id)}
-                  className={`p-3 rounded-xl cursor-pointer transition-all flex items-center justify-between ${
+                  className={`rounded-xl transition-all flex items-center justify-between gap-1 ${
                     isSelected
                       ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-950 dark:text-emerald-200 font-semibold'
                       : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200'
                   }`}
                 >
-                  <div className="min-w-0 pr-2">
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => setSelectedProductId(p.id)}
+                    className="flex-1 min-w-0 p-3 text-left cursor-pointer"
+                  >
                     <span className="text-xs sm:text-sm block truncate">{p.name}</span>
-                    <span className="text-[11px] text-slate-400 dark:text-slate-500 block truncate">
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400 block truncate font-normal">
                       {p.brand} · {p.category}
                     </span>
-                  </div>
+                  </button>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center pr-2 shrink-0">
                     <button
                       type="button"
-                      onClick={e => {
-                        e.stopPropagation();
-                        handleToggleTracked(p.id);
-                      }}
-                      className={`p-1.5 rounded-lg text-xs cursor-pointer ${
+                      onClick={() => handleToggleTracked(p.id)}
+                      aria-pressed={isTracked}
+                      aria-label={isTracked ? `Oprește urmărirea pentru ${p.name}` : `Urmărește ${p.name}`}
+                      className={`min-w-[38px] min-h-[38px] flex items-center justify-center rounded-lg text-xs cursor-pointer ${
                         isTracked
                           ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-100/60 dark:bg-emerald-900/50'
-                          : 'text-slate-300 dark:text-slate-600 hover:text-slate-600 dark:hover:text-slate-300'
+                          : 'text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
                       }`}
                       title={isTracked ? 'Urmărești acest produs' : 'Urmărește produsul'}
                     >
-                      <Eye className="w-3.5 h-3.5" />
+                      <Eye className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
@@ -526,13 +594,18 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                 </div>
 
                 {/* Strict Timeframe Selector (30 | 90 | 180 | 365 zile) */}
-                <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl self-start sm:self-auto">
+                <div
+                  role="group"
+                  aria-label="Interval evoluție preț"
+                  className="flex flex-wrap items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl self-start sm:self-auto"
+                >
                   {INTERVAL_OPTIONS.map(opt => (
                     <button
                       key={opt.days}
                       type="button"
+                      aria-pressed={timeframeDays === opt.days}
                       onClick={() => setTimeframeDays(opt.days)}
-                      className={`px-2.5 sm:px-3 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
+                      className={`min-h-[34px] px-2.5 sm:px-3 py-1 text-xs font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                         timeframeDays === opt.days
                           ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-50 shadow-xs'
                           : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100'
@@ -736,32 +809,54 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                   </div>
                 )}
 
-                {/* Real Observations Table */}
+                {/* Real Observations Mobile Cards (< sm) & Desktop Table (>= sm) */}
                 {filteredTimeline.length > 0 && (
-                  <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200 dark:border-slate-800">
-                        <tr>
-                          <th className="px-3.5 py-2">Dată</th>
-                          <th className="px-3.5 py-2">Magazin</th>
-                          <th className="px-3.5 py-2">Preț observat</th>
-                          <th className="px-3.5 py-2">Sursă</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                        {[...filteredTimeline].reverse().slice(0, 10).map((pt, idx) => (
-                          <tr key={`${pt.date}-${pt.storeId}-${idx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                            <td className="px-3.5 py-2 tabular-nums text-slate-700 dark:text-slate-300">{pt.date}</td>
-                            <td className="px-3.5 py-2 font-semibold text-slate-900 dark:text-slate-100">{pt.storeName}</td>
-                            <td className="px-3.5 py-2 font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                              {PriceComparisonService.formatRon(pt.price)}
-                            </td>
-                            <td className="px-3.5 py-2 text-slate-500 dark:text-slate-400">{pt.source}</td>
+                  <>
+                    <div className="sm:hidden mt-4 space-y-2">
+                      {[...filteredTimeline].reverse().slice(0, 10).map((pt, idx) => (
+                        <div
+                          key={`mobile-obs-${pt.date}-${pt.storeId}-${idx}`}
+                          className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between gap-3 text-xs tabular-nums"
+                        >
+                          <div className="min-w-0">
+                            <span className="font-bold text-slate-900 dark:text-slate-100 block truncate">
+                              {pt.storeName}
+                            </span>
+                            <span className="text-[11px] text-slate-500 dark:text-slate-400 block truncate">
+                              {pt.date} · {pt.source}
+                            </span>
+                          </div>
+                          <span className="font-bold text-emerald-700 dark:text-emerald-400 font-mono shrink-0">
+                            {PriceComparisonService.formatRon(pt.price)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="hidden sm:block mt-4 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200 dark:border-slate-800">
+                          <tr>
+                            <th className="px-3.5 py-2">Dată</th>
+                            <th className="px-3.5 py-2">Magazin</th>
+                            <th className="px-3.5 py-2">Preț observat</th>
+                            <th className="px-3.5 py-2">Sursă</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {[...filteredTimeline].reverse().slice(0, 10).map((pt, idx) => (
+                            <tr key={`${pt.date}-${pt.storeId}-${idx}`} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                              <td className="px-3.5 py-2 tabular-nums text-slate-700 dark:text-slate-300">{pt.date}</td>
+                              <td className="px-3.5 py-2 font-semibold text-slate-900 dark:text-slate-100">{pt.storeName}</td>
+                              <td className="px-3.5 py-2 font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                                {PriceComparisonService.formatRon(pt.price)}
+                              </td>
+                              <td className="px-3.5 py-2 text-slate-500 dark:text-slate-400">{pt.source}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -799,23 +894,36 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                     }`}
                   >
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         {!notif.isRead && <span className="w-2 h-2 rounded-full bg-emerald-600 shrink-0" />}
                         <span className="font-bold text-xs text-slate-900 dark:text-slate-100 truncate">
                           {notif.title}
                         </span>
+                        {notif.qualityLabelRo && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300">
+                            {notif.qualityLabelRo}
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">{notif.message}</p>
-                      <span className="text-[11px] text-slate-400 dark:text-slate-500 flex items-center gap-1 mt-1 tabular-nums">
+                      <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
+                        {notif.reasonRo || notif.message}
+                      </p>
+                      <span className="text-[11px] text-slate-400 dark:text-slate-500 flex items-center gap-1 mt-1 tabular-nums flex-wrap">
                         <Clock className="w-3 h-3" />
-                        {new Date(notif.triggeredAt).toLocaleString('ro-RO')} · {notif.storeName}
+                        <span>{new Date(notif.triggeredAt).toLocaleString('ro-RO')} · {notif.storeName}</span>
+                        {notif.observedIntervalDays && notif.observedObservationsCount != null && (
+                          <span>
+                            · {notif.observedObservationsCount} observații ({notif.observedIntervalDays} zile)
+                          </span>
+                        )}
                       </span>
                     </div>
                     {!notif.isRead && onMarkNotificationRead && (
                       <button
                         type="button"
                         onClick={() => onMarkNotificationRead(notif.id)}
-                        className="p-1.5 rounded-lg text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 shrink-0 cursor-pointer"
+                        aria-label={`Marchează notificarea ${notif.title} ca citită`}
+                        className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-lg text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 shrink-0 cursor-pointer"
                         title="Marchează ca citită"
                       >
                         <Check className="w-4 h-4" />
@@ -847,73 +955,139 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
             {alerts.length === 0 ? (
               <p className="text-xs text-slate-400 dark:text-slate-500 py-4 text-center">
-                Nu ai nicio alertă configurată. Poți crea alerte pentru preț sub prag, orice reducere sau minim istoric (30/90/180/365 zile).
+                Nu ai nicio alertă configurată. Poți crea alerte pentru preț sub prag, scădere de preț, minim observat (30/90/180/365 zile) sau urmărire produs.
               </p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {alerts.map(alert => (
-                  <div
-                    key={alert.id}
-                    className={`p-3.5 rounded-2xl border flex items-start justify-between gap-2 transition-colors ${
-                      alert.isActive
-                        ? 'border-emerald-200/80 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/30'
-                        : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 opacity-75'
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-bold text-xs text-slate-800 dark:text-slate-100 truncate">
-                          {alert.productName}
-                        </span>
-                        {!alert.isActive && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 shrink-0">
-                            Oprită
+                {alerts.map(alert => {
+                  const historyEvents = alert.triggerHistory || [];
+                  const isHistoryOpen = expandedHistoryAlertId === alert.id;
+                  const stateLabel = PriceAlertService.getRearmStateLabel(alert);
+                  return (
+                    <div
+                      key={alert.id}
+                      className={`p-3.5 rounded-2xl border flex flex-col gap-2 transition-colors ${
+                        alert.isActive
+                          ? 'border-emerald-200/80 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/30'
+                          : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 opacity-75'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-bold text-xs text-slate-800 dark:text-slate-100 truncate">
+                              {alert.productName}
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                                !alert.isActive
+                                  ? 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                  : alert.rearmState === 'triggered_locked'
+                                    ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-300'
+                                    : 'bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300'
+                              }`}
+                            >
+                              {stateLabel}
+                            </span>
+                          </div>
+                          <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 block mt-0.5">
+                            {PriceAlertService.getAlertTypeLabel(alert.alertType, alert.intervalDays)}
                           </span>
-                        )}
-                      </div>
-                      <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 block mt-0.5">
-                        {PriceAlertService.getAlertTypeLabel(alert.alertType, alert.intervalDays)}
-                      </span>
-                      <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-2 tabular-nums">
-                        {(alert.alertType || 'below_target') === 'below_target' && (
-                          <span>
-                            Prag: <strong className="text-slate-900 dark:text-slate-100">{PriceComparisonService.formatRon(alert.targetPrice)}</strong>
-                          </span>
-                        )}
-                        <span>
-                          Minim curent: {alert.currentLowestPrice > 0 ? PriceComparisonService.formatRon(alert.currentLowestPrice) : 'Indisponibil'}
-                        </span>
-                      </div>
-                    </div>
+                          <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 tabular-nums">
+                            {(alert.alertType || 'below_target') === 'below_target' && (
+                              <span>
+                                Prag: <strong className="text-slate-900 dark:text-slate-100">{PriceComparisonService.formatRon(alert.targetPrice)}</strong>
+                              </span>
+                            )}
+                            {(alert.alertType === 'any_drop' || alert.alertType === 'product_watch') && (
+                              <span>
+                                Scădere min: <strong>{alert.minDropPercent ?? PriceAlertService.getDefaultMinDropPercent(alert.alertType)}%</strong>
+                              </span>
+                            )}
+                            <span>
+                              Minim curent: {alert.currentLowestPrice > 0 ? PriceComparisonService.formatRon(alert.currentLowestPrice) : 'Indisponibil'}
+                            </span>
+                            <span>
+                              Anti-spam: {alert.cooldownHours ?? PriceAlertService.getDefaultCooldownHours(alert.alertType)}h
+                            </span>
+                          </div>
+                        </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleAlertActive(alert.id)}
-                        className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400 rounded-lg hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
-                        title={alert.isActive ? 'Oprește temporar alerta' : 'Reactivează alerta'}
-                      >
-                        {alert.isActive ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openEditAlertModal(alert)}
-                        className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 rounded-lg hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
-                        title="Editează alerta"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteAlert(alert.id)}
-                        className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50 cursor-pointer"
-                        title="Șterge alerta"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleAlertActive(alert.id)}
+                            aria-label={`${alert.isActive ? 'Oprește temporar alerta' : 'Reactivează alerta'} pentru ${alert.productName}`}
+                            className="min-w-[38px] min-h-[38px] flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400 rounded-lg hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
+                            title={alert.isActive ? 'Oprește temporar alerta' : 'Reactivează alerta'}
+                          >
+                            {alert.isActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openEditAlertModal(alert)}
+                            aria-label={`Editează alerta pentru ${alert.productName}`}
+                            className="min-w-[38px] min-h-[38px] flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 rounded-lg hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
+                            title="Editează alerta"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteAlert(alert.id)}
+                            aria-label={`Șterge alerta pentru ${alert.productName}`}
+                            className="min-w-[38px] min-h-[38px] flex items-center justify-center text-slate-400 dark:text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/50 cursor-pointer"
+                            title="Șterge alerta"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {(alert.lastTriggerReasonRo || alert.lastSkippedReasonRo) && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                          {alert.lastTriggerReasonRo || alert.lastSkippedReasonRo}
+                        </p>
+                      )}
+
+                      {historyEvents.length > 0 && (
+                        <div className="pt-1 border-t border-slate-200/70 dark:border-slate-700/70">
+                          <button
+                            type="button"
+                            aria-expanded={isHistoryOpen}
+                            onClick={() => setExpandedHistoryAlertId(isHistoryOpen ? null : alert.id)}
+                            className="min-h-[32px] text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+                          >
+                            {isHistoryOpen
+                              ? 'Ascunde istoricul declanșărilor'
+                              : `Vezi istoricul declanșărilor (${historyEvents.length})`}
+                          </button>
+                          {isHistoryOpen && (
+                            <ul className="mt-2 space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                              {historyEvents.slice(0, 8).map(ev => (
+                                <li
+                                  key={ev.id}
+                                  className="text-[10px] p-2 rounded-lg bg-white/80 dark:bg-slate-900/70 border border-slate-200/70 dark:border-slate-700/60 tabular-nums"
+                                >
+                                  <div className="flex items-center justify-between font-semibold text-slate-700 dark:text-slate-200">
+                                    <span>{new Date(ev.evaluatedAt).toLocaleString('ro-RO')}</span>
+                                    {ev.observedPrice != null && ev.observedPrice > 0 && (
+                                      <span>
+                                        {PriceComparisonService.formatRon(ev.observedPrice)}
+                                        {ev.storeName ? ` · ${ev.storeName}` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-slate-500 dark:text-slate-400 mt-0.5">{ev.reasonRo}</p>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -922,31 +1096,52 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
       {/* Add / Edit Alert Modal */}
       {showAddAlertModal && selectedProduct && (
-        <div className="fixed inset-0 z-50 bg-black/50 dark:bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 dark:border dark:border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in-95">
-            <h3 className="text-base font-bold text-slate-900 dark:text-slate-50">
-              {editingAlertId ? 'Editează alerta de preț' : 'Setează o alertă de preț'}
-            </h3>
-            {!editingAlertId && (
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Pentru: <strong className="text-slate-800 dark:text-slate-200">{selectedProduct.name}</strong>
-              </p>
-            )}
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="price-alert-modal-title"
+          className="fixed inset-0 z-50 bg-black/50 dark:bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-white dark:bg-slate-900 dark:border dark:border-slate-800 rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 id="price-alert-modal-title" className="text-base font-bold text-slate-900 dark:text-slate-50">
+                  {editingAlertId ? 'Editează alerta de preț' : 'Setează o alertă de preț'}
+                </h3>
+                {!editingAlertId && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Pentru: <strong className="text-slate-800 dark:text-slate-200">{selectedProduct.name}</strong>
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                aria-label="Închide fereastra de alertă"
+                onClick={() => {
+                  setShowAddAlertModal(false);
+                  setEditingAlertId(null);
+                }}
+                className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
             <form onSubmit={handleSaveAlert} className="mt-4 space-y-4">
               <div>
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1.5">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1.5">
                   Tip alertă
-                </label>
+                </span>
                 <div className="grid grid-cols-1 gap-2">
                   {[
                     { type: 'below_target' as PriceAlertType, label: 'Preț sub prag țintă (RON)' },
-                    { type: 'any_drop' as PriceAlertType, label: 'Orice reducere față de ultimul preț verificat' },
-                    { type: 'interval_low' as PriceAlertType, label: 'Când atinge minimul istoric din interval' }
+                    { type: 'any_drop' as PriceAlertType, label: 'Scădere de preț față de ultimul reper verificat' },
+                    { type: 'interval_low' as PriceAlertType, label: 'Când atinge minimul observat în interval' },
+                    { type: 'product_watch' as PriceAlertType, label: 'Urmărire produs (scăderi relevante fără prag fix)' }
                   ].map(item => (
                     <label
                       key={item.type}
-                      className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs cursor-pointer ${
+                      className={`flex items-center gap-2.5 p-2.5 min-h-[42px] rounded-xl border text-xs cursor-pointer ${
                         alertTypeInput === item.type
                           ? 'border-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/40 font-semibold text-emerald-900 dark:text-emerald-200'
                           : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
@@ -956,7 +1151,7 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                         type="radio"
                         name="alertType"
                         checked={alertTypeInput === item.type}
-                        onChange={() => setAlertTypeInput(item.type)}
+                        onChange={() => handleSelectAlertType(item.type)}
                       />
                       <span>{item.label}</span>
                     </label>
@@ -966,18 +1161,19 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
               {alertTypeInput === 'below_target' && (
                 <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                  <label htmlFor="alert-target-price" className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
                     Preț țintă dorit (lei)
                   </label>
                   <div className="relative">
                     <input
+                      id="alert-target-price"
                       type="number"
                       step="0.05"
                       min="0.1"
                       required
                       value={targetAlertPrice}
                       onChange={e => setTargetAlertPrice(parseFloat(e.target.value) || 0)}
-                      className="w-full px-3 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-emerald-500 tabular-nums"
+                      className="w-full min-h-[42px] px-3 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100 focus:outline-hidden focus:border-emerald-500 tabular-nums"
                     />
                     <span className="absolute right-3 top-3 text-xs text-slate-400 dark:text-slate-500 font-bold">RON</span>
                   </div>
@@ -989,13 +1185,14 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
 
               {alertTypeInput === 'interval_low' && (
                 <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    Interval istoric de referință
+                  <label htmlFor="alert-interval-select" className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                    Interval de referință (exclusiv observații verificate)
                   </label>
                   <select
+                    id="alert-interval-select"
                     value={alertIntervalInput}
                     onChange={e => setAlertIntervalInput(Number(e.target.value) as PriceHistoryInterval)}
-                    className="w-full px-3 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100"
+                    className="w-full min-h-[42px] px-3 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100"
                   >
                     {INTERVAL_OPTIONS.map(opt => (
                       <option key={opt.days} value={opt.days}>
@@ -1006,6 +1203,46 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                 </div>
               )}
 
+              {(alertTypeInput === 'any_drop' || alertTypeInput === 'product_watch') && (
+                <div>
+                  <label htmlFor="alert-min-drop" className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                    Scădere minimă pentru notificare (%)
+                  </label>
+                  <input
+                    id="alert-min-drop"
+                    type="number"
+                    step="0.5"
+                    min="0.1"
+                    max="90"
+                    value={minDropPercentInput}
+                    onChange={e => setMinDropPercentInput(parseFloat(e.target.value) || 0.1)}
+                    className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums"
+                  />
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
+                    {alertTypeInput === 'product_watch'
+                      ? 'Urmărește produsul fără prag fix și notifică doar la scăderi relevante verificate.'
+                      : 'Se compară exclusiv cu ultimul preț verificat anterior.'}
+                  </span>
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="alert-cooldown-select" className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                  Fereastră anti-spam (cooldown între notificări)
+                </label>
+                <select
+                  id="alert-cooldown-select"
+                  value={cooldownHoursInput}
+                  onChange={e => setCooldownHoursInput(Number(e.target.value))}
+                  className="w-full min-h-[42px] px-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-slate-100"
+                >
+                  <option value={24}>24 ore (standard)</option>
+                  <option value={48}>48 ore</option>
+                  <option value={72}>72 ore (recomandat pentru urmărire)</option>
+                  <option value={168}>7 zile (168 ore)</option>
+                </select>
+              </div>
+
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
@@ -1013,13 +1250,13 @@ export const PriceHistoryView: React.FC<PriceHistoryViewProps> = ({
                     setShowAddAlertModal(false);
                     setEditingAlertId(null);
                   }}
-                  className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-medium cursor-pointer"
+                  className="min-h-[40px] px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-sm font-medium cursor-pointer"
                 >
                   Anulează
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold shadow-xs cursor-pointer"
+                  className="min-h-[40px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold shadow-xs cursor-pointer"
                 >
                   {editingAlertId ? 'Actualizează alerta' : 'Salvează alerta'}
                 </button>

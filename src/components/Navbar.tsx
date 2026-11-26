@@ -159,18 +159,18 @@ export const Navbar: React.FC<NavbarProps> = ({
     <header className="sticky top-0 z-40 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-b border-slate-200/75 dark:border-slate-800 transition-colors">
       {/* Utility Bar */}
       <div className="relative z-30 border-b border-slate-100/90 dark:border-slate-800/80 bg-slate-50/75 dark:bg-slate-950/70 py-1.5">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400 font-medium">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400 font-medium">
           {/* Left: Info de încredere */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <span className="font-semibold text-slate-700 dark:text-slate-300 hidden sm:inline">Comparator independent</span>
             <span className="text-slate-300 dark:text-slate-700 hidden sm:inline" aria-hidden="true">·</span>
-            <span className="text-emerald-700 dark:text-emerald-400 font-semibold tabular-nums">8 retaileri naționali</span>
+            <span className="text-emerald-700 dark:text-emerald-400 font-semibold tabular-nums truncate">8 retaileri naționali</span>
             <span className="text-slate-300 dark:text-slate-700 hidden md:inline" aria-hidden="true">·</span>
             <span className="text-slate-500 dark:text-slate-400 hidden md:inline">Catalog actualizat</span>
           </div>
 
           {/* Right: Utility Elements */}
-          <div className="flex items-center gap-1.5 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
             {/* 1. Selector Locație */}
             <div className="relative" ref={cityMenuRef}>
               <button
@@ -181,7 +181,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   setShowProfileMenu(false);
                   setShowMoreMenu(false);
                 }}
-                className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
+                className={`min-h-[34px] flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
                   showCityMenu
                     ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 ring-2 ring-emerald-500/20'
                     : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200'
@@ -190,7 +190,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 aria-expanded={showCityMenu}
               >
                 <MapPin className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span className="max-w-[85px] sm:max-w-[120px] truncate">{userProfile.city}</span>
+                <span className="max-w-[72px] sm:max-w-[120px] truncate">{userProfile.city}</span>
                 <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${showCityMenu ? 'rotate-180' : ''}`} />
               </button>
 
@@ -256,7 +256,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   type="button"
                   onClick={() => onChangeTheme(getNextQuickToggleTheme(themeMode, isDarkMode))}
-                  className="flex items-center gap-1.5 p-1.5 sm:px-2 sm:py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
+                  className="min-h-[34px] min-w-[34px] flex items-center justify-center gap-1.5 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
                   title={isDarkMode ? 'Comută la tema luminoasă' : 'Comută la tema întunecată'}
                   aria-label={isDarkMode ? 'Comută la tema luminoasă' : 'Comută la tema întunecată'}
                   aria-pressed={isDarkMode}
@@ -285,7 +285,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   setShowProfileMenu(false);
                   setShowMoreMenu(false);
                 }}
-                className={`relative p-1.5 rounded-lg border transition-all cursor-pointer ${
+                className={`relative min-h-[34px] min-w-[34px] flex items-center justify-center p-1.5 rounded-lg border transition-all cursor-pointer ${
                   showAlertsMenu
                     ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 ring-2 ring-emerald-500/20'
                     : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
@@ -332,9 +332,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                           key={notif.id}
                           className="p-2 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200/70 dark:border-emerald-800/60 flex items-start justify-between gap-2"
                         >
-                          <div
+                          <button
+                            type="button"
                             onClick={() => handleNavigate('price-history')}
-                            className="min-w-0 cursor-pointer"
+                            className="min-w-0 text-left flex-1 cursor-pointer"
                           >
                             <span className="text-[11px] font-bold text-emerald-900 dark:text-emerald-200 block line-clamp-1">
                               {notif.title}
@@ -342,13 +343,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                             <span className="text-[11px] text-slate-600 dark:text-slate-300 block line-clamp-2">
                               {notif.message}
                             </span>
-                          </div>
+                          </button>
                           {onMarkNotificationRead && (
                             <button
                               type="button"
                               onClick={() => onMarkNotificationRead(notif.id)}
-                              className="p-1 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 rounded cursor-pointer shrink-0"
+                              className="p-1.5 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 rounded cursor-pointer shrink-0"
                               title="Marchează citit"
+                              aria-label="Marchează notificarea ca citită"
                             >
                               <Check className="w-3.5 h-3.5" />
                             </button>
@@ -366,10 +368,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ) : (
                     <div className="space-y-1.5 max-h-56 overflow-y-auto">
                       {activeAlerts.map(alert => (
-                        <div
+                        <button
                           key={alert.id}
+                          type="button"
                           onClick={() => handleNavigate('price-history')}
-                          className="p-2 rounded-xl bg-slate-50 dark:bg-slate-800/80 hover:bg-emerald-50/60 dark:hover:bg-emerald-950/40 cursor-pointer transition-colors border border-slate-100 dark:border-slate-700/80"
+                          className="w-full text-left p-2 rounded-xl bg-slate-50 dark:bg-slate-800/80 hover:bg-emerald-50/60 dark:hover:bg-emerald-950/40 cursor-pointer transition-colors border border-slate-100 dark:border-slate-700/80"
                         >
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-semibold text-slate-800 dark:text-slate-100 line-clamp-1">
@@ -378,12 +381,20 @@ export const Navbar: React.FC<NavbarProps> = ({
                             <TrendingDown className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 ml-1" />
                           </div>
                           <div className="flex items-center justify-between mt-1 text-[11px] text-slate-600 dark:text-slate-400 tabular-nums">
-                            <span>Țintă: {alert.targetPrice.toFixed(2)} lei</span>
+                            <span>
+                              {(alert.alertType || 'below_target') === 'below_target'
+                                ? `Țintă: ${alert.targetPrice.toFixed(2)} lei`
+                                : alert.alertType === 'product_watch'
+                                  ? `Urmărire (-${alert.minDropPercent ?? 5}%)`
+                                  : alert.alertType === 'any_drop'
+                                    ? `Scădere (-${alert.minDropPercent ?? 0.1}%)`
+                                    : `Minim ${alert.intervalDays || 90}z`}
+                            </span>
                             <span className="font-bold text-emerald-700 dark:text-emerald-400">
-                              Acum: {alert.currentLowestPrice.toFixed(2)} lei
+                              {alert.currentLowestPrice > 0 ? `Acum: ${alert.currentLowestPrice.toFixed(2)} lei` : 'Fără ofertă validă'}
                             </span>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   )}
@@ -580,6 +591,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => handleNavigate('dashboard')}
             onMouseEnter={() => prefetch('dashboard')}
             onFocus={() => prefetch('dashboard')}
+            aria-current={currentTab === 'dashboard' ? 'page' : undefined}
             className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'dashboard'
                 ? 'bg-emerald-50/90 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 font-semibold'
@@ -594,6 +606,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => handleNavigate('products')}
             onMouseEnter={() => prefetch('products')}
             onFocus={() => prefetch('products')}
+            aria-current={currentTab === 'products' || currentTab === 'product-detail' ? 'page' : undefined}
             className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'products' || currentTab === 'product-detail'
                 ? 'bg-emerald-50/90 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 font-semibold'
@@ -608,6 +621,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => handleNavigate('shopping-list')}
             onMouseEnter={() => prefetch('shopping-list')}
             onFocus={() => prefetch('shopping-list')}
+            aria-current={currentTab === 'shopping-list' ? 'page' : undefined}
             className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'shopping-list'
                 ? 'bg-emerald-50/90 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 font-semibold'
@@ -627,6 +641,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => handleNavigate('compare')}
             onMouseEnter={() => prefetch('compare')}
             onFocus={() => prefetch('compare')}
+            aria-current={currentTab === 'compare' ? 'page' : undefined}
             className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'compare'
                 ? 'bg-emerald-50/90 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 font-semibold'
@@ -641,6 +656,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => handleNavigate('receipts')}
             onMouseEnter={() => prefetch('receipts')}
             onFocus={() => prefetch('receipts')}
+            aria-current={currentTab === 'receipts' || currentTab === 'scan-receipt' ? 'page' : undefined}
             className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'receipts' || currentTab === 'scan-receipt'
                 ? 'bg-emerald-50/90 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 font-semibold'
@@ -655,6 +671,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => handleNavigate('stores')}
             onMouseEnter={() => prefetch('stores')}
             onFocus={() => prefetch('stores')}
+            aria-current={currentTab === 'stores' ? 'page' : undefined}
             className={`px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               currentTab === 'stores'
                 ? 'bg-emerald-50/90 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 font-semibold'
@@ -672,6 +689,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={() => handleNavigate('dashboard')}
+            aria-current={currentTab === 'dashboard' ? 'page' : undefined}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
               currentTab === 'dashboard'
                 ? 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300'
@@ -684,6 +702,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={() => handleNavigate('products')}
+            aria-current={currentTab === 'products' || currentTab === 'product-detail' ? 'page' : undefined}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
               currentTab === 'products' || currentTab === 'product-detail'
                 ? 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300'
@@ -696,6 +715,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={() => handleNavigate('shopping-list')}
+            aria-current={currentTab === 'shopping-list' ? 'page' : undefined}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 whitespace-nowrap ${
               currentTab === 'shopping-list'
                 ? 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300'
@@ -713,6 +733,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={() => handleNavigate('compare')}
+            aria-current={currentTab === 'compare' ? 'page' : undefined}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
               currentTab === 'compare'
                 ? 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300'
@@ -732,6 +753,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setShowAlertsMenu(false);
                 setShowProfileMenu(false);
               }}
+              aria-expanded={showMoreMenu}
               className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer ${
                 isMoreTabActive || showMoreMenu
                   ? 'bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300'
@@ -793,7 +815,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={() => handleNavigate('compare')}
             className="hidden md:inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold shadow-xs shadow-emerald-600/20 transition-colors cursor-pointer whitespace-nowrap"
           >
-            <Sparkles className="w-4 h-4 fill-white" />
+            <Sparkles className="w-4 h-4" />
             <span>Compară coșul</span>
           </button>
 
@@ -801,9 +823,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             type="button"
             onClick={() => handleNavigate('compare')}
-            className="md:hidden inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+            className="md:hidden inline-flex items-center gap-1.5 min-h-[40px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
           >
-            <Sparkles className="w-3.5 h-3.5 fill-white" />
+            <Sparkles className="w-3.5 h-3.5" />
             <span>Compară</span>
           </button>
 
@@ -814,8 +836,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               closeAllMenus();
               setIsMobileDrawerOpen(true);
             }}
-            className="md:hidden p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+            className="md:hidden min-h-[40px] min-w-[40px] flex items-center justify-center p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
             aria-label="Deschide meniul principal"
+            aria-expanded={isMobileDrawerOpen}
+            aria-controls="mobile-main-drawer"
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -827,7 +851,13 @@ export const Navbar: React.FC<NavbarProps> = ({
           Renders via createPortal to document.body so it is NEVER squished or trapped!
          ========================================================================= */}
       {isMobileDrawerOpen && typeof document !== 'undefined' && createPortal(
-        <div className="md:hidden fixed inset-0 z-[999] overflow-hidden" role="dialog" aria-modal="true">
+        <div
+          id="mobile-main-drawer"
+          className="md:hidden fixed inset-0 z-[999] overflow-hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Meniu principal mobil"
+        >
           {/* Backdrop cu fundal semi-transparent */}
           <div
             className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
@@ -983,11 +1013,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
                   Meniu principal
                 </div>
-                <nav className="space-y-1">
+                <nav aria-label="Secțiuni aplicație" className="space-y-1">
                   <button
                     type="button"
                     onClick={() => handleNavigate('dashboard')}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
+                    aria-current={currentTab === 'dashboard' ? 'page' : undefined}
+                    className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
                       currentTab === 'dashboard' ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                     }`}
                   >
@@ -998,7 +1029,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     type="button"
                     onClick={() => handleNavigate('products')}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
+                    aria-current={currentTab === 'products' || currentTab === 'product-detail' ? 'page' : undefined}
+                    className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
                       currentTab === 'products' || currentTab === 'product-detail'
                         ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
                         : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -1011,7 +1043,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     type="button"
                     onClick={() => handleNavigate('shopping-list')}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
+                    aria-current={currentTab === 'shopping-list' ? 'page' : undefined}
+                    className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
                       currentTab === 'shopping-list' ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                     }`}
                   >
@@ -1020,7 +1053,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span>Lista mea de cumpărături</span>
                     </span>
                     {itemsCount > 0 && (
-                      <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-lg tabular-nums">
                         {itemsCount}
                       </span>
                     )}
@@ -1029,7 +1062,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     type="button"
                     onClick={() => handleNavigate('compare')}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
+                    aria-current={currentTab === 'compare' ? 'page' : undefined}
+                    className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
                       currentTab === 'compare' ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                     }`}
                   >
@@ -1040,7 +1074,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     type="button"
                     onClick={() => handleNavigate('receipts')}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
+                    aria-current={currentTab === 'receipts' || currentTab === 'scan-receipt' ? 'page' : undefined}
+                    className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
                       currentTab === 'receipts' || currentTab === 'scan-receipt'
                         ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
                         : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -1053,7 +1088,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     type="button"
                     onClick={() => handleNavigate('stores')}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
+                    aria-current={currentTab === 'stores' ? 'page' : undefined}
+                    className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
                       currentTab === 'stores' ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                     }`}
                   >
@@ -1064,7 +1100,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     type="button"
                     onClick={() => handleNavigate('price-history')}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
+                    aria-current={currentTab === 'price-history' ? 'page' : undefined}
+                    className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer ${
                       currentTab === 'price-history' ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                     }`}
                   >
@@ -1073,7 +1110,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span>Evoluție prețuri & Alerte</span>
                     </span>
                     {activeAlerts.length > 0 && (
-                      <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                      <span className="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded-lg tabular-nums">
                         {activeAlerts.length}
                       </span>
                     )}
@@ -1082,7 +1119,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     type="button"
                     onClick={() => handleNavigate('profile')}
-                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
+                    aria-current={currentTab === 'profile' ? 'page' : undefined}
+                    className={`w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-colors cursor-pointer ${
                       currentTab === 'profile' ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                     }`}
                   >

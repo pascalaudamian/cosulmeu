@@ -3,7 +3,10 @@ import type {
   InAppPriceNotification,
   PersonalBudgetSettings,
   PriceAlert,
+  PriceAlertRearmState,
+  PriceAlertTriggerEvent,
   PriceAlertType,
+  PriceDataQualityStatus,
   PriceHistoryInterval,
   Product,
   ProductOffer,
@@ -628,7 +631,34 @@ export function countLocalDashboardData(snapshot: LocalDashboardSnapshot): Local
   return { ...counts, total: counts.receipts + counts.lists + counts.alerts + counts.trackedProducts };
 }
 
+function parseAlertTypeClient(raw: unknown): PriceAlertType {
+  const s = stringValue(raw);
+  if (s === 'any_drop' || s === 'interval_low' || s === 'product_watch') return s;
+  return 'below_target';
+}
+
+function parseRearmStateClient(raw: unknown): PriceAlertRearmState {
+  return stringValue(raw) === 'triggered_locked' ? 'triggered_locked' : 'armed';
+}
+
+function parseTriggerHistoryClient(raw: unknown): PriceAlertTriggerEvent[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw
+    .filter(item => item && typeof item === 'object' && typeof (item as any).reasonRo === 'string')
+    .slice(0, 25) as PriceAlertTriggerEvent[];
+}
+
 async function selectUserPriceAlerts(userId: string) {
+  const faza4 = await supabase
+    .from('price_alerts')
+    .select(
+      'id,user_id,product_id,target_price,is_active,created_at,alert_type,interval_days,source_list_id,last_triggered_at,last_triggered_price,last_evaluated_price,last_notified_key,min_drop_percent,cooldown_hours,rearm_state,trigger_cycle,last_trigger_reason_ro,last_source_offer_id,last_source_quality_status,last_rearmed_at,last_skipped_reason_ro,trigger_history'
+    )
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (!faza4.error) return faza4;
+
   const extended = await supabase
     .from('price_alerts')
     .select(
@@ -649,39 +679,53 @@ async function selectUserPriceAlerts(userId: string) {
 
 async function selectUserAlertNotifications(userId: string): Promise<InAppPriceNotification[]> {
   try {
-    const { data, error } = await supabase
+    let res = await supabase
       .from('price_alert_notifications')
       .select(
-        'id,alert_id,dedupe_key,product_id,product_name,alert_type,title,message,observed_price,previous_price,target_price,store_id,store_name,triggered_at,is_read'
+        'id,alert_id,dedupe_key,idempotency_key,product_id,product_name,alert_type,title,message,reason_ro,observed_price,previous_price,target_price,store_id,store_name,source_offer_id,quality_status,observed_interval_days,observed_observations_count,trigger_cycle,triggered_at,is_read'
       )
       .eq('user_id', userId)
       .order('triggered_at', { ascending: false })
       .limit(100);
 
-    if (error || !Array.isArray(data)) return [];
-    return data.map(row => {
-      const rawType = stringValue(row.alert_type);
-      const alertType: PriceAlertType = ['below_target', 'any_drop', 'interval_low'].includes(rawType)
-        ? (rawType as PriceAlertType)
-        : 'below_target';
-      return {
-        id: stringValue(row.id),
-        alertId: stringValue(row.alert_id),
-        dedupeKey: stringValue(row.dedupe_key),
-        productId: stringValue(row.product_id),
-        productName: stringValue(row.product_name, 'Produs'),
-        alertType,
-        title: stringValue(row.title, 'Alertă de preț'),
-        message: stringValue(row.message),
-        observedPrice: numberValue(row.observed_price),
-        previousPrice: row.previous_price != null ? numberValue(row.previous_price) : undefined,
-        targetPrice: row.target_price != null ? numberValue(row.target_price) : undefined,
-        storeId: stringValue(row.store_id) || 'store',
-        storeName: stringValue(row.store_name) || 'Magazin',
-        triggeredAt: stringValue(row.triggered_at, new Date().toISOString()),
-        isRead: Boolean(row.is_read)
-      };
-    });
+    if (res.error) {
+      res = (await supabase
+        .from('price_alert_notifications')
+        .select(
+          'id,alert_id,dedupe_key,product_id,product_name,alert_type,title,message,observed_price,previous_price,target_price,store_id,store_name,triggered_at,is_read'
+        )
+        .eq('user_id', userId)
+        .order('triggered_at', { ascending: false })
+        .limit(100)) as typeof res;
+    }
+
+    if (res.error || !Array.isArray(res.data)) return [];
+    return res.data.map(row => ({
+      id: stringValue(row.id),
+      alertId: stringValue(row.alert_id),
+      dedupeKey: stringValue(row.dedupe_key),
+      idempotencyKey: stringValue(row.idempotency_key) || undefined,
+      productId: stringValue(row.product_id),
+      productName: stringValue(row.product_name, 'Produs'),
+      alertType: parseAlertTypeClient(row.alert_type),
+      title: stringValue(row.title, 'Alertă de preț'),
+      message: stringValue(row.message),
+      reasonRo: stringValue(row.reason_ro) || undefined,
+      observedPrice: numberValue(row.observed_price),
+      previousPrice: row.previous_price != null ? numberValue(row.previous_price) : undefined,
+      targetPrice: row.target_price != null ? numberValue(row.target_price) : undefined,
+      storeId: stringValue(row.store_id) || 'store',
+      storeName: stringValue(row.store_name) || 'Magazin',
+      sourceOfferId: stringValue(row.source_offer_id) || undefined,
+      qualityStatus: (stringValue(row.quality_status) || undefined) as PriceDataQualityStatus | undefined,
+      observedIntervalDays:
+        row.observed_interval_days != null ? (numberValue(row.observed_interval_days) as PriceHistoryInterval) : undefined,
+      observedObservationsCount:
+        row.observed_observations_count != null ? numberValue(row.observed_observations_count) : undefined,
+      triggerCycle: row.trigger_cycle != null ? numberValue(row.trigger_cycle) : undefined,
+      triggeredAt: stringValue(row.triggered_at, new Date().toISOString()),
+      isRead: Boolean(row.is_read)
+    }));
   } catch {
     return [];
   }
@@ -885,14 +929,20 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
     );
     const product = productsById.get(productId);
     const meta = recordValue(alertMetaById[id]);
-    const rawAlertType = stringValue(rawRow.alert_type ?? meta.alertType);
-    const alertType = ['below_target', 'any_drop', 'interval_low'].includes(rawAlertType)
-      ? (rawAlertType as PriceAlert['alertType'])
-      : 'below_target';
+    const metaType = meta.alertType ? parseAlertTypeClient(meta.alertType) : undefined;
+    const dbType = rawRow.alert_type != null ? parseAlertTypeClient(rawRow.alert_type) : undefined;
+    const alertType: PriceAlertType =
+      metaType === 'product_watch' && dbType === 'any_drop'
+        ? 'product_watch'
+        : (dbType || metaType || 'below_target');
     const rawInterval = Number(rawRow.interval_days ?? meta.intervalDays);
-    const intervalDays = [30, 90, 180, 365].includes(rawInterval)
-      ? (rawInterval as PriceAlert['intervalDays'])
-      : undefined;
+    const intervalDays =
+      alertType === 'interval_low' && [30, 90, 180, 365].includes(rawInterval)
+        ? (rawInterval as PriceAlert['intervalDays'])
+        : undefined;
+    const minDropRaw = rawRow.min_drop_percent ?? meta.minDropPercent;
+    const cooldownRaw = rawRow.cooldown_hours ?? meta.cooldownHours;
+    const triggerCycleRaw = rawRow.trigger_cycle ?? meta.triggerCycle;
 
     return {
       id,
@@ -905,6 +955,10 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
       isActive: Boolean(row.is_active),
       alertType,
       intervalDays,
+      minDropPercent: minDropRaw != null ? numberValue(minDropRaw) : undefined,
+      cooldownHours: cooldownRaw != null ? numberValue(cooldownRaw) : undefined,
+      rearmState: parseRearmStateClient(rawRow.rearm_state ?? meta.rearmState),
+      triggerCycle: triggerCycleRaw != null ? numberValue(triggerCycleRaw) : 0,
       sourceListId: stringValue(rawRow.source_list_id ?? meta.sourceListId) || undefined,
       lastTriggeredAt: stringValue(rawRow.last_triggered_at ?? meta.lastTriggeredAt) || undefined,
       lastTriggeredPrice:
@@ -919,7 +973,14 @@ export async function loadDashboardData(userId: string): Promise<DashboardData> 
           : meta.lastEvaluatedPrice != null
             ? numberValue(meta.lastEvaluatedPrice)
             : undefined,
-      lastNotifiedKey: stringValue(rawRow.last_notified_key ?? meta.lastNotifiedKey) || undefined
+      lastNotifiedKey: stringValue(rawRow.last_notified_key ?? meta.lastNotifiedKey) || undefined,
+      lastTriggerReasonRo: stringValue(rawRow.last_trigger_reason_ro ?? meta.lastTriggerReasonRo) || undefined,
+      lastSourceOfferId: stringValue(rawRow.last_source_offer_id ?? meta.lastSourceOfferId) || undefined,
+      lastSourceQualityStatus: (stringValue(rawRow.last_source_quality_status ?? meta.lastSourceQualityStatus) ||
+        undefined) as PriceDataQualityStatus | undefined,
+      lastRearmedAt: stringValue(rawRow.last_rearmed_at ?? meta.lastRearmedAt) || undefined,
+      lastSkippedReasonRo: stringValue(rawRow.last_skipped_reason_ro ?? meta.lastSkippedReasonRo) || undefined,
+      triggerHistory: parseTriggerHistoryClient(rawRow.trigger_history ?? meta.triggerHistory)
     };
   });
 
@@ -1327,7 +1388,7 @@ export async function savePriceAlertsForUser(
     });
   }
 
-  const extendedRows = normalized.map(alert => ({
+  const faza4Rows = normalized.map(alert => ({
     id: alert.id,
     user_id: userId,
     product_id: alert.productId,
@@ -1335,6 +1396,32 @@ export async function savePriceAlertsForUser(
     is_active: alert.isActive,
     created_at: alert.createdAt,
     alert_type: alert.alertType || 'below_target',
+    interval_days: alert.alertType === 'interval_low' ? (alert.intervalDays || 90) : null,
+    source_list_id: alert.sourceListId && isUuid(alert.sourceListId) ? alert.sourceListId : null,
+    last_triggered_at: alert.lastTriggeredAt || null,
+    last_triggered_price: alert.lastTriggeredPrice ?? null,
+    last_evaluated_price: alert.lastEvaluatedPrice ?? null,
+    last_notified_key: alert.lastNotifiedKey || null,
+    min_drop_percent: alert.minDropPercent ?? null,
+    cooldown_hours: alert.cooldownHours ?? (alert.alertType === 'product_watch' ? 72 : 24),
+    rearm_state: alert.rearmState || 'armed',
+    trigger_cycle: alert.triggerCycle ?? 0,
+    last_trigger_reason_ro: alert.lastTriggerReasonRo || null,
+    last_source_offer_id: alert.lastSourceOfferId || null,
+    last_source_quality_status: alert.lastSourceQualityStatus || null,
+    last_rearmed_at: alert.lastRearmedAt || null,
+    last_skipped_reason_ro: alert.lastSkippedReasonRo || null,
+    trigger_history: Array.isArray(alert.triggerHistory) ? alert.triggerHistory.slice(0, 25) : []
+  }));
+
+  const extendedRows = normalized.map(alert => ({
+    id: alert.id,
+    user_id: userId,
+    product_id: alert.productId,
+    target_price: alert.targetPrice,
+    is_active: alert.isActive,
+    created_at: alert.createdAt,
+    alert_type: alert.alertType === 'product_watch' ? 'any_drop' : (alert.alertType || 'below_target'),
     interval_days: alert.alertType === 'interval_low' ? (alert.intervalDays || 90) : null,
     source_list_id: alert.sourceListId && isUuid(alert.sourceListId) ? alert.sourceListId : null,
     last_triggered_at: alert.lastTriggeredAt || null,
@@ -1352,12 +1439,23 @@ export async function savePriceAlertsForUser(
     created_at: alert.createdAt
   }));
 
-  let useBaseFallback = false;
-  for (const batch of chunks(extendedRows)) {
+  let useV12Fallback = false;
+  for (const batch of chunks(faza4Rows)) {
     const { error } = await supabase.from('price_alerts').upsert(batch, { onConflict: 'id' });
     if (error) {
-      useBaseFallback = true;
+      useV12Fallback = true;
       break;
+    }
+  }
+
+  let useBaseFallback = false;
+  if (useV12Fallback) {
+    for (const batch of chunks(extendedRows)) {
+      const { error } = await supabase.from('price_alerts').upsert(batch, { onConflict: 'id' });
+      if (error) {
+        useBaseFallback = true;
+        break;
+      }
     }
   }
 
@@ -1373,11 +1471,21 @@ export async function savePriceAlertsForUser(
     nextMeta[alert.id] = {
       alertType: alert.alertType || 'below_target',
       intervalDays: alert.intervalDays || null,
+      minDropPercent: alert.minDropPercent ?? null,
+      cooldownHours: alert.cooldownHours ?? null,
+      rearmState: alert.rearmState || 'armed',
+      triggerCycle: alert.triggerCycle ?? 0,
       sourceListId: alert.sourceListId || null,
       lastTriggeredAt: alert.lastTriggeredAt || null,
       lastTriggeredPrice: alert.lastTriggeredPrice ?? null,
       lastEvaluatedPrice: alert.lastEvaluatedPrice ?? null,
-      lastNotifiedKey: alert.lastNotifiedKey || null
+      lastNotifiedKey: alert.lastNotifiedKey || null,
+      lastTriggerReasonRo: alert.lastTriggerReasonRo || null,
+      lastSourceOfferId: alert.lastSourceOfferId || null,
+      lastSourceQualityStatus: alert.lastSourceQualityStatus || null,
+      lastRearmedAt: alert.lastRearmedAt || null,
+      lastSkippedReasonRo: alert.lastSkippedReasonRo || null,
+      triggerHistory: Array.isArray(alert.triggerHistory) ? alert.triggerHistory.slice(0, 25) : []
     };
   }
   await updateProfilePreferences(userId, { priceAlertMeta: nextMeta });
@@ -1405,7 +1513,8 @@ export async function saveAlertNotificationsForUser(
     }
   }
 
-  const rows: Array<Record<string, unknown>> = [];
+  const faza4Rows: Array<Record<string, unknown>> = [];
+  const v12Rows: Array<Record<string, unknown>> = [];
   const saved: InAppPriceNotification[] = [];
   for (const notif of notifications) {
     const resolvedAlertId =
@@ -1415,14 +1524,39 @@ export async function saveAlertNotificationsForUser(
     if (!resolvedAlertId) continue;
 
     const id = isUuid(notif.id) ? notif.id : await stableUuid(userId, 'alert-notif', notif.dedupeKey);
-    rows.push({
+    faza4Rows.push({
+      id,
+      user_id: userId,
+      alert_id: resolvedAlertId,
+      dedupe_key: notif.dedupeKey,
+      idempotency_key: notif.idempotencyKey || null,
+      product_id: notif.productId,
+      product_name: notif.productName,
+      alert_type: notif.alertType,
+      title: notif.title,
+      message: notif.message,
+      reason_ro: notif.reasonRo || notif.message,
+      observed_price: notif.observedPrice,
+      previous_price: notif.previousPrice ?? null,
+      target_price: notif.targetPrice ?? null,
+      store_id: notif.storeId || null,
+      store_name: notif.storeName || null,
+      source_offer_id: notif.sourceOfferId || null,
+      quality_status: notif.qualityStatus || null,
+      observed_interval_days: notif.observedIntervalDays ?? null,
+      observed_observations_count: notif.observedObservationsCount ?? null,
+      trigger_cycle: notif.triggerCycle ?? null,
+      triggered_at: notif.triggeredAt,
+      is_read: Boolean(notif.isRead)
+    });
+    v12Rows.push({
       id,
       user_id: userId,
       alert_id: resolvedAlertId,
       dedupe_key: notif.dedupeKey,
       product_id: notif.productId,
       product_name: notif.productName,
-      alert_type: notif.alertType,
+      alert_type: notif.alertType === 'product_watch' ? 'any_drop' : notif.alertType,
       title: notif.title,
       message: notif.message,
       observed_price: notif.observedPrice,
@@ -1436,16 +1570,29 @@ export async function saveAlertNotificationsForUser(
     saved.push({ ...notif, id, alertId: resolvedAlertId });
   }
 
-  if (rows.length === 0) return [];
+  if (faza4Rows.length === 0) return [];
   try {
-    for (const batch of chunks(rows)) {
-      await supabase.from('price_alert_notifications').upsert(batch, {
+    let fallbackToV12 = false;
+    for (const batch of chunks(faza4Rows)) {
+      const { error } = await supabase.from('price_alert_notifications').upsert(batch, {
         onConflict: 'user_id,dedupe_key',
         ignoreDuplicates: true
       });
+      if (error) {
+        fallbackToV12 = true;
+        break;
+      }
+    }
+    if (fallbackToV12) {
+      for (const batch of chunks(v12Rows)) {
+        await supabase.from('price_alert_notifications').upsert(batch, {
+          onConflict: 'user_id,dedupe_key',
+          ignoreDuplicates: true
+        });
+      }
     }
   } catch {
-    // Non-blocking fallback when 012 migration hasn't been applied yet
+    // Non-blocking fallback when 012/014 migration hasn't been applied yet
   }
   return saved;
 }
@@ -1557,7 +1704,8 @@ export async function importLocalDashboardData(
   const importableAlerts: Array<PriceAlert & { resolvedProductId: string }> = [];
   for (const alert of snapshot.priceAlerts) {
     const resolvedProductId = canonicalMap.get(alert.productId);
-    if (!resolvedProductId || numberValue(alert.targetPrice) <= 0) continue;
+    const isWatchOrDrop = alert.alertType === 'product_watch' || alert.alertType === 'any_drop' || alert.alertType === 'interval_low';
+    if (!resolvedProductId || (!isWatchOrDrop && numberValue(alert.targetPrice) <= 0)) continue;
     const key = `${resolvedProductId}:${alert.alertType || 'below_target'}:${alert.intervalDays || ''}`;
     if (seenImportAlerts.has(key)) continue;
     seenImportAlerts.add(key);
@@ -1567,7 +1715,7 @@ export async function importLocalDashboardData(
     id: await stableUuid(userId, 'imported-alert', alert.id),
     user_id: userId,
     product_id: alert.resolvedProductId,
-    target_price: alert.targetPrice,
+    target_price: Math.max(0, numberValue(alert.targetPrice)),
     is_active: alert.isActive,
     created_at: alert.createdAt || new Date().toISOString()
   })));

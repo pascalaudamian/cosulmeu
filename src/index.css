@@ -6,10 +6,26 @@
     --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --font-display: 'Outfit', 'Plus Jakarta Sans', system-ui, sans-serif;
     --ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+    --surface-bg: #f8fafc;
+    --surface-card: #ffffff;
+    --surface-subtle: #f1f5f9;
+    --surface-border: rgba(226, 232, 240, 0.92);
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --brand-accent: #059669;
+    --brand-accent-hover: #10b981;
     color-scheme: light;
   }
 
   html.dark {
+    --surface-bg: #020617;
+    --surface-card: #0f172a;
+    --surface-subtle: #1e293b;
+    --surface-border: rgba(30, 41, 59, 0.95);
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --brand-accent: #10b981;
+    --brand-accent-hover: #34d399;
     color-scheme: dark;
   }
 
@@ -20,15 +36,17 @@
 
   body {
     font-family: var(--font-sans);
-    background-color: #f8fafc;
-    color: #0f172a;
+    background-color: var(--surface-bg);
+    color: var(--text-primary);
     text-rendering: optimizeLegibility;
+    overflow-x: clip;
     transition: background-color 180ms var(--ease-smooth), color 180ms var(--ease-smooth);
   }
 
-  html.dark body {
-    background-color: #020617;
-    color: #f1f5f9;
+  /* Global accessible keyboard focus indicator (WCAG 2.4.7) */
+  :is(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid #10b981;
+    outline-offset: 2px;
   }
 }
 
@@ -42,6 +60,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -52,14 +74,10 @@
 }
 
 .surface-card {
-  background-color: #ffffff;
-  border: 1px solid rgba(226, 232, 240, 0.9);
+  background-color: var(--surface-card);
+  border: 1px solid var(--surface-border);
+  border-radius: 1rem;
   transition: background-color 180ms var(--ease-smooth), border-color 180ms var(--ease-smooth), box-shadow 180ms var(--ease-smooth), transform 180ms var(--ease-smooth);
-}
-
-html.dark .surface-card {
-  background-color: #0f172a;
-  border-color: rgba(30, 41, 59, 0.95);
 }
 
 .surface-card-interactive:hover {
@@ -73,13 +91,134 @@ html.dark .surface-card-interactive:hover {
   box-shadow: 0 10px 28px -12px rgba(0, 0, 0, 0.55);
 }
 
+/* Shared Design System Controls */
+.ds-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-smooth), border-color 150ms var(--ease-smooth), color 150ms var(--ease-smooth), opacity 150ms var(--ease-smooth);
+}
+
+.ds-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ds-btn-primary {
+  background-color: #059669;
+  color: #ffffff;
+}
+
+.ds-btn-primary:hover:not(:disabled) {
+  background-color: #10b981;
+}
+
+.ds-btn-secondary {
+  background-color: #f1f5f9;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+}
+
+.ds-btn-secondary:hover:not(:disabled) {
+  background-color: #e2e8f0;
+}
+
+html.dark .ds-btn-secondary {
+  background-color: #1e293b;
+  color: #f1f5f9;
+  border-color: #334155;
+}
+
+html.dark .ds-btn-secondary:hover:not(:disabled) {
+  background-color: #334155;
+}
+
+.ds-btn-danger {
+  background-color: #e11d48;
+  color: #ffffff;
+}
+
+.ds-btn-danger:hover:not(:disabled) {
+  background-color: #f43f5e;
+}
+
+.ds-btn-ghost {
+  background-color: transparent;
+  color: #475569;
+}
+
+.ds-btn-ghost:hover:not(:disabled) {
+  background-color: #f1f5f9;
+  color: #0f172a;
+}
+
+html.dark .ds-btn-ghost {
+  color: #cbd5e1;
+}
+
+html.dark .ds-btn-ghost:hover:not(:disabled) {
+  background-color: #1e293b;
+  color: #ffffff;
+}
+
+.ds-input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.75rem;
+  border: 1px solid #cbd5e1;
+  background-color: #f8fafc;
+  color: #0f172a;
+  font-size: 0.875rem;
+  transition: border-color 150ms var(--ease-smooth), background-color 150ms var(--ease-smooth);
+}
+
+.ds-input:focus {
+  border-color: #10b981;
+  background-color: #ffffff;
+  outline: none;
+}
+
+html.dark .ds-input {
+  border-color: #334155;
+  background-color: #0f172a;
+  color: #f1f5f9;
+}
+
+html.dark .ds-input:focus {
+  border-color: #10b981;
+  background-color: #020617;
+}
+
+.ds-label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+html.dark .ds-label {
+  color: #cbd5e1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
   }
   body,
   .surface-card,
-  .surface-card-interactive:hover {
+  .surface-card-interactive:hover,
+  .ds-btn,
+  .ds-input {
     transition: none;
     transform: none;
   }

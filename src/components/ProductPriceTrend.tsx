@@ -14,7 +14,7 @@ import {
   CartesianGrid,
   Tooltip
 } from 'recharts';
-import { AlertTriangle, Calendar, CheckCircle2, ChevronDown, ChevronUp, Clock, HelpCircle, Info, Store as StoreIcon } from 'lucide-react';
+import { AlertTriangle, Calendar, ChevronDown, ChevronUp, Info, Store as StoreIcon } from 'lucide-react';
 import {
   FlaggedPriceObservation,
   PriceDataQualityStatus,
@@ -35,6 +35,7 @@ import {
 } from '../services/PriceHistoryService.js';
 import { PriceQualityClassifier } from '../services/PriceQualityClassifier.js';
 import { formatShortRoDate } from '../utils/priceTrendForecast.js';
+import { QualityStatusBadge } from './ui/StateFeedback.js';
 
 interface ProductPriceTrendProps {
   productId?: string;
@@ -155,46 +156,9 @@ const MultiStoreChartTooltip: React.FC<CustomTooltipProps> = ({
   );
 };
 
-function renderQualityStatusBadge(status?: PriceDataQualityStatus, labelRo?: string) {
+function renderQualityStatusBadge(status?: PriceDataQualityStatus) {
   if (!status) return null;
-  if (status === 'VERIFIED_RECENTLY') {
-    return (
-      <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
-        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-        <span>{labelRo || 'Confirmat recent'}</span>
-      </span>
-    );
-  }
-  if (status === 'VERIFIED') {
-    return (
-      <span className="inline-flex items-center gap-1 font-semibold text-sky-700 dark:text-sky-400">
-        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-        <span>{labelRo || 'Verificat'}</span>
-      </span>
-    );
-  }
-  if (status === 'STALE') {
-    return (
-      <span className="inline-flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-400">
-        <Clock className="w-3.5 h-3.5 shrink-0" />
-        <span>{labelRo || 'Preț vechi (> 30 zile)'}</span>
-      </span>
-    );
-  }
-  if (status === 'SUSPICIOUS' || status === 'EXPIRED') {
-    return (
-      <span className="inline-flex items-center gap-1 font-semibold text-rose-700 dark:text-rose-400">
-        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-        <span>{labelRo || 'Suspect / anomalie'}</span>
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 font-semibold text-slate-600 dark:text-slate-300">
-      <HelpCircle className="w-3.5 h-3.5 shrink-0" />
-      <span>{labelRo || 'Neverificat'}</span>
-    </span>
-  );
+  return <QualityStatusBadge status={status} compact />;
 }
 
 export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
@@ -604,13 +568,14 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
                 <button
                   key={opt.days}
                   type="button"
+                  aria-pressed={intervalDays === opt.days}
                   onClick={() => setIntervalDays(opt.days)}
                   title={
                     isOneYearLimited
                       ? 'Datele pe 1 an sunt limitate pentru acest produs'
                       : `Afișează istoricul pe ${opt.label}`
                   }
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                  className={`min-h-[34px] px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                     intervalDays === opt.days
                       ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-2xs'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
@@ -713,8 +678,9 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
           </span>
           <button
             type="button"
+            aria-pressed={activeStoreFilter === 'all'}
             onClick={() => setSelectedStoreKey('all')}
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+            className={`min-h-[34px] px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
               activeStoreFilter === 'all'
                 ? 'bg-slate-900 dark:bg-emerald-600 text-white border-slate-900 dark:border-emerald-600'
                 : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
@@ -728,8 +694,9 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
               <button
                 key={series.key}
                 type="button"
+                aria-pressed={isSelected}
                 onClick={() => setSelectedStoreKey(isSelected ? 'all' : series.key)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
+                className={`min-h-[34px] px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
                   isSelected
                     ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 border-slate-900 dark:border-slate-100'
                     : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'
@@ -750,11 +717,11 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
       {visibleStatsForFilter.hasSufficientHistory && visibleChartRows.length >= 2 ? (
         <div className="space-y-4">
           <div className="w-full min-w-0">
-            <div className="w-full h-72 min-w-0">
+            <div className="w-full h-60 sm:h-72 min-w-0">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart
                   data={visibleChartRows}
-                  margin={{ top: 12, right: 18, left: 0, bottom: 8 }}
+                  margin={{ top: 12, right: 12, left: 0, bottom: 8 }}
                 >
                   <CartesianGrid
                     strokeDasharray="3 3"
@@ -766,7 +733,7 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
                     tick={{ fill: '#94a3b8', fontSize: 11 }}
                     axisLine={{ stroke: 'rgba(148, 163, 184, 0.35)' }}
                     tickLine={false}
-                    minTickGap={16}
+                    minTickGap={24}
                   />
                   <YAxis
                     domain={yDomain}
@@ -906,7 +873,63 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
             </span>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+          {/* Mobile stacked cards (< sm) */}
+          <div className="sm:hidden space-y-2.5">
+            {storeBreakdown.map(row => {
+              const rowKey = normalizeHistoryStoreKey(row.storeId) || row.storeId;
+              const seriesMeta = storeSeriesList.find(s => s.key === rowKey);
+              const isHighlighted = activeStoreFilter === rowKey;
+              return (
+                <div
+                  key={`mobile-${rowKey}`}
+                  className={`p-3.5 rounded-xl border text-xs space-y-2 tabular-nums ${
+                    isHighlighted
+                      ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-700'
+                      : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-slate-100">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: seriesMeta?.color || '#059669' }}
+                      />
+                      <span>{row.storeName}</span>
+                    </div>
+                    {renderQualityStatusBadge(row.latestQualityStatus)}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
+                    <div>
+                      <span className="text-[10px] text-slate-500 block">Minim</span>
+                      <span className="font-bold text-emerald-700 dark:text-emerald-400 font-mono">
+                        {formatRonValue(row.minPrice)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 block">Mediu</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200 font-mono">
+                        {formatRonValue(row.avgPrice)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 block">Ultimul</span>
+                      <span className="font-bold text-slate-900 dark:text-slate-100 font-mono">
+                        {formatRonValue(row.lastPrice)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-between gap-1">
+                    <span>
+                      {row.observationsCount} obs. · {row.distinctDaysCount} {row.distinctDaysCount === 1 ? 'zi' : 'zile'}
+                    </span>
+                    <span className="truncate max-w-full">{row.sources.join(' · ')}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
             <table className="w-full text-left text-xs tabular-nums">
               <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200 dark:border-slate-800">
                 <tr>
@@ -965,7 +988,7 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
                       </td>
                       <td className="px-4 py-2.5 text-slate-600 dark:text-slate-400 space-y-0.5">
                         <div>
-                          {renderQualityStatusBadge(row.latestQualityStatus, row.latestQualityLabelRo)}
+                          {renderQualityStatusBadge(row.latestQualityStatus)}
                         </div>
                         <div className="text-[11px] text-slate-500 dark:text-slate-400">
                           {row.sources.join(' · ')}
@@ -1006,8 +1029,9 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
             </div>
             <button
               type="button"
+              aria-expanded={showFlaggedAudit}
               onClick={() => setShowFlaggedAudit(prev => !prev)}
-              className="inline-flex items-center gap-1 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:text-slate-900 dark:hover:text-white cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[36px] inline-flex items-center gap-1 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:text-slate-900 dark:hover:text-white cursor-pointer whitespace-nowrap shrink-0"
             >
               <span>{showFlaggedAudit ? 'Ascunde detalii' : 'Vezi motivația'}</span>
               {showFlaggedAudit ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
@@ -1015,39 +1039,62 @@ export const ProductPriceTrend: React.FC<ProductPriceTrendProps> = ({
           </div>
 
           {showFlaggedAudit && (
-            <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-              <table className="w-full text-left text-xs tabular-nums">
-                <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200 dark:border-slate-800">
-                  <tr>
-                    <th className="px-3.5 py-2">Dată înregistrată</th>
-                    <th className="px-3.5 py-2">Magazin</th>
-                    <th className="px-3.5 py-2">Valoare</th>
-                    <th className="px-3.5 py-2">Stare & motiv</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {resolvedFlaggedObservations.slice(0, 20).map(item => (
-                    <tr key={item.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                      <td className="px-3.5 py-2 font-mono text-slate-700 dark:text-slate-300">
-                        {item.date || 'Dată lipsă'}
-                      </td>
-                      <td className="px-3.5 py-2 font-semibold text-slate-900 dark:text-slate-100">
-                        {item.storeName}
-                      </td>
-                      <td className="px-3.5 py-2 font-mono text-slate-800 dark:text-slate-200">
+            <>
+              <div className="sm:hidden mt-3 space-y-2">
+                {resolvedFlaggedObservations.slice(0, 20).map(item => (
+                  <div
+                    key={`mobile-flagged-${item.id}`}
+                    className="p-3 rounded-xl border border-rose-200/70 dark:border-rose-900/50 bg-rose-50/40 dark:bg-rose-950/20 text-xs space-y-1 tabular-nums"
+                  >
+                    <div className="flex items-center justify-between gap-2 font-semibold">
+                      <span className="text-slate-900 dark:text-slate-100">{item.storeName}</span>
+                      <span className="font-mono text-slate-800 dark:text-slate-200">
                         {Number.isFinite(item.price) ? `${item.price.toFixed(2)} ${item.currency || 'RON'}` : 'Invalid'}
-                      </td>
-                      <td className="px-3.5 py-2 text-rose-700 dark:text-rose-300">
-                        <span className="font-semibold block">{item.qualityAssessment.labelRo}</span>
-                        <span className="text-[11px] text-slate-600 dark:text-slate-400">
-                          {item.qualityAssessment.reasons[0] || item.qualityAssessment.descriptionRo}
-                        </span>
-                      </td>
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {item.date || 'Dată lipsă'} · <span className="text-rose-700 dark:text-rose-300 font-semibold">{item.qualityAssessment.labelRo}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                      {item.qualityAssessment.reasons[0] || item.qualityAssessment.descriptionRo}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden sm:block mt-3 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                <table className="w-full text-left text-xs tabular-nums">
+                  <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200 dark:border-slate-800">
+                    <tr>
+                      <th className="px-3.5 py-2">Dată înregistrată</th>
+                      <th className="px-3.5 py-2">Magazin</th>
+                      <th className="px-3.5 py-2">Valoare</th>
+                      <th className="px-3.5 py-2">Stare & motiv</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {resolvedFlaggedObservations.slice(0, 20).map(item => (
+                      <tr key={item.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="px-3.5 py-2 font-mono text-slate-700 dark:text-slate-300">
+                          {item.date || 'Dată lipsă'}
+                        </td>
+                        <td className="px-3.5 py-2 font-semibold text-slate-900 dark:text-slate-100">
+                          {item.storeName}
+                        </td>
+                        <td className="px-3.5 py-2 font-mono text-slate-800 dark:text-slate-200">
+                          {Number.isFinite(item.price) ? `${item.price.toFixed(2)} ${item.currency || 'RON'}` : 'Invalid'}
+                        </td>
+                        <td className="px-3.5 py-2 text-rose-700 dark:text-rose-300">
+                          <span className="font-semibold block">{item.qualityAssessment.labelRo}</span>
+                          <span className="text-[11px] text-slate-600 dark:text-slate-400">
+                            {item.qualityAssessment.reasons[0] || item.qualityAssessment.descriptionRo}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       )}

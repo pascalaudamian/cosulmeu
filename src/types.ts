@@ -418,12 +418,14 @@ export type PriceAlertEvaluationOutcome =
   | 'skipped_ineligible_price'
   | 'skipped_canonical_invalid'
   | 'rearmed_price_recovered'
-  | 'rearmed_offer_expired';
+  | 'rearmed_offer_expired'
+  | 'rearmed_manual';
 
 export interface PriceAlertTriggerEvent {
   id: string;
   alertId: string;
   productId: string;
+  alertType?: PriceAlertType;
   outcome: PriceAlertEvaluationOutcome;
   evaluatedAt: string;
   observedPrice?: number;
@@ -1670,3 +1672,239 @@ export interface ShadowMatchingReport {
   };
   candidates: ShadowMatchCandidate[];
 }
+
+// =========================================================================
+// FAZA 5: Price Quality Monitoring & Admin Dashboard (Read-Only on Price Data)
+// =========================================================================
+
+export type PriceQualityAnomalyType =
+  | 'zero_or_negative_price'
+  | 'extreme_price_outlier'
+  | 'inconsistent_promotion'
+  | 'incompatible_currency'
+  | 'invalid_timestamp'
+  | 'untrusted_demo_or_estimated_source'
+  | 'unit_or_weight_conflict'
+  | 'expired_offer_active'
+  | 'invalid_canonical_identity'
+  | 'conflicting_multi_source_prices';
+
+export type PriceQualityAnomalySeverity = 'critical' | 'high' | 'medium' | 'low';
+
+export type PriceQualityInvestigationStatus =
+  | 'open'
+  | 'investigated'
+  | 'confirmed_anomaly'
+  | 'false_positive'
+  | 'needs_source_check';
+
+export type PriceQualityStatusCounts = Record<PriceDataQualityStatus, number>;
+
+export interface PriceQualityMonitoringAnomaly {
+  id: string;
+  anomalyKey: string;
+  anomalyType: PriceQualityAnomalyType;
+  anomalyTypeLabelRo: string;
+  severity: PriceQualityAnomalySeverity;
+  targetType: 'observation' | 'offer' | 'product';
+  observationId?: string;
+  offerId?: string;
+  productId: string;
+  canonicalProductId?: string | null;
+  productName: string;
+  storeId: string;
+  storeName: string;
+  source: string;
+  sourceLabel: string;
+  price: number;
+  currency: string;
+  baselinePrice?: number | null;
+  deviationPct?: number | null;
+  observedDate: string;
+  detectedAt: string;
+  reasonRo: string;
+  qualityStatus: PriceDataQualityStatus;
+  investigationStatus: PriceQualityInvestigationStatus;
+  investigationNote?: string | null;
+  investigationDecision?: string | null;
+  investigatedBy?: string | null;
+  investigatedAt?: string | null;
+}
+
+export interface PriceQualityClassifiedRecord {
+  id: string;
+  recordType: 'observation' | 'offer';
+  productId: string;
+  canonicalProductId?: string | null;
+  originalProductId?: string;
+  productName: string;
+  brand?: string;
+  storeId: string;
+  storeName: string;
+  source: string;
+  sourceLabel: string;
+  price: number;
+  normalPrice?: number | null;
+  promoPrice?: number | null;
+  currency: string;
+  observedDate: string;
+  lastVerifiedAt: string | null;
+  validFrom?: string;
+  validUntil?: string;
+  verificationStatus?: string;
+  qualityStatus: PriceDataQualityStatus;
+  qualityLabelRo: string;
+  qualityScore: number;
+  isUsableForComparison: boolean;
+  isReliableForOptimization: boolean;
+  reasons: string[];
+  isExpiredOffer?: boolean;
+  expiredDaysAgo?: number | null;
+}
+
+export interface PriceQualitySourceMetric {
+  source: string;
+  sourceLabel: string;
+  totalRecords: number;
+  observationsCount: number;
+  offersCount: number;
+  statusCounts: PriceQualityStatusCounts;
+  suspiciousPct: number;
+  unverifiedCount: number;
+  staleCount: number;
+  expiredCount: number;
+  importErrorCount: number;
+  abnormalVariationCount: number;
+  avgQualityScore: number;
+  reliabilityStatus: 'healthy' | 'warning' | 'critical' | 'untrusted';
+  reliabilityLabelRo: string;
+}
+
+export type PriceQualityCanonicalIssueType =
+  | 'self_reference'
+  | 'cycle'
+  | 'chain_too_deep'
+  | 'orphan_alias'
+  | 'inconsistent_reference';
+
+export interface PriceQualityCanonicalIssue {
+  id: string;
+  issueType: PriceQualityCanonicalIssueType;
+  issueLabelRo: string;
+  severity: PriceQualityAnomalySeverity;
+  productId: string;
+  productName: string;
+  canonicalProductId?: string | null;
+  referencedIn?: 'product' | 'offer' | 'observation';
+  hops?: number;
+  visitedChain?: string[];
+  reasonRo: string;
+}
+
+export interface PriceQualityEvolutionPoint {
+  date: string;
+  total: number;
+  verifiedRecently: number;
+  verified: number;
+  stale: number;
+  unverified: number;
+  expired: number;
+  suspicious: number;
+  suspiciousPct: number;
+  avgScore: number | null;
+}
+
+export interface PriceQualityCoverageInfo {
+  intervalDays: number;
+  fromDate: string;
+  toDate: string;
+  lastUpdatedAt: string;
+  analyzedObservationsCount: number;
+  analyzedOffersCount: number;
+  totalObservationsInPeriod: number;
+  totalOffersInCatalog: number;
+  totalProductsChecked: number;
+  isPartialSample: boolean;
+  maxSampleLimit: number;
+  dataSource: 'postgresql' | 'supabase' | 'storage_service' | 'custom_dataset';
+  coverageNoteRo: string;
+}
+
+export interface PriceQualityMonitoringRun {
+  id: string;
+  runAt: string;
+  triggeredBy: string;
+  triggerType: 'manual' | 'snapshot' | 'export';
+  intervalDays: number;
+  analyzedObservationsCount: number;
+  analyzedOffersCount: number;
+  totalRecordsAnalyzed: number;
+  suspiciousCount: number;
+  suspiciousPct: number;
+  expiredOffersCount: number;
+  unverifiedCount: number;
+  staleCount: number;
+  excludedCount: number;
+  anomaliesDetectedCount: number;
+  canonicalIssuesCount: number;
+  isPartialSample: boolean;
+  dataSource: PriceQualityCoverageInfo['dataSource'];
+  coverageNoteRo: string;
+  statusDistribution: PriceQualityStatusCounts;
+  durationMs: number;
+}
+
+export interface PriceQualityMonitoringOverview {
+  hasData: boolean;
+  methodologyVersion: string;
+  coverage: PriceQualityCoverageInfo;
+  kpis: {
+    totalRecordsAnalyzed: number;
+    totalObservationsAnalyzed: number;
+    totalOffersAnalyzed: number;
+    suspiciousCount: number;
+    suspiciousPct: number;
+    expiredOffersCount: number;
+    unverifiedCount: number;
+    staleCount: number;
+    excludedFromComparisonCount: number;
+    verifiedCount: number;
+    verifiedRecentlyCount: number;
+    avgQualityScore: number | null;
+    anomaliesDetectedCount: number;
+    openAnomaliesCount: number;
+    investigatedAnomaliesCount: number;
+    canonicalIssuesCount: number;
+  };
+  statusDistribution: PriceQualityStatusCounts;
+  observationStatusDistribution: PriceQualityStatusCounts;
+  offerStatusDistribution: PriceQualityStatusCounts;
+  evolution: PriceQualityEvolutionPoint[];
+  sourceQuality: PriceQualitySourceMetric[];
+  canonicalIntegrity: {
+    totalProductsScanned: number;
+    validCanonicalRootsCount: number;
+    validAliasesCount: number;
+    cyclesCount: number;
+    selfReferencesCount: number;
+    chainsTooDeepCount: number;
+    orphanAliasesCount: number;
+    inconsistentReferencesCount: number;
+    totalIssuesCount: number;
+    issues: PriceQualityCanonicalIssue[];
+  };
+  anomaliesByType: Record<PriceQualityAnomalyType, number>;
+  anomaliesBySeverity: Record<PriceQualityAnomalySeverity, number>;
+  latestRun: PriceQualityMonitoringRun | null;
+}
+
+export interface PriceQualityInvestigationRecord {
+  anomalyId: string;
+  anomalyKey: string;
+  investigationStatus: PriceQualityInvestigationStatus;
+  note: string;
+  decision?: string | null;
+  investigatedBy: string;
+  investigatedAt: string;
+}
+

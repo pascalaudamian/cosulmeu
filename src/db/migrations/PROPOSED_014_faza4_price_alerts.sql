@@ -96,8 +96,10 @@ CREATE TABLE IF NOT EXISTS public.price_alert_events (
       'rearmed_manual',
       'skipped_cooldown',
       'skipped_duplicate',
-      'skipped_locked_same_cycle',
-      'skipped_quality_gate'
+      'skipped_cycle_locked',
+      'skipped_price_not_met',
+      'skipped_ineligible_price',
+      'skipped_canonical_invalid'
     )
   ),
   observed_price NUMERIC(10, 2),

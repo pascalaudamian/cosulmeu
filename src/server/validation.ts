@@ -696,3 +696,139 @@ export const shadowReviewAuditQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50)
 });
 
+// =========================================================================
+// FAZA 5: Price Quality Monitoring & Admin Dashboard Validation Schemas
+// =========================================================================
+
+const isoDateOnlyRegex = /^\d{4}-\d{2}-\d{2}$/;
+const isValidIsoCalendarDate = (val: string): boolean => {
+  if (!isoDateOnlyRegex.test(val)) return false;
+  const [y, m, d] = val.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+};
+
+const optionalCalendarIsoDateSchema = z
+  .string()
+  .trim()
+  .refine(isValidIsoCalendarDate, { message: 'Dată calendaristică invalidă (YYYY-MM-DD).' })
+  .optional();
+
+export const qualityMonitoringStatusFilterSchema = z.enum([
+  'all',
+  'VERIFIED_RECENTLY',
+  'VERIFIED',
+  'STALE',
+  'UNVERIFIED',
+  'EXPIRED',
+  'SUSPICIOUS'
+]);
+
+export const qualityMonitoringAnomalyTypeFilterSchema = z.enum([
+  'all',
+  'zero_or_negative_price',
+  'extreme_price_outlier',
+  'inconsistent_promotion',
+  'incompatible_currency',
+  'invalid_timestamp',
+  'untrusted_demo_or_estimated_source',
+  'unit_or_weight_conflict',
+  'expired_offer_active',
+  'invalid_canonical_identity',
+  'conflicting_multi_source_prices'
+]);
+
+export const qualityMonitoringSeverityFilterSchema = z.enum([
+  'all',
+  'critical',
+  'high',
+  'medium',
+  'low'
+]);
+
+export const qualityMonitoringInvestigationStatusSchema = z.enum([
+  'open',
+  'investigated',
+  'confirmed_anomaly',
+  'false_positive',
+  'needs_source_check'
+]);
+
+export const qualityMonitoringOverviewQuerySchema = z.object({
+  intervalDays: z.coerce.number().int().min(1).max(365).default(30),
+  maxSample: z.coerce.number().int().min(50).max(5000).default(2000),
+  refresh: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform(v => v === 'true')
+});
+
+export const qualityMonitoringRunSchema = z.object({
+  intervalDays: z.coerce.number().int().min(1).max(365).default(30),
+  maxSample: z.coerce.number().int().min(50).max(5000).default(2500)
+});
+
+export const qualityMonitoringAnomaliesQuerySchema = z.object({
+  qualityStatus: qualityMonitoringStatusFilterSchema.default('all'),
+  storeId: z.string().trim().max(64).default('all'),
+  source: z.string().trim().max(64).default('all'),
+  productQuery: z.string().trim().max(120).default(''),
+  anomalyType: qualityMonitoringAnomalyTypeFilterSchema.default('all'),
+  severity: qualityMonitoringSeverityFilterSchema.default('all'),
+  investigationStatus: z
+    .enum(['all', 'open', 'investigated', 'confirmed_anomaly', 'false_positive', 'needs_source_check'])
+    .default('all'),
+  intervalDays: z.coerce.number().int().min(1).max(365).default(30),
+  fromDate: optionalCalendarIsoDateSchema,
+  toDate: optionalCalendarIsoDateSchema,
+  page: z.coerce.number().int().min(1).max(1000).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25)
+});
+
+export const qualityMonitoringRecordsQuerySchema = z.object({
+  recordType: z.enum(['all', 'observations', 'offers', 'expired_offers']).default('all'),
+  qualityStatus: qualityMonitoringStatusFilterSchema.default('all'),
+  storeId: z.string().trim().max(64).default('all'),
+  source: z.string().trim().max(64).default('all'),
+  productQuery: z.string().trim().max(120).default(''),
+  intervalDays: z.coerce.number().int().min(1).max(365).default(30),
+  fromDate: optionalCalendarIsoDateSchema,
+  toDate: optionalCalendarIsoDateSchema,
+  page: z.coerce.number().int().min(1).max(1000).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25)
+});
+
+export const qualityMonitoringHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(1000).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20)
+});
+
+export const qualityMonitoringInvestigateSchema = z.object({
+  investigationStatus: qualityMonitoringInvestigationStatusSchema,
+  note: z
+    .string()
+    .trim()
+    .min(3, 'Nota administrativă trebuie să conțină cel puțin 3 caractere.')
+    .max(1000, 'Nota administrativă nu poate depăși 1000 de caractere.'),
+  decision: z.string().trim().max(120).optional().nullable(),
+  anomalyKey: z.string().trim().max(160).optional(),
+  anomalyType: z.string().trim().max(64).optional(),
+  severity: z.enum(['critical', 'high', 'medium', 'low']).optional(),
+  targetType: z.enum(['observation', 'offer', 'product']).optional(),
+  observationId: z.string().trim().max(128).optional().nullable(),
+  offerId: z.string().trim().max(128).optional().nullable(),
+  productId: z.string().trim().max(128).optional().nullable(),
+  storeId: z.string().trim().max(64).optional().nullable(),
+  source: z.string().trim().max(64).optional().nullable()
+});
+
+export const qualityMonitoringExportQuerySchema = z.object({
+  format: z.enum(['json', 'csv']).default('json'),
+  intervalDays: z.coerce.number().int().min(1).max(365).default(30),
+  storeId: z.string().trim().max(64).default('all'),
+  source: z.string().trim().max(64).default('all'),
+  anomalyType: qualityMonitoringAnomalyTypeFilterSchema.default('all'),
+  severity: qualityMonitoringSeverityFilterSchema.default('all')
+});
+
+

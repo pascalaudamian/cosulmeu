@@ -290,13 +290,14 @@ export class PriceAlertService {
             alert.triggerHistory,
             buildTriggerEvent({
               alertId: alert.id,
+              productId: alert.productId,
               alertType: alert.alertType || 'below_target',
               outcome: 'rearmed_manual',
-              price: alert.currentLowestPrice > 0 ? alert.currentLowestPrice : alert.targetPrice,
+              observedPrice: alert.currentLowestPrice > 0 ? alert.currentLowestPrice : alert.targetPrice,
               previousPrice: alert.lastTriggeredPrice,
               storeId: alert.lowestStoreId,
               reasonRo: 'Alertă reînarmată manual prin actualizarea regulii sau reactivare.',
-              triggeredAt: nowIso
+              evaluatedAt: nowIso
             })
           )
         : alert.triggerHistory
@@ -551,13 +552,14 @@ export class PriceAlertService {
               alert.triggerHistory,
               buildTriggerEvent({
                 alertId: alert.id,
+                productId: canonicalProductId,
                 alertType,
                 outcome: 'rearmed_offer_expired',
-                price: alert.currentLowestPrice || 0,
+                observedPrice: alert.currentLowestPrice || 0,
                 previousPrice: alert.lastTriggeredPrice,
                 storeId: alert.lowestStoreId,
                 reasonRo: `Alertă reînarmată automat: ${skipMsg}`,
-                triggeredAt: nowIso
+                evaluatedAt: nowIso
               })
             )
           });
@@ -642,16 +644,17 @@ export class PriceAlertService {
               workingAlert.triggerHistory,
               buildTriggerEvent({
                 alertId: workingAlert.id,
+                productId: canonicalProductId,
                 alertType,
                 outcome: rearmedOutcome,
-                price: currentPrice,
+                observedPrice: currentPrice,
                 previousPrice: lastTrigPrice,
                 storeId: bestOffer.storeId,
                 storeName,
-                offerId: bestOffer.id,
+                sourceOfferId: bestOffer.id,
                 qualityStatus: bestAssessment.status,
                 reasonRo: rearmReasonRo,
-                triggeredAt: nowIso
+                evaluatedAt: nowIso
               })
             )
           };
@@ -741,9 +744,9 @@ export class PriceAlertService {
           (bestOffer.lastVerifiedAt || bestOffer.lastChecked || '').slice(0, 10) ||
           'current';
         const offerRef = bestOffer.id || bestOffer.storeId;
-        const dedupeKey = `${workingAlert.id}:${alertType}:${offerRef}:${bestOffer.storeId}:${obsDateMarker}:${currentPrice.toFixed(2)}`;
-        const candidateCycle = isStillLocked ? (workingAlert.triggerCycle || 1) : (workingAlert.triggerCycle || 0) + 1;
-        const idempotencyKey = `${workingAlert.id}:c${candidateCycle}:${alertType}:${canonicalProductId}:${bestOffer.storeId}:${currentPrice.toFixed(2)}`;
+        const nextCycle = (workingAlert.triggerCycle || 0) + 1;
+        const dedupeKey = `${workingAlert.id}:c${nextCycle}:${alertType}:${offerRef}:${bestOffer.storeId}:${obsDateMarker}:${currentPrice.toFixed(2)}`;
+        const idempotencyKey = `${workingAlert.id}:c${nextCycle}:${alertType}:${canonicalProductId}:${bestOffer.storeId}:${currentPrice.toFixed(2)}`;
 
         const duplicateHit =
           workingAlert.lastNotifiedKey === dedupeKey ||
@@ -761,7 +764,7 @@ export class PriceAlertService {
           blockedOutcome = 'skipped_duplicate';
           blockedReason = 'Aceeași ofertă și același preț au produs deja o notificare.';
         } else if (isStillLocked && !isStrictlyDeeperDrop) {
-          blockedOutcome = 'skipped_locked_same_cycle';
+          blockedOutcome = 'skipped_cycle_locked';
           blockedReason = `Alertă deja declanșată în ciclul curent la ${prevTriggeredPrice.toFixed(2)} lei; așteaptă revenirea prețului sau o scădere suplimentară.`;
         } else if (inCooldown) {
           const remainingHours = Math.max(1, Math.ceil(cooldownHours - elapsedHours));
@@ -780,8 +783,8 @@ export class PriceAlertService {
           continue;
         }
 
-        const newCycle = (workingAlert.triggerCycle || 0) + 1;
-        const finalIdempotencyKey = `${workingAlert.id}:c${newCycle}:${alertType}:${canonicalProductId}:${bestOffer.storeId}:${currentPrice.toFixed(2)}`;
+        const newCycle = nextCycle;
+        const finalIdempotencyKey = idempotencyKey;
 
         existingDedupeKeys.add(dedupeKey);
         existingIdempotencyKeys.add(finalIdempotencyKey);
@@ -804,6 +807,7 @@ export class PriceAlertService {
           storeName,
           sourceOfferId: bestOffer.id,
           qualityStatus: bestAssessment.status,
+          qualityLabelRo: bestAssessment.labelRo,
           observedIntervalDays,
           observedObservationsCount,
           triggerCycle: newCycle,
@@ -813,16 +817,19 @@ export class PriceAlertService {
 
         const triggerEvent = buildTriggerEvent({
           alertId: workingAlert.id,
+          productId: canonicalProductId,
           alertType,
           outcome: 'triggered',
-          price: currentPrice,
+          observedPrice: currentPrice,
+          targetPrice: effectiveTarget,
           previousPrice,
           storeId: bestOffer.storeId,
           storeName,
-          offerId: bestOffer.id,
+          sourceOfferId: bestOffer.id,
           qualityStatus: bestAssessment.status,
+          idempotencyKey: finalIdempotencyKey,
           reasonRo,
-          triggeredAt: nowIso
+          evaluatedAt: nowIso
         });
 
         updatedAlerts.push({

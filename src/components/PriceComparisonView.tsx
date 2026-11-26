@@ -273,8 +273,11 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
             </div>
 
             <button
+              type="button"
               onClick={() => setExpandedStoreId(isExpanded ? null : comp.store.id)}
-              className="p-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              aria-expanded={isExpanded}
+              aria-label={isExpanded ? `Ascunde produsele din ${comp.store.name}` : `Vezi produsele din ${comp.store.name}`}
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center p-2 rounded-xl text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               title={isExpanded ? 'Ascunde produsele' : 'Vezi detalii produse'}
             >
               {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
@@ -559,73 +562,126 @@ export const PriceComparisonView: React.FC<PriceComparisonViewProps> = ({
         </div>
       )}
 
-      {/* View Mode 2: Full Product Comparison Matrix Table */}
+      {/* View Mode 2: Full Product Comparison Matrix (Mobile Cards + Desktop Table) */}
       {viewMode === 'matrix' && (
-        <div className="surface-card overflow-x-auto">
-          <table className="w-full text-left text-sm border-collapse min-w-[700px]">
-            <thead>
-              <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                <th className="p-3.5 pl-4">Produs căutat</th>
-                <th className="p-3.5 text-center">Cantitate</th>
-                {matrixStores.map(st => (
-                  <th key={st.id} className="p-3.5 text-right font-bold text-slate-800 dark:text-slate-100">
-                    {st.name}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {activeList.items.map(item => (
-                <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                  <td className="p-3.5 pl-4 font-semibold text-slate-800 dark:text-slate-100">
+        <div className="space-y-4">
+          {/* Mobile stacked breakdown (< sm) */}
+          <div className="space-y-3 sm:hidden">
+            {activeList.items.map(item => (
+              <div key={`mobile-matrix-${item.id}`} className="surface-card p-4 space-y-2.5">
+                <div className="flex items-start justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                  <div className="min-w-0">
                     {item.productId && onViewProductDetail ? (
                       <button
                         type="button"
                         onClick={() => onViewProductDetail(item.productId!)}
-                        className="text-left hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline transition-colors cursor-pointer"
+                        className="text-left font-bold text-sm text-slate-900 dark:text-slate-100 hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline cursor-pointer"
                       >
                         {item.name}
                       </button>
                     ) : (
-                      <div>{item.name}</div>
+                      <div className="font-bold text-sm text-slate-900 dark:text-slate-100">{item.name}</div>
                     )}
-                    {item.brand && <span className="block text-[11px] text-slate-400 dark:text-slate-500 font-normal">{item.brand}</span>}
-                  </td>
-                  <td className="p-3.5 text-center text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                    {item.brand && (
+                      <span className="block text-[11px] text-slate-500 dark:text-slate-400">{item.brand}</span>
+                    )}
+                  </div>
+                  <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 tabular-nums shrink-0">
                     {PriceComparisonService.formatQuantity(item.quantity, item.unit)}
-                  </td>
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
                   {matrixStores.map(store => {
                     const comp = comparisons.find(c => c.store.id === store.id);
                     const itemDetail = comp?.availableItems.find(ai => ai.item.id === item.id);
-
-                    if (!itemDetail) {
-                      return (
-                        <td key={store.id} className="p-3.5 text-right text-xs text-slate-400 dark:text-slate-500">
-                          —
-                        </td>
-                      );
-                    }
-
                     return (
-                      <td
-                        key={store.id}
-                        className={`p-3.5 text-right tabular-nums ${
-                          itemDetail.isLowest ? 'bg-emerald-50/60 dark:bg-emerald-950/40 font-bold text-emerald-700 dark:text-emerald-400' : 'text-slate-800 dark:text-slate-200 font-medium'
+                      <div
+                        key={`mobile-matrix-cell-${item.id}-${store.id}`}
+                        className={`p-2 rounded-xl border text-xs flex items-center justify-between gap-1.5 ${
+                          itemDetail?.isLowest
+                            ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 font-bold text-emerald-800 dark:text-emerald-300'
+                            : 'bg-slate-50/70 dark:bg-slate-800/40 border-slate-200/70 dark:border-slate-800 text-slate-700 dark:text-slate-200'
                         }`}
                       >
-                        {PriceComparisonService.formatRon(itemDetail.calculatedPrice)}
-                        {itemDetail.isLowest && (
-                          <span className="block text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold uppercase tracking-wider">
-                            Minim
-                          </span>
-                        )}
-                      </td>
+                        <span className="truncate font-medium">{store.name}</span>
+                        <span className="tabular-nums shrink-0">
+                          {itemDetail ? PriceComparisonService.formatRon(itemDetail.calculatedPrice) : '—'}
+                        </span>
+                      </div>
                     );
                   })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop/Tablet Table (sm+) */}
+          <div className="hidden sm:block surface-card overflow-x-auto">
+            <table className="w-full text-left text-sm border-collapse min-w-[700px]">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-800 text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                  <th className="p-3.5 pl-4">Produs căutat</th>
+                  <th className="p-3.5 text-center">Cantitate</th>
+                  {matrixStores.map(st => (
+                    <th key={st.id} className="p-3.5 text-right font-bold text-slate-800 dark:text-slate-100">
+                      {st.name}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {activeList.items.map(item => (
+                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                    <td className="p-3.5 pl-4 font-semibold text-slate-800 dark:text-slate-100">
+                      {item.productId && onViewProductDetail ? (
+                        <button
+                          type="button"
+                          onClick={() => onViewProductDetail(item.productId!)}
+                          className="text-left hover:text-emerald-700 dark:hover:text-emerald-400 hover:underline transition-colors cursor-pointer"
+                        >
+                          {item.name}
+                        </button>
+                      ) : (
+                        <div>{item.name}</div>
+                      )}
+                      {item.brand && <span className="block text-[11px] text-slate-400 dark:text-slate-500 font-normal">{item.brand}</span>}
+                    </td>
+                    <td className="p-3.5 text-center text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                      {PriceComparisonService.formatQuantity(item.quantity, item.unit)}
+                    </td>
+                    {matrixStores.map(store => {
+                      const comp = comparisons.find(c => c.store.id === store.id);
+                      const itemDetail = comp?.availableItems.find(ai => ai.item.id === item.id);
+
+                      if (!itemDetail) {
+                        return (
+                          <td key={store.id} className="p-3.5 text-right text-xs text-slate-400 dark:text-slate-500">
+                            —
+                          </td>
+                        );
+                      }
+
+                      return (
+                        <td
+                          key={store.id}
+                          className={`p-3.5 text-right tabular-nums ${
+                            itemDetail.isLowest ? 'bg-emerald-50/60 dark:bg-emerald-950/40 font-bold text-emerald-700 dark:text-emerald-400' : 'text-slate-800 dark:text-slate-200 font-medium'
+                          }`}
+                        >
+                          {PriceComparisonService.formatRon(itemDetail.calculatedPrice)}
+                          {itemDetail.isLowest && (
+                            <span className="block text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold uppercase tracking-wider">
+                              Minim
+                            </span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

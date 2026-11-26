@@ -40,6 +40,7 @@ import { PriceQualityClassifier } from '../services/PriceQualityClassifier.js';
 import { StorageService } from '../services/StorageService.js';
 import { STORES } from '../data/mockData.js';
 import { BarcodeScannerModal } from './BarcodeScannerModal.js';
+import { EmptyState, ErrorState, LoadingState, QualityStatusBadge } from './ui/StateFeedback.js';
 
 interface ProductsViewProps {
   onSelectProduct: (productId: string) => void;
@@ -89,6 +90,8 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
   const [addedItemName, setAddedItemName] = useState<string | null>(null);
   const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
   const [showBarcodeModal, setShowBarcodeModal] = useState(false);
+  const [apiFallbackNotice, setApiFallbackNotice] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState<number>(0);
 
   // Store lookup map
   const storeMap = useMemo(() => new Map<string, StoreType>(STORES.map(s => [s.id, s])), []);
@@ -160,7 +163,10 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
     }
 
     fetch(`/api/products?${params.toString()}`, { signal: controller.signal })
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
       .then(data => {
         if (!isMounted) return;
         if (data.success) {
@@ -168,16 +174,20 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           if (onlyRomanian) list = list.filter((p: any) => p.isRomanianProduct);
           if (onlyBio) list = list.filter((p: any) => p.isBio);
 
+          setApiFallbackNotice(null);
           setProductsData({
             products: list,
             totalCount: data.pagination.totalCount,
             totalPages: data.pagination.totalPages,
             facets: data.facets || { categories: [], brands: [] }
           });
+        } else {
+          throw new Error(data.error || 'Răspuns invalid de la catalog');
         }
       })
       .catch((err) => {
         if (!isMounted || err?.name === 'AbortError') return;
+        setApiFallbackNotice('Catalogul live nu a putut fi actualizat de pe server; se afișează catalogul local salvat.');
         // Client-side fallback from StorageService
         const all = StorageService.getAllProducts();
         const allOffers = StorageService.getProductOffers();
@@ -256,7 +266,8 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
     onlyRomanian,
     onlyBio,
     sortBy,
-    currentPage
+    currentPage,
+    retryNonce
   ]);
 
   const handleResetFilters = () => {
@@ -543,11 +554,13 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           {/* Toggles rapide de filtrare */}
           <div className="flex flex-wrap items-center gap-2">
             <button
+              type="button"
+              aria-pressed={onlyPromo}
               onClick={() => {
                 setOnlyPromo(!onlyPromo);
                 setCurrentPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              className={`min-h-[40px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
                 onlyPromo
                   ? 'bg-rose-600 text-white shadow-2xs'
                   : 'bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
@@ -558,11 +571,13 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
             </button>
 
             <button
+              type="button"
+              aria-pressed={onlyAvailable}
               onClick={() => {
                 setOnlyAvailable(!onlyAvailable);
                 setCurrentPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              className={`min-h-[40px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
                 onlyAvailable
                   ? 'bg-emerald-600 text-white shadow-2xs'
                   : 'bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
@@ -573,26 +588,29 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
             </button>
 
             <button
+              type="button"
+              aria-pressed={onlyRomanian}
               onClick={() => {
                 setOnlyRomanian(!onlyRomanian);
                 setCurrentPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              className={`min-h-[40px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
                 onlyRomanian
                   ? 'bg-amber-600 text-white shadow-2xs'
                   : 'bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
               }`}
             >
-              <span>🇷🇴</span>
-              <span>Produs românesc</span>
+              <span>Produs românesc (RO)</span>
             </button>
 
             <button
+              type="button"
+              aria-pressed={onlyBio}
               onClick={() => {
                 setOnlyBio(!onlyBio);
                 setCurrentPage(1);
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
+              className={`min-h-[40px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer ${
                 onlyBio
                   ? 'bg-teal-700 text-white shadow-2xs'
                   : 'bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700'
@@ -603,8 +621,9 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
 
             {(onlyPromo || onlyAvailable || onlyRomanian || onlyBio || selectedCategory !== 'toate' || searchQuery || selectedBrand !== 'toate' || selectedRetailer !== 'toate') && (
               <button
+                type="button"
                 onClick={handleResetFilters}
-                className="px-2.5 py-1.5 text-xs text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 font-semibold flex items-center gap-1 cursor-pointer"
+                className="min-h-[40px] sm:min-h-[34px] px-2.5 py-1.5 text-xs text-rose-600 dark:text-rose-400 hover:text-rose-800 dark:hover:text-rose-300 font-semibold flex items-center gap-1 cursor-pointer"
                 title="Resetează toate filtrele"
               >
                 <RotateCcw className="w-3 h-3" /> Resetează filtre
@@ -612,92 +631,90 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <label htmlFor="retailer-filter" className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
-              Retailer:
-            </label>
-            <select
-              id="retailer-filter"
-              value={selectedRetailer}
-              onChange={e => {
-                setSelectedRetailer(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-            >
-              <option value="toate">Toți retailerii</option>
-              {STORES.map(store => (
-                <option key={store.id} value={store.id}>{store.name}</option>
-              ))}
-            </select>
-          </div>
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            <div className="flex items-center gap-2 flex-1 sm:flex-initial min-w-[160px]">
+              <label htmlFor="retailer-filter" className="text-xs font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                Retailer:
+              </label>
+              <select
+                id="retailer-filter"
+                value={selectedRetailer}
+                onChange={e => {
+                  setSelectedRetailer(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full sm:w-auto min-h-[40px] sm:min-h-[34px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+              >
+                <option value="toate">Toți retailerii</option>
+                {STORES.map(store => (
+                  <option key={store.id} value={store.id}>{store.name}</option>
+                ))}
+              </select>
+            </div>
 
-          {/* Sortare */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1">
-              <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" /> Sortează:
-            </span>
-            <select
-              value={sortBy}
-              onChange={e => {
-                setSortBy(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-            >
-              <option value="relevance">Cele mai populare</option>
-              <option value="price_asc">Cel mai mic preț</option>
-              <option value="price_desc">Cel mai mare preț</option>
-              <option value="freshness">Actualitatea datelor</option>
-              <option value="retailers_count">Cele mai multe magazine</option>
-            </select>
+            {/* Sortare */}
+            <div className="flex items-center gap-2 flex-1 sm:flex-initial min-w-[160px]">
+              <label htmlFor="sort-by-select" className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1 whitespace-nowrap">
+                <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" /> Sortează:
+              </label>
+              <select
+                id="sort-by-select"
+                value={sortBy}
+                onChange={e => {
+                  setSortBy(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full sm:w-auto min-h-[40px] sm:min-h-[34px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+              >
+                <option value="relevance">Cele mai populare</option>
+                <option value="price_asc">Cel mai mic preț</option>
+                <option value="price_desc">Cel mai mare preț</option>
+                <option value="freshness">Actualitatea datelor</option>
+                <option value="retailers_count">Cele mai multe magazine</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
 
+      {apiFallbackNotice && (
+        <ErrorState
+          variant="partial"
+          compact
+          message={apiFallbackNotice}
+          onRetry={() => setRetryNonce(n => n + 1)}
+          className="mb-6"
+        />
+      )}
+
       {/* Grid Produse */}
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="animate-pulse bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 h-[340px] flex flex-col justify-between">
-              <div className="h-36 bg-slate-100 dark:bg-slate-800 rounded-xl mb-3"></div>
-              <div className="space-y-2">
-                <div className="h-3 bg-slate-100 dark:bg-slate-800 rounded w-1/3"></div>
-                <div className="h-4 bg-slate-100 dark:bg-slate-800 rounded w-4/5"></div>
-              </div>
-              <div className="h-10 bg-slate-100 dark:bg-slate-800 rounded-xl mt-4"></div>
-            </div>
-          ))}
-        </div>
+        <LoadingState variant="skeleton-grid" cardsCount={8} message="Se încarcă produsele din catalog..." />
       ) : productsData.products.length === 0 ? (
-        <div className="py-16 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-8">
-          <ShoppingBag className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
-          <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">Nu am găsit niciun produs conform filtrelor</h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto mt-1 mb-4">
-            Încearcă să resetezi filtrele sau să cauți alt termen pentru a descoperi catalogul disponibil.
-          </p>
-          <button
-            type="button"
-            onClick={handleResetFilters}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 dark:bg-emerald-600 text-white text-xs font-bold hover:bg-slate-800 dark:hover:bg-emerald-500 cursor-pointer"
-          >
-            <RotateCcw className="w-3.5 h-3.5" /> Resetează toate filtrele
-          </button>
-        </div>
+        <EmptyState
+          icon={<ShoppingBag className="w-6 h-6" />}
+          title="Nu am găsit niciun produs conform filtrelor"
+          description="Încearcă să resetezi filtrele sau să cauți alt termen pentru a descoperi catalogul disponibil."
+          actionLabel="Resetează toate filtrele"
+          onAction={handleResetFilters}
+        />
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-5">
           {productsData.products.map(product => {
             const hasOffers = product.offersCount > 0 && product.minPrice !== null;
             const lowestStore = product.lowestStoreId ? storeMap.get(product.lowestStoreId) : null;
             const safeImageSrc = getSafeProductImageSrc(product.imageUrl);
 
             return (
-              <div
+              <article
                 key={product.id}
-                onClick={() => onSelectProduct(product.id)}
-                className="group surface-card surface-card-interactive rounded-2xl p-4 flex flex-col justify-between cursor-pointer"
+                className="group surface-card surface-card-interactive rounded-2xl p-4 flex flex-col justify-between"
               >
-                <div>
+                <button
+                  type="button"
+                  onClick={() => onSelectProduct(product.id)}
+                  className="text-left w-full cursor-pointer focus-visible:rounded-xl"
+                >
                   {/* Imagine Produs (lead with clean neutral image stage) */}
                   <div className="h-36 w-full bg-slate-50/90 dark:bg-slate-800/70 rounded-xl flex items-center justify-center p-3 mb-3.5 overflow-hidden">
                     {safeImageSrc && !failedImageIds.has(product.id) ? (
@@ -740,7 +757,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                   <h3 className="font-semibold text-[15px] text-slate-900 dark:text-slate-100 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 line-clamp-2 leading-snug transition-colors">
                     {product.name}
                   </h3>
-                </div>
+                </button>
 
                 {/* Preț & Retaileri */}
                 <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -766,7 +783,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                         )}
                       </div>
 
-                      {/* Clean unboxed metadata */}
+                      {/* Clean unboxed metadata + status */}
                       <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
                         <span className="font-medium text-slate-600 dark:text-slate-300">
                           {product.offersCount} {product.offersCount === 1 ? 'magazin' : 'magazine'}
@@ -783,22 +800,12 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                             <span className="text-amber-700 dark:text-amber-400 font-medium">Card</span>
                           </>
                         )}
-                        {product.qualityLabelRo && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span
-                              title={product.qualityScore ? `Scor calitate: ${product.qualityScore}/100` : undefined}
-                              className={
-                                product.qualityStatus === 'VERIFIED_RECENTLY' || product.qualityStatus === 'VERIFIED'
-                                  ? 'text-emerald-700 dark:text-emerald-400 font-medium'
-                                  : product.qualityStatus === 'STALE'
-                                  ? 'text-amber-700 dark:text-amber-400 font-medium'
-                                  : 'text-slate-500 dark:text-slate-400'
-                              }
-                            >
-                              {product.qualityLabelRo}
-                            </span>
-                          </>
+                        {product.qualityStatus && (
+                          <QualityStatusBadge
+                            status={product.qualityStatus}
+                            compact
+                            className="ml-auto"
+                          />
                         )}
                       </div>
                     </div>
@@ -817,11 +824,8 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                   <div className="mt-3 flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={e => {
-                        e.stopPropagation();
-                        onSelectProduct(product.id);
-                      }}
-                      className="flex-1 py-2 px-3 rounded-xl bg-slate-900 dark:bg-slate-800 group-hover:bg-emerald-600 dark:group-hover:bg-emerald-600 text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap"
+                      onClick={() => onSelectProduct(product.id)}
+                      className="flex-1 min-h-[42px] py-2 px-3 rounded-xl bg-slate-900 dark:bg-slate-800 group-hover:bg-emerald-600 dark:group-hover:bg-emerald-600 text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap"
                     >
                       <span>Compară prețuri</span>
                       <ChevronRight className="w-3.5 h-3.5" />
@@ -833,7 +837,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                           type="button"
                           onClick={e => { void handleQuickAdd(e, product); }}
                           aria-label={`Adaugă ${product.name} în lista mea`}
-                          className={`p-2 rounded-xl border transition-colors cursor-pointer ${
+                          className={`min-h-[42px] min-w-[42px] flex items-center justify-center p-2 rounded-xl border transition-colors cursor-pointer ${
                             inList
                               ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60'
                               : 'border-slate-200 dark:border-slate-700 hover:border-emerald-300 dark:hover:border-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-slate-700 dark:text-slate-200'
@@ -846,7 +850,7 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
                     })()}
                   </div>
                 </div>
-              </div>
+              </article>
             );
           })}
         </div>
@@ -854,18 +858,19 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
 
       {/* Paginare */}
       {productsData.totalPages > 1 && (
-        <div className="mt-8 flex items-center justify-center gap-2">
+        <nav aria-label="Paginare catalog" className="mt-8 flex items-center justify-center gap-2">
           <button
+            type="button"
             onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
             disabled={currentPage === 1}
-            className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 disabled:opacity-30 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            aria-label="Pagina anterioară"
+            className="min-w-[42px] min-h-[42px] flex items-center justify-center p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 disabled:opacity-30 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
 
           {Array.from({ length: productsData.totalPages }).map((_, i) => {
             const pageNumber = i + 1;
-            // Show first, last, and current neighbors
             if (
               pageNumber === 1 ||
               pageNumber === productsData.totalPages ||
@@ -874,8 +879,11 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
               return (
                 <button
                   key={pageNumber}
+                  type="button"
                   onClick={() => setCurrentPage(pageNumber)}
-                  className={`w-9 h-9 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  aria-current={currentPage === pageNumber ? 'page' : undefined}
+                  aria-label={`Pagina ${pageNumber}`}
+                  className={`min-w-[42px] min-h-[42px] rounded-xl text-xs font-bold transition-all cursor-pointer tabular-nums ${
                     currentPage === pageNumber
                       ? 'bg-emerald-600 text-white shadow-xs'
                       : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -894,13 +902,15 @@ export const ProductsView: React.FC<ProductsViewProps> = ({
           })}
 
           <button
+            type="button"
             onClick={() => setCurrentPage(p => Math.min(productsData.totalPages, p + 1))}
             disabled={currentPage === productsData.totalPages}
-            className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 disabled:opacity-30 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            aria-label="Pagina următoare"
+            className="min-w-[42px] min-h-[42px] flex items-center justify-center p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 disabled:opacity-30 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <ChevronRight className="w-4 h-4" />
           </button>
-        </div>
+        </nav>
       )}
     </div>
   );

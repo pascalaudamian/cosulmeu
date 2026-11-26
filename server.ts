@@ -24,7 +24,7 @@ import { CatalogParserEngine } from './src/indexing/catalog/CatalogParserEngine.
 import { CatalogSourceDiscovery } from './src/indexing/catalog/CatalogSourceDiscovery.ts';
 import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingManager.ts';
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
-import { Product, ProductOffer, Receipt, Store, PriceAlert, InAppPriceNotification, RetailerProductRecord } from './src/types.ts';
+import { Product, ProductOffer, Receipt, Store, PriceAlert, PriceAlertType, PriceAlertRearmState, PriceAlertTriggerEvent, PriceDataQualityStatus, InAppPriceNotification, RetailerProductRecord } from './src/types.ts';
 import { createHash } from 'node:crypto';
 import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 import { validatePublicHttpUrl } from './src/utils/urlSecurity.ts';
@@ -99,6 +99,16 @@ import {
   resolveCanonicalProductId,
   resolveProductReferenceMap
 } from './src/services/ProductIdentityService.ts';
+import { PriceQualityMonitoringService } from './src/services/PriceQualityMonitoringService.ts';
+import {
+  qualityMonitoringAnomaliesQuerySchema,
+  qualityMonitoringExportQuerySchema,
+  qualityMonitoringHistoryQuerySchema,
+  qualityMonitoringInvestigateSchema,
+  qualityMonitoringOverviewQuerySchema,
+  qualityMonitoringRecordsQuerySchema,
+  qualityMonitoringRunSchema
+} from './src/server/validation.ts';
 
 function sanitizeApiImageUrl(rawUrl?: string | null): string | undefined {
   if (!rawUrl || !rawUrl.trim()) return undefined;
@@ -190,6 +200,12 @@ const publicReportLimiter = createRateLimiter({
   windowMs: 60_000,
   maxRequests: 25,
   messageRo: 'Ai trimis prea multe raportări consecutive. Te rugăm să aștepți un minut.'
+});
+
+const adminQualityLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 60,
+  messageRo: 'Prea multe interogări pe monitorizarea calității. Reîncearcă în câteva secunde.'
 });
 
 // Lazy non-blocking database initialization if configured
@@ -2866,6 +2882,116 @@ app.get('/api/basket/optimize/:listId', publicComputeLimiter, async (req, res) =
 // Authenticated, RLS-enforced Price Alerts & In-App Notifications API
 // =========================================================================
 
+const alertEvalQueueByUser = new Map<string, Promise<unknown>>();
+
+function withUserAlertEvaluationLock<T>(userId: string, task: () => Promise<T>): Promise<T> {
+  const previous = alertEvalQueueByUser.get(userId) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => task());
+  const marker = next.then(
+    () => undefined,
+    () => undefined
+  );
+  alertEvalQueueByUser.set(userId, marker);
+  marker.finally(() => {
+    if (alertEvalQueueByUser.get(userId) === marker) {
+      alertEvalQueueByUser.delete(userId);
+    }
+  });
+  return next;
+}
+
+function parseAlertTypeValue(raw: unknown): PriceAlertType {
+  const str = String(raw || '').trim();
+  if (str === 'any_drop' || str === 'interval_low' || str === 'product_watch') {
+    return str;
+  }
+  return 'below_target';
+}
+
+function parseRearmStateValue(raw: unknown): PriceAlertRearmState {
+  return String(raw || '').trim() === 'triggered_locked' ? 'triggered_locked' : 'armed';
+}
+
+function parseTriggerHistoryValue(raw: unknown): PriceAlertTriggerEvent[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const cleaned = raw.filter(item => item && typeof item === 'object' && typeof (item as any).reasonRo === 'string');
+  return cleaned.slice(0, 25) as PriceAlertTriggerEvent[];
+}
+
+function buildPriceAlertMetaEntry(alert: PriceAlert): Record<string, unknown> {
+  return {
+    alertType: alert.alertType || 'below_target',
+    intervalDays: alert.intervalDays ?? null,
+    minDropPercent: alert.minDropPercent ?? null,
+    cooldownHours: alert.cooldownHours ?? null,
+    rearmState: alert.rearmState || 'armed',
+    triggerCycle: alert.triggerCycle ?? 0,
+    sourceListId: alert.sourceListId || null,
+    lastTriggeredAt: alert.lastTriggeredAt || null,
+    lastTriggeredPrice: alert.lastTriggeredPrice ?? null,
+    lastEvaluatedPrice: alert.lastEvaluatedPrice ?? null,
+    lastNotifiedKey: alert.lastNotifiedKey || null,
+    lastTriggerReasonRo: alert.lastTriggerReasonRo || null,
+    lastSourceOfferId: alert.lastSourceOfferId || null,
+    lastSourceQualityStatus: alert.lastSourceQualityStatus || null,
+    lastRearmedAt: alert.lastRearmedAt || null,
+    lastSkippedReasonRo: alert.lastSkippedReasonRo || null,
+    triggerHistory: Array.isArray(alert.triggerHistory) ? alert.triggerHistory.slice(0, 25) : []
+  };
+}
+
+async function loadUserAlertMetaMap(
+  userClient: SupabaseClient,
+  userId: string
+): Promise<{ preferences: Record<string, any>; metaById: Record<string, any> }> {
+  try {
+    const profileRes = await userClient
+      .from('profiles')
+      .select('preferences')
+      .eq('id', userId)
+      .maybeSingle();
+    const prefs =
+      profileRes.data?.preferences && typeof profileRes.data.preferences === 'object'
+        ? (profileRes.data.preferences as Record<string, any>)
+        : {};
+    const metaById =
+      prefs.priceAlertMeta && typeof prefs.priceAlertMeta === 'object'
+        ? (prefs.priceAlertMeta as Record<string, any>)
+        : {};
+    return { preferences: prefs, metaById };
+  } catch {
+    return { preferences: {}, metaById: {} };
+  }
+}
+
+async function saveUserAlertMetaEntriesBestEffort(
+  userClient: SupabaseClient,
+  userId: string,
+  alertsToStore: PriceAlert[],
+  existingPrefs?: Record<string, any>,
+  removeAlertIds?: string[]
+): Promise<void> {
+  try {
+    const basePrefs = existingPrefs ?? (await loadUserAlertMetaMap(userClient, userId)).preferences;
+    const prevMeta =
+      basePrefs.priceAlertMeta && typeof basePrefs.priceAlertMeta === 'object'
+        ? { ...(basePrefs.priceAlertMeta as Record<string, any>) }
+        : {};
+    for (const a of alertsToStore) {
+      prevMeta[a.id] = buildPriceAlertMetaEntry(a);
+    }
+    if (Array.isArray(removeAlertIds)) {
+      for (const remId of removeAlertIds) {
+        delete prevMeta[remId];
+      }
+    }
+    const nextPrefs = { ...basePrefs, priceAlertMeta: prevMeta };
+    await userClient.from('profiles').update({ preferences: nextPrefs }).eq('id', userId);
+  } catch {
+    // Non-blocking metadata mirror when 014 columns are pending or mock omits profiles update
+  }
+}
+
 function mapDbAlertRow(
   row: Record<string, any>,
   productById: Map<string, Product>,
@@ -2884,15 +3010,23 @@ function mapDbAlertRow(
       : (detail?.found && detail.canonicalId ? detail.canonicalId : rawProductId);
   const product = isInvalidRef ? undefined : (productById.get(productId) || productById.get(rawProductId));
   const meta = (metaById[id] && typeof metaById[id] === 'object' ? metaById[id] : {}) as Record<string, any>;
-  const rawType = String(row.alert_type ?? meta.alertType ?? 'below_target');
-  const alertType: PriceAlert['alertType'] =
-    rawType === 'any_drop' || rawType === 'interval_low' ? rawType : 'below_target';
+  // Prioritizăm meta.alertType pentru product_watch când 014 nu e încă aplicat în DB (unde alert_type e stocat ca any_drop)
+  const metaType = meta.alertType ? parseAlertTypeValue(meta.alertType) : undefined;
+  const dbType = row.alert_type != null ? parseAlertTypeValue(row.alert_type) : undefined;
+  const alertType: PriceAlertType =
+    metaType === 'product_watch' && dbType === 'any_drop'
+      ? 'product_watch'
+      : (dbType || metaType || 'below_target');
   const rawInterval = Number(row.interval_days ?? meta.intervalDays);
   const intervalDays =
     alertType === 'interval_low' && [30, 90, 180, 365].includes(rawInterval)
       ? (rawInterval as PriceAlert['intervalDays'])
       : undefined;
   const offerInfo = isInvalidRef ? undefined : (lowestOfferByProductId.get(productId) || lowestOfferByProductId.get(rawProductId));
+
+  const minDropRaw = row.min_drop_percent ?? meta.minDropPercent;
+  const cooldownRaw = row.cooldown_hours ?? meta.cooldownHours;
+  const triggerCycleRaw = row.trigger_cycle ?? meta.triggerCycle;
 
   return {
     id,
@@ -2905,8 +3039,12 @@ function mapDbAlertRow(
     isActive: Boolean(row.is_active),
     alertType,
     intervalDays,
+    minDropPercent: minDropRaw != null ? Number(minDropRaw) : undefined,
+    cooldownHours: cooldownRaw != null ? Number(cooldownRaw) : undefined,
+    rearmState: parseRearmStateValue(row.rearm_state ?? meta.rearmState),
+    triggerCycle: triggerCycleRaw != null ? Number(triggerCycleRaw) : 0,
     sourceListId: (row.source_list_id || meta.sourceListId || undefined) as string | undefined,
-    lastTriggeredAt: (row.last_triggered_at || meta.lastTriggeredAt || undefined) as string | undefined,
+    lastTriggeredAt: (row.last_triggered_at ?? meta.lastTriggeredAt ?? undefined) as string | undefined,
     lastTriggeredPrice:
       row.last_triggered_price != null
         ? Number(row.last_triggered_price)
@@ -2919,12 +3057,30 @@ function mapDbAlertRow(
         : meta.lastEvaluatedPrice != null
           ? Number(meta.lastEvaluatedPrice)
           : undefined,
-    lastNotifiedKey: (row.last_notified_key || meta.lastNotifiedKey || undefined) as string | undefined
+    lastNotifiedKey: (row.last_notified_key ?? meta.lastNotifiedKey ?? undefined) as string | undefined,
+    lastTriggerReasonRo: (row.last_trigger_reason_ro ?? meta.lastTriggerReasonRo ?? undefined) as string | undefined,
+    lastSourceOfferId: (row.last_source_offer_id ?? meta.lastSourceOfferId ?? undefined) as string | undefined,
+    lastSourceQualityStatus: (row.last_source_quality_status ?? meta.lastSourceQualityStatus ?? undefined) as
+      | PriceDataQualityStatus
+      | undefined,
+    lastRearmedAt: (row.last_rearmed_at ?? meta.lastRearmedAt ?? undefined) as string | undefined,
+    lastSkippedReasonRo: (row.last_skipped_reason_ro ?? meta.lastSkippedReasonRo ?? undefined) as string | undefined,
+    triggerHistory: parseTriggerHistoryValue(row.trigger_history ?? meta.triggerHistory)
   };
 }
 
 async function fetchUserAlertsRls(userClient: SupabaseClient, userId: string) {
-  const extended = await userClient
+  const faza4 = await userClient
+    .from('price_alerts')
+    .select(
+      'id,user_id,product_id,target_price,is_active,created_at,alert_type,interval_days,source_list_id,last_triggered_at,last_triggered_price,last_evaluated_price,last_notified_key,min_drop_percent,cooldown_hours,rearm_state,trigger_cycle,last_trigger_reason_ro,last_source_offer_id,last_source_quality_status,last_rearmed_at,last_skipped_reason_ro,trigger_history'
+    )
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (!faza4.error) return faza4;
+
+  const v1 = await userClient
     .from('price_alerts')
     .select(
       'id,user_id,product_id,target_price,is_active,created_at,alert_type,interval_days,source_list_id,last_triggered_at,last_triggered_price,last_evaluated_price,last_notified_key'
@@ -2932,7 +3088,8 @@ async function fetchUserAlertsRls(userClient: SupabaseClient, userId: string) {
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
-  if (!extended.error) return extended;
+  if (!v1.error) return v1;
+
   return userClient
     .from('price_alerts')
     .select('id,user_id,product_id,target_price,is_active,created_at')
@@ -2966,31 +3123,50 @@ async function fetchUserNotificationsRls(
   aliasIndex?: ReturnType<typeof buildCanonicalAliasIndex>
 ): Promise<InAppPriceNotification[]> {
   try {
-    const { data, error } = await userClient
+    let queryRes = await userClient
       .from('price_alert_notifications')
       .select(
-        'id,alert_id,dedupe_key,product_id,product_name,alert_type,title,message,observed_price,previous_price,target_price,store_id,store_name,triggered_at,is_read'
+        'id,alert_id,dedupe_key,idempotency_key,product_id,product_name,alert_type,title,message,reason_ro,observed_price,previous_price,target_price,store_id,store_name,source_offer_id,quality_status,observed_interval_days,observed_observations_count,trigger_cycle,triggered_at,is_read'
       )
       .eq('user_id', userId)
       .order('triggered_at', { ascending: false })
       .limit(100);
-    if (error || !Array.isArray(data)) return [];
-    const mapped = data.map(row => ({
+
+    if (queryRes.error) {
+      queryRes = (await userClient
+        .from('price_alert_notifications')
+        .select(
+          'id,alert_id,dedupe_key,product_id,product_name,alert_type,title,message,observed_price,previous_price,target_price,store_id,store_name,triggered_at,is_read'
+        )
+        .eq('user_id', userId)
+        .order('triggered_at', { ascending: false })
+        .limit(100)) as typeof queryRes;
+    }
+
+    if (queryRes.error || !Array.isArray(queryRes.data)) return [];
+    const mapped: InAppPriceNotification[] = queryRes.data.map(row => ({
       id: String(row.id),
       alertId: String(row.alert_id),
       dedupeKey: String(row.dedupe_key),
+      idempotencyKey: row.idempotency_key ? String(row.idempotency_key) : undefined,
       productId: String(row.product_id),
       productName: String(row.product_name || 'Produs'),
-      alertType: (row.alert_type === 'any_drop' || row.alert_type === 'interval_low'
-        ? row.alert_type
-        : 'below_target') as PriceAlert['alertType'] & string,
+      alertType: parseAlertTypeValue(row.alert_type),
       title: String(row.title || 'Alertă de preț'),
       message: String(row.message || ''),
+      reasonRo: row.reason_ro ? String(row.reason_ro) : undefined,
       observedPrice: Number(row.observed_price || 0),
       previousPrice: row.previous_price != null ? Number(row.previous_price) : undefined,
       targetPrice: row.target_price != null ? Number(row.target_price) : undefined,
       storeId: String(row.store_id || 'store'),
       storeName: String(row.store_name || 'Magazin'),
+      sourceOfferId: row.source_offer_id ? String(row.source_offer_id) : undefined,
+      qualityStatus: row.quality_status ? (String(row.quality_status) as PriceDataQualityStatus) : undefined,
+      observedIntervalDays:
+        row.observed_interval_days != null ? (Number(row.observed_interval_days) as 30 | 90 | 180 | 365) : undefined,
+      observedObservationsCount:
+        row.observed_observations_count != null ? Number(row.observed_observations_count) : undefined,
+      triggerCycle: row.trigger_cycle != null ? Number(row.trigger_cycle) : undefined,
       triggeredAt: String(row.triggered_at || new Date().toISOString()),
       isRead: Boolean(row.is_read)
     }));
@@ -3009,10 +3185,10 @@ app.get('/api/alerts', async (req, res) => {
     }
 
     const useDbCatalog = isPostgresConfigured() || process.env.COSUL_MEU_ISOLATED_TEST === '1';
-    const [alertsRes, notifications, profileRes, products, offers, aliasIndex] = await Promise.all([
+    const [alertsRes, notifications, profileMeta, products, offers, aliasIndex] = await Promise.all([
       fetchUserAlertsRls(auth.userClient, auth.user.id),
       fetchUserNotificationsRls(auth.userClient, auth.user.id),
-      auth.userClient.from('profiles').select('preferences').eq('id', auth.user.id).maybeSingle(),
+      loadUserAlertMetaMap(auth.userClient, auth.user.id),
       useDbCatalog ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
       useDbCatalog ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
       loadServerProductAliasIndex()
@@ -3023,29 +3199,29 @@ app.get('/api/alerts', async (req, res) => {
     }
     const normalizedNotifications = normalizeNotificationsCanonicalIdentity(notifications, aliasIndex);
     const productById = new Map(products.map(p => [p.id, p]));
+    const now = new Date();
     const lowestOfferByProductId = new Map<string, { price: number; storeId: string }>();
     for (const offer of offers) {
       const offerDetail = resolveCanonicalProductDetail(offer.productId, aliasIndex);
       if (offerDetail.cycleDetected || (offerDetail.wasAlias && !offerDetail.found)) continue;
       const canonicalOfferPid = offerDetail.found && offerDetail.canonicalId ? offerDetail.canonicalId : offer.productId;
       const prod = productById.get(canonicalOfferPid) || productById.get(offer.productId);
-      if (!PriceComparisonService.isOfferValid(offer, prod, { aliasMap: aliasIndex })) continue;
+      const eligibility = PriceAlertService.evaluateOfferEligibility(
+        offer,
+        prod,
+        canonicalOfferPid,
+        aliasIndex,
+        now
+      );
+      if (!eligibility.eligible) continue;
       const prev = lowestOfferByProductId.get(canonicalOfferPid);
       if (!prev || offer.price < prev.price) {
         lowestOfferByProductId.set(canonicalOfferPid, { price: offer.price, storeId: offer.storeId });
       }
     }
 
-    const metaById =
-      profileRes.data?.preferences &&
-      typeof profileRes.data.preferences === 'object' &&
-      profileRes.data.preferences.priceAlertMeta &&
-      typeof profileRes.data.preferences.priceAlertMeta === 'object'
-        ? (profileRes.data.preferences.priceAlertMeta as Record<string, any>)
-        : {};
-
     const alerts = (alertsRes.data || []).map(row =>
-      mapDbAlertRow(row, productById, lowestOfferByProductId, metaById, aliasIndex)
+      mapDbAlertRow(row, productById, lowestOfferByProductId, profileMeta.metaById, aliasIndex)
     );
 
     return res.json({ success: true, alerts, notifications: normalizedNotifications });
@@ -3070,14 +3246,19 @@ app.post('/api/alerts', async (req, res) => {
       });
     }
 
-    const { productId, alertType, targetPrice, intervalDays, sourceListId } = parsed.data;
+    const { productId, alertType, targetPrice, intervalDays, minDropPercent, cooldownHours, sourceListId } = parsed.data;
     const useDbCatalog = isPostgresConfigured() || process.env.COSUL_MEU_ISOLATED_TEST === '1';
-    const [products, offers, existingRes, aliasIndex] = await Promise.all([
+    const [products, offers, existingRes, profileMeta, aliasIndex] = await Promise.all([
       useDbCatalog ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
       useDbCatalog ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
       fetchUserAlertsRls(auth.userClient, auth.user.id),
+      loadUserAlertMetaMap(auth.userClient, auth.user.id),
       loadServerProductAliasIndex()
     ]);
+
+    if (existingRes.error) {
+      return res.status(500).json({ success: false, error: 'Nu am putut verifica alertele existente.' });
+    }
 
     const detail = resolveCanonicalProductDetail(productId, aliasIndex);
     if (detail.cycleDetected) {
@@ -3103,13 +3284,23 @@ app.post('/api/alerts', async (req, res) => {
     const existingAlerts = existingRes.data || [];
     const normalizedInterval = alertType === 'interval_low' ? (intervalDays || 90) : null;
     const isDuplicate = existingAlerts.some(row => {
-      const rawRowPid = String(row.product_id || '');
+      const rawRow = row as Record<string, any>;
+      const rawRowPid = String(rawRow.product_id || '');
       const rowDetail = resolveCanonicalProductDetail(rawRowPid, aliasIndex);
       if (rowDetail.cycleDetected || (rowDetail.wasAlias && !rowDetail.found)) return false;
       const rowCanonicalId = rowDetail.found && rowDetail.canonicalId ? rowDetail.canonicalId : rawRowPid;
-      const rowType = String((row as any).alert_type || 'below_target');
-      const rowInterval = (row as any).interval_days != null ? Number((row as any).interval_days) : null;
-      return rowCanonicalId === canonicalProductId && rowType === alertType && (alertType !== 'interval_low' || rowInterval === normalizedInterval);
+      const rowMeta = profileMeta.metaById[String(rawRow.id || '')] as Record<string, any> | undefined;
+      const rowType =
+        rowMeta?.alertType === 'product_watch' && rawRow.alert_type === 'any_drop'
+          ? 'product_watch'
+          : parseAlertTypeValue(rawRow.alert_type ?? rowMeta?.alertType);
+      const rowIntervalRaw = rawRow.interval_days ?? rowMeta?.intervalDays;
+      const rowInterval = rowIntervalRaw != null ? Number(rowIntervalRaw) : null;
+      return (
+        rowCanonicalId === canonicalProductId &&
+        rowType === alertType &&
+        (alertType !== 'interval_low' || rowInterval === normalizedInterval)
+      );
     });
     if (isDuplicate) {
       return res.status(409).json({
@@ -3118,27 +3309,34 @@ app.post('/api/alerts', async (req, res) => {
       });
     }
 
+    const now = new Date();
     const equivalentIds = new Set(collectProductIdsForCanonical(canonicalProductId, aliasIndex));
     const validOffers = offers
       .filter(o => {
         const offerDetail = resolveCanonicalProductDetail(o.productId, aliasIndex);
         if (offerDetail.cycleDetected || (offerDetail.wasAlias && !offerDetail.found)) return false;
         const offerCanonicalPid = offerDetail.found && offerDetail.canonicalId ? offerDetail.canonicalId : o.productId;
-        return (
-          (offerCanonicalPid === canonicalProductId || equivalentIds.has(o.productId)) &&
-          PriceComparisonService.isOfferValid(o, product, { aliasMap: aliasIndex })
-        );
+        if (offerCanonicalPid !== canonicalProductId && !equivalentIds.has(o.productId)) return false;
+        return PriceAlertService.evaluateOfferEligibility(o, product, canonicalProductId, aliasIndex, now).eligible;
       })
       .sort((a, b) => a.price - b.price);
     const bestOffer = validOffers[0];
     const effectiveTarget =
       alertType === 'below_target'
         ? Number(targetPrice)
-        : Math.max(0.01, bestOffer?.price ?? product.baseReferencePrice ?? 1);
+        : alertType === 'product_watch'
+          ? 0
+          : Math.max(0.01, bestOffer?.price ?? product.baseReferencePrice ?? 1);
+    const effectiveMinDropPct =
+      minDropPercent ??
+      (alertType === 'product_watch' || alertType === 'any_drop'
+        ? PriceAlertService.getDefaultMinDropPercent(alertType)
+        : undefined);
+    const effectiveCooldownHours = cooldownHours ?? PriceAlertService.getDefaultCooldownHours(alertType);
 
     const newId = crypto.randomUUID();
-    const nowIso = new Date().toISOString();
-    const extendedInsert = {
+    const nowIso = now.toISOString();
+    const faza4Insert = {
       id: newId,
       user_id: auth.user.id,
       product_id: canonicalProductId,
@@ -3148,10 +3346,31 @@ app.post('/api/alerts', async (req, res) => {
       alert_type: alertType,
       interval_days: normalizedInterval,
       source_list_id: sourceListId || null,
-      last_evaluated_price: bestOffer?.price ?? null
+      last_evaluated_price: bestOffer?.price ?? null,
+      min_drop_percent: effectiveMinDropPct ?? null,
+      cooldown_hours: effectiveCooldownHours,
+      rearm_state: 'armed',
+      trigger_cycle: 0,
+      trigger_history: []
     };
 
-    let insertRes = await auth.userClient.from('price_alerts').insert(extendedInsert).select().single();
+    let insertRes = await auth.userClient.from('price_alerts').insert(faza4Insert).select().single();
+    if (insertRes.error) {
+      // Fallback 012 (schema 012 nu acceptă încă 'product_watch' în constraint sau coloanele 014)
+      const v12Insert = {
+        id: newId,
+        user_id: auth.user.id,
+        product_id: canonicalProductId,
+        target_price: effectiveTarget,
+        is_active: true,
+        created_at: nowIso,
+        alert_type: alertType === 'product_watch' ? 'any_drop' : alertType,
+        interval_days: normalizedInterval,
+        source_list_id: sourceListId || null,
+        last_evaluated_price: bestOffer?.price ?? null
+      };
+      insertRes = await auth.userClient.from('price_alerts').insert(v12Insert).select().single();
+    }
     if (insertRes.error) {
       insertRes = await auth.userClient
         .from('price_alerts')
@@ -3182,9 +3401,16 @@ app.post('/api/alerts', async (req, res) => {
       isActive: true,
       alertType,
       intervalDays: normalizedInterval as PriceAlert['intervalDays'],
+      minDropPercent: effectiveMinDropPct,
+      cooldownHours: effectiveCooldownHours,
+      rearmState: 'armed',
+      triggerCycle: 0,
+      triggerHistory: [],
       sourceListId,
       lastEvaluatedPrice: bestOffer?.price
     };
+
+    await saveUserAlertMetaEntriesBestEffort(auth.userClient, auth.user.id, [alert], profileMeta.preferences);
 
     return res.status(201).json({ success: true, alert });
   } catch {
@@ -3219,16 +3445,17 @@ app.post('/api/alerts/from-list/:listId', async (req, res) => {
     }
 
     const useDbCatalog = isPostgresConfigured() || process.env.COSUL_MEU_ISOLATED_TEST === '1';
-    const [products, offers, existingAlertsRes, aliasIndex] = await Promise.all([
+    const [products, offers, existingAlertsRes, profileMeta, aliasIndex] = await Promise.all([
       useDbCatalog ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
       useDbCatalog ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
       fetchUserAlertsRls(auth.userClient, auth.user.id),
+      loadUserAlertMetaMap(auth.userClient, auth.user.id),
       loadServerProductAliasIndex()
     ]);
 
     const productById = new Map(products.map(p => [p.id, p]));
     const existingAlerts = (existingAlertsRes.data || []).map(row =>
-      mapDbAlertRow(row, productById, new Map(), {}, aliasIndex)
+      mapDbAlertRow(row, productById, new Map(), profileMeta.metaById, aliasIndex)
     );
 
     const { createdAlerts, skippedExistingCount, unmatchedItemNames } =
@@ -3253,6 +3480,7 @@ app.post('/api/alerts/from-list/:listId', async (req, res) => {
     for (const candidate of createdAlerts) {
       const uuid = crypto.randomUUID();
       const nowIso = new Date().toISOString();
+      const candidateType = candidate.alertType || 'below_target';
       let ins = await auth.userClient
         .from('price_alerts')
         .insert({
@@ -3262,13 +3490,37 @@ app.post('/api/alerts/from-list/:listId', async (req, res) => {
           target_price: candidate.targetPrice,
           is_active: true,
           created_at: nowIso,
-          alert_type: candidate.alertType || 'below_target',
+          alert_type: candidateType,
           interval_days: candidate.intervalDays ?? null,
           source_list_id: listId,
-          last_evaluated_price: candidate.lastEvaluatedPrice ?? null
+          last_evaluated_price: candidate.lastEvaluatedPrice ?? null,
+          min_drop_percent: candidate.minDropPercent ?? null,
+          cooldown_hours: candidate.cooldownHours ?? PriceAlertService.getDefaultCooldownHours(candidateType),
+          rearm_state: 'armed',
+          trigger_cycle: 0,
+          trigger_history: []
         })
         .select()
         .single();
+
+      if (ins.error) {
+        ins = await auth.userClient
+          .from('price_alerts')
+          .insert({
+            id: uuid,
+            user_id: auth.user.id,
+            product_id: candidate.productId,
+            target_price: candidate.targetPrice,
+            is_active: true,
+            created_at: nowIso,
+            alert_type: candidateType === 'product_watch' ? 'any_drop' : candidateType,
+            interval_days: candidate.intervalDays ?? null,
+            source_list_id: listId,
+            last_evaluated_price: candidate.lastEvaluatedPrice ?? null
+          })
+          .select()
+          .single();
+      }
 
       if (ins.error) {
         ins = await auth.userClient
@@ -3287,6 +3539,10 @@ app.post('/api/alerts/from-list/:listId', async (req, res) => {
       if (!ins.error) {
         persistedAlerts.push({ ...candidate, id: uuid });
       }
+    }
+
+    if (persistedAlerts.length > 0) {
+      await saveUserAlertMetaEntriesBestEffort(auth.userClient, auth.user.id, persistedAlerts, profileMeta.preferences);
     }
 
     return res.status(201).json({
@@ -3324,7 +3580,7 @@ app.patch('/api/alerts/:id', async (req, res) => {
 
     const { data: ownedRow, error: ownErr } = await auth.userClient
       .from('price_alerts')
-      .select('id, user_id')
+      .select('*')
       .eq('id', id)
       .eq('user_id', auth.user.id)
       .maybeSingle();
@@ -3347,24 +3603,98 @@ app.patch('/api/alerts/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Alerta nu a fost găsită.' });
     }
 
-    const patch: Record<string, unknown> = {};
-    if (parsed.data.isActive !== undefined) patch.is_active = parsed.data.isActive;
-    if (parsed.data.targetPrice !== undefined) patch.target_price = parsed.data.targetPrice;
-    if (parsed.data.alertType !== undefined) patch.alert_type = parsed.data.alertType;
-    if (parsed.data.intervalDays !== undefined) patch.interval_days = parsed.data.intervalDays;
+    const [profileMeta, aliasIndex] = await Promise.all([
+      loadUserAlertMetaMap(auth.userClient, auth.user.id),
+      loadServerProductAliasIndex()
+    ]);
+
+    const currentAlert = mapDbAlertRow(ownedRow, new Map(), new Map(), profileMeta.metaById, aliasIndex);
+    const nextAlertType = parsed.data.alertType ?? currentAlert.alertType ?? 'below_target';
+    const nextInterval =
+      nextAlertType === 'interval_low'
+        ? (parsed.data.intervalDays !== undefined
+            ? (parsed.data.intervalDays ?? 90)
+            : (currentAlert.intervalDays ?? 90))
+        : undefined;
+    const nextTargetPrice =
+      parsed.data.targetPrice !== undefined ? parsed.data.targetPrice : currentAlert.targetPrice;
+    const nextMinDrop =
+      parsed.data.minDropPercent !== undefined
+        ? (parsed.data.minDropPercent ?? undefined)
+        : currentAlert.minDropPercent;
+    const nextCooldown =
+      parsed.data.cooldownHours !== undefined
+        ? (parsed.data.cooldownHours ?? PriceAlertService.getDefaultCooldownHours(nextAlertType))
+        : currentAlert.cooldownHours;
+    const nextActive = parsed.data.isActive !== undefined ? parsed.data.isActive : currentAlert.isActive;
+
+    const ruleChanged =
+      (parsed.data.targetPrice !== undefined && parsed.data.targetPrice !== currentAlert.targetPrice) ||
+      (parsed.data.alertType !== undefined && parsed.data.alertType !== (currentAlert.alertType || 'below_target')) ||
+      (parsed.data.intervalDays !== undefined && parsed.data.intervalDays !== currentAlert.intervalDays) ||
+      (parsed.data.minDropPercent !== undefined && parsed.data.minDropPercent !== currentAlert.minDropPercent) ||
+      (parsed.data.isActive === true && !currentAlert.isActive);
+
+    let nextAlert: PriceAlert = {
+      ...currentAlert,
+      alertType: nextAlertType,
+      intervalDays: nextInterval,
+      targetPrice: nextTargetPrice,
+      minDropPercent: nextMinDrop,
+      cooldownHours: nextCooldown,
+      isActive: nextActive
+    };
+
+    if (ruleChanged) {
+      nextAlert = PriceAlertService.rearmAlertManually(nextAlert);
+    }
+
+    const faza4Patch: Record<string, unknown> = {
+      is_active: nextAlert.isActive,
+      target_price: nextAlert.targetPrice,
+      alert_type: nextAlert.alertType,
+      interval_days: nextAlert.intervalDays ?? null,
+      min_drop_percent: nextAlert.minDropPercent ?? null,
+      cooldown_hours: nextAlert.cooldownHours ?? PriceAlertService.getDefaultCooldownHours(nextAlert.alertType),
+      rearm_state: nextAlert.rearmState || 'armed',
+      last_rearmed_at: nextAlert.lastRearmedAt || null,
+      last_triggered_at: nextAlert.lastTriggeredAt || null,
+      last_notified_key: nextAlert.lastNotifiedKey || null,
+      last_skipped_reason_ro: nextAlert.lastSkippedReasonRo || null,
+      trigger_history: nextAlert.triggerHistory || []
+    };
 
     let upd = await auth.userClient
       .from('price_alerts')
-      .update(patch)
+      .update(faza4Patch)
       .eq('id', id)
       .eq('user_id', auth.user.id)
       .select()
       .single();
 
-    if (upd.error && (patch.target_price !== undefined || patch.is_active !== undefined)) {
-      const basePatch: Record<string, unknown> = {};
-      if (patch.target_price !== undefined) basePatch.target_price = patch.target_price;
-      if (patch.is_active !== undefined) basePatch.is_active = patch.is_active;
+    if (upd.error) {
+      const v12Patch: Record<string, unknown> = {
+        is_active: nextAlert.isActive,
+        target_price: nextAlert.targetPrice,
+        alert_type: nextAlert.alertType === 'product_watch' ? 'any_drop' : nextAlert.alertType,
+        interval_days: nextAlert.intervalDays ?? null,
+        last_triggered_at: nextAlert.lastTriggeredAt || null,
+        last_notified_key: nextAlert.lastNotifiedKey || null
+      };
+      upd = await auth.userClient
+        .from('price_alerts')
+        .update(v12Patch)
+        .eq('id', id)
+        .eq('user_id', auth.user.id)
+        .select()
+        .single();
+    }
+
+    if (upd.error) {
+      const basePatch: Record<string, unknown> = {
+        target_price: nextAlert.targetPrice,
+        is_active: nextAlert.isActive
+      };
       upd = await auth.userClient
         .from('price_alerts')
         .update(basePatch)
@@ -3378,7 +3708,9 @@ app.patch('/api/alerts/:id', async (req, res) => {
       return res.status(500).json({ success: false, error: 'Nu am putut actualiza alerta.' });
     }
 
-    return res.json({ success: true, alert: upd.data });
+    await saveUserAlertMetaEntriesBestEffort(auth.userClient, auth.user.id, [nextAlert], profileMeta.preferences);
+
+    return res.json({ success: true, alert: nextAlert });
   } catch {
     return res.status(500).json({ success: false, error: 'Eroare internă la actualizarea alertei.' });
   }
@@ -3432,6 +3764,8 @@ app.delete('/api/alerts/:id', async (req, res) => {
       return res.status(500).json({ success: false, error: 'Nu am putut șterge alerta.' });
     }
 
+    await saveUserAlertMetaEntriesBestEffort(auth.userClient, auth.user.id, [], undefined, [id]);
+
     return res.json({ success: true, deletedId: id });
   } catch {
     return res.status(500).json({ success: false, error: 'Eroare internă la ștergerea alertei.' });
@@ -3446,27 +3780,63 @@ app.post('/api/alerts/evaluate', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Autentificare necesară.' });
     }
 
-    const useDbCatalog = isPostgresConfigured() || process.env.COSUL_MEU_ISOLATED_TEST === '1';
-    const [alertsRes, existingNotifs, products, offers, stores, aliasIndex] = await Promise.all([
-      fetchUserAlertsRls(auth.userClient, auth.user.id),
-      fetchUserNotificationsRls(auth.userClient, auth.user.id),
-      useDbCatalog ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
-      useDbCatalog ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
-      useDbCatalog ? DatabaseService.getStores() : Promise.resolve(STORES),
-      loadServerProductAliasIndex()
-    ]);
+    const evalResult = await withUserAlertEvaluationLock(auth.user.id, async () => {
+      // Respectăm consimțământul GDPR dacă utilizatorul a dezactivat explicit notificările de preț
+      let alertsOptedOut = false;
+      try {
+        const prefRes = await auth.userClient
+          .from('user_preferences')
+          .select('price_alerts_enabled')
+          .eq('user_id', auth.user.id)
+          .maybeSingle();
+        if (!prefRes.error && prefRes.data && prefRes.data.price_alerts_enabled === false) {
+          alertsOptedOut = true;
+        }
+      } catch {
+        // Ignorăm dacă tabela/coloana nu este prezentă în mediu izolat
+      }
+      if (alertsOptedOut) {
+        return {
+          status: 200,
+          body: {
+            success: true,
+            evaluatedCount: 0,
+            newNotificationsCount: 0,
+            newNotifications: [],
+            skippedReason: 'Notificările de preț sunt dezactivate din preferințele GDPR.'
+          }
+        };
+      }
 
-    if (alertsRes.error) {
-      return res.status(500).json({ success: false, error: 'Nu am putut evalua alertele.' });
-    }
-    const normalizedExistingNotifs = normalizeNotificationsCanonicalIdentity(existingNotifs, aliasIndex);
-    const productById = new Map(products.map(p => [p.id, p]));
-    const currentAlerts = (alertsRes.data || []).map(row => mapDbAlertRow(row, productById, new Map(), {}, aliasIndex));
-    const observationsByProduct = await Promise.all(
-      Array.from(
+      const useDbCatalog = isPostgresConfigured() || process.env.COSUL_MEU_ISOLATED_TEST === '1';
+      const [alertsRes, existingNotifs, profileMeta, products, offers, stores, aliasIndex] = await Promise.all([
+        fetchUserAlertsRls(auth.userClient, auth.user.id),
+        fetchUserNotificationsRls(auth.userClient, auth.user.id),
+        loadUserAlertMetaMap(auth.userClient, auth.user.id),
+        useDbCatalog ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
+        useDbCatalog ? DatabaseService.getOffers() : Promise.resolve(StorageService.getProductOffers()),
+        useDbCatalog ? DatabaseService.getStores() : Promise.resolve(STORES),
+        loadServerProductAliasIndex()
+      ]);
+
+      if (alertsRes.error) {
+        return {
+          status: 500,
+          body: { success: false, error: 'Nu am putut prelua alertele pentru evaluare.' }
+        };
+      }
+
+      const normalizedExistingNotifs = normalizeNotificationsCanonicalIdentity(existingNotifs, aliasIndex);
+      const productById = new Map(products.map(p => [p.id, p]));
+      const currentAlerts = (alertsRes.data || []).map(row =>
+        mapDbAlertRow(row, productById, new Map(), profileMeta.metaById, aliasIndex)
+      );
+
+      // Ignorăm complet eventuale câmpuri arbitrare din req.body — evaluarea folosește EXCLUSIV datele verificate de pe server
+      const observationProductIds = Array.from(
         new Set(
           currentAlerts
-            .filter(a => a.alertType === 'interval_low')
+            .filter(a => a.isActive && (a.alertType === 'interval_low' || a.alertType === 'any_drop' || a.alertType === 'product_watch'))
             .map(a => {
               const d = resolveCanonicalProductDetail(a.productId, aliasIndex);
               if (d.cycleDetected || (d.wasAlias && !d.found)) return null;
@@ -3474,70 +3844,178 @@ app.post('/api/alerts/evaluate', async (req, res) => {
             })
             .filter((cid): cid is string => Boolean(cid))
         )
-      ).map(canonicalPid => {
-        if (isPostgresConfigured()) {
-          return DatabaseService.getPriceObservations(canonicalPid);
-        }
-        const equiv = new Set(collectProductIdsForCanonical(canonicalPid, aliasIndex));
-        return Promise.resolve(StorageService.getPriceObservations().filter(o => equiv.has(o.productId)));
-      })
-    );
-    const observations = observationsByProduct.flat();
+      );
 
-    const { updatedAlerts, newNotifications } = PriceAlertService.evaluateAlerts({
-      alerts: currentAlerts,
-      offers,
-      products,
-      observations,
-      stores,
-      existingNotifications: normalizedExistingNotifs,
-      aliasMap: aliasIndex
-    });
+      const observationsByProduct = await Promise.all(
+        observationProductIds.map(canonicalPid => {
+          if (isPostgresConfigured()) {
+            return DatabaseService.getPriceObservations(canonicalPid);
+          }
+          const equiv = new Set(collectProductIdsForCanonical(canonicalPid, aliasIndex));
+          return Promise.resolve(StorageService.getPriceObservations().filter(o => equiv.has(o.productId)));
+        })
+      );
+      const observations = observationsByProduct.flat();
 
-    for (const notif of newNotifications) {
-      const notifId = crypto.randomUUID();
-      await auth.userClient.from('price_alert_notifications').upsert(
-        {
+      const { updatedAlerts, newNotifications } = PriceAlertService.evaluateAlerts({
+        alerts: currentAlerts,
+        offers,
+        products,
+        observations,
+        stores,
+        existingNotifications: normalizedExistingNotifs,
+        aliasMap: aliasIndex
+      });
+
+      const persistedNotifications: InAppPriceNotification[] = [];
+      for (const notif of newNotifications) {
+        const notifId = crypto.randomUUID();
+        const faza4NotifRow = {
           id: notifId,
           user_id: auth.user.id,
           alert_id: notif.alertId,
           dedupe_key: notif.dedupeKey,
+          idempotency_key: notif.idempotencyKey || null,
           product_id: notif.productId,
           product_name: notif.productName,
           alert_type: notif.alertType,
           title: notif.title,
           message: notif.message,
+          reason_ro: notif.reasonRo || notif.message,
           observed_price: notif.observedPrice,
           previous_price: notif.previousPrice ?? null,
           target_price: notif.targetPrice ?? null,
           store_id: notif.storeId,
           store_name: notif.storeName,
+          source_offer_id: notif.sourceOfferId || null,
+          quality_status: notif.qualityStatus || null,
+          observed_interval_days: notif.observedIntervalDays ?? null,
+          observed_observations_count: notif.observedObservationsCount ?? null,
+          trigger_cycle: notif.triggerCycle ?? null,
           triggered_at: notif.triggeredAt,
           is_read: false
-        },
-        { onConflict: 'user_id,dedupe_key', ignoreDuplicates: true }
-      );
-    }
+        };
 
-    for (const nextAlert of updatedAlerts) {
-      await auth.userClient
-        .from('price_alerts')
-        .update({
+        let notifRes = await auth.userClient
+          .from('price_alert_notifications')
+          .upsert(faza4NotifRow, { onConflict: 'user_id,dedupe_key', ignoreDuplicates: true });
+
+        if (notifRes.error) {
+          const v12NotifRow = {
+            id: notifId,
+            user_id: auth.user.id,
+            alert_id: notif.alertId,
+            dedupe_key: notif.dedupeKey,
+            product_id: notif.productId,
+            product_name: notif.productName,
+            alert_type: notif.alertType === 'product_watch' ? 'any_drop' : notif.alertType,
+            title: notif.title,
+            message: notif.message,
+            observed_price: notif.observedPrice,
+            previous_price: notif.previousPrice ?? null,
+            target_price: notif.targetPrice ?? null,
+            store_id: notif.storeId,
+            store_name: notif.storeName,
+            triggered_at: notif.triggeredAt,
+            is_read: false
+          };
+          notifRes = await auth.userClient
+            .from('price_alert_notifications')
+            .upsert(v12NotifRow, { onConflict: 'user_id,dedupe_key', ignoreDuplicates: true });
+        }
+
+        if (notifRes.error) {
+          return {
+            status: 500,
+            body: { success: false, error: 'Eroare la salvarea notificărilor de preț.' }
+          };
+        }
+
+        persistedNotifications.push({ ...notif, id: notifId });
+      }
+
+      for (const nextAlert of updatedAlerts) {
+        const faza4AlertPatch = {
           last_triggered_at: nextAlert.lastTriggeredAt || null,
           last_triggered_price: nextAlert.lastTriggeredPrice ?? null,
           last_evaluated_price: nextAlert.lastEvaluatedPrice ?? null,
-          last_notified_key: nextAlert.lastNotifiedKey || null
-        })
-        .eq('id', nextAlert.id)
-        .eq('user_id', auth.user.id);
-    }
+          last_notified_key: nextAlert.lastNotifiedKey || null,
+          rearm_state: nextAlert.rearmState || 'armed',
+          trigger_cycle: nextAlert.triggerCycle ?? 0,
+          last_trigger_reason_ro: nextAlert.lastTriggerReasonRo || null,
+          last_source_offer_id: nextAlert.lastSourceOfferId || null,
+          last_source_quality_status: nextAlert.lastSourceQualityStatus || null,
+          last_rearmed_at: nextAlert.lastRearmedAt || null,
+          last_skipped_reason_ro: nextAlert.lastSkippedReasonRo || null,
+          trigger_history: Array.isArray(nextAlert.triggerHistory) ? nextAlert.triggerHistory.slice(0, 25) : []
+        };
 
-    return res.json({
-      success: true,
-      evaluatedCount: updatedAlerts.length,
-      newNotificationsCount: newNotifications.length,
-      newNotifications
+        let alertUpd = await auth.userClient
+          .from('price_alerts')
+          .update(faza4AlertPatch)
+          .eq('id', nextAlert.id)
+          .eq('user_id', auth.user.id);
+
+        if (alertUpd.error) {
+          alertUpd = await auth.userClient
+            .from('price_alerts')
+            .update({
+              last_triggered_at: nextAlert.lastTriggeredAt || null,
+              last_triggered_price: nextAlert.lastTriggeredPrice ?? null,
+              last_evaluated_price: nextAlert.lastEvaluatedPrice ?? null,
+              last_notified_key: nextAlert.lastNotifiedKey || null
+            })
+            .eq('id', nextAlert.id)
+            .eq('user_id', auth.user.id);
+        }
+
+        if (alertUpd.error) {
+          return {
+            status: 500,
+            body: { success: false, error: 'Eroare la persistarea stării alertelor evaluate.' }
+          };
+        }
+      }
+
+      if (updatedAlerts.length > 0) {
+        await saveUserAlertMetaEntriesBestEffort(auth.userClient, auth.user.id, updatedAlerts, profileMeta.preferences);
+      }
+
+      // Best-effort audit în price_alert_events dacă migrarea 014 a fost aplicată
+      if (persistedNotifications.length > 0) {
+        try {
+          const eventRows = persistedNotifications.map(n => ({
+            user_id: auth.user.id,
+            alert_id: n.alertId,
+            alert_type: n.alertType,
+            outcome: 'triggered',
+            observed_price: n.observedPrice,
+            previous_price: n.previousPrice ?? null,
+            store_id: n.storeId || null,
+            store_name: n.storeName || null,
+            source_offer_id: n.sourceOfferId || null,
+            quality_status: n.qualityStatus || null,
+            reason_ro: n.reasonRo || n.message
+          }));
+          await auth.userClient.from('price_alert_events').insert(eventRows);
+        } catch {
+          // Ignorăm când tabelul price_alert_events din 014 nu este încă creat
+        }
+      }
+
+      return {
+        status: 200,
+        body: {
+          success: true,
+          evaluatedCount: updatedAlerts.length,
+          newNotificationsCount: persistedNotifications.length,
+          newNotifications: persistedNotifications,
+          updatedAlerts
+        }
+      };
     });
+
+    return res.status(evalResult.status).json(evalResult.body);
   } catch {
     return res.status(500).json({ success: false, error: 'Eroare internă la evaluarea alertelor.' });
   }
@@ -4818,6 +5296,303 @@ app.post('/api/quality/config', requireAdminAuth, (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la salvarea parametrilor de calitate.' });
+  }
+});
+
+// ============================================================================
+// FAZA 5: PRICE QUALITY MONITORING & ADMIN DASHBOARD ENDPOINTS (READ-ONLY ON PRICE DATA)
+// ============================================================================
+
+app.get('/api/admin/quality-monitoring/overview', requireAdminAuth, adminQualityLimiter, async (req, res) => {
+  try {
+    const parsed = qualityMonitoringOverviewQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Parametri invalizi pentru overview calitate.'
+      });
+    }
+
+    const { intervalDays, maxSample, refresh } = parsed.data;
+    const bundle = await PriceQualityMonitoringService.getOverviewBundle({
+      intervalDays,
+      maxSampleLimit: maxSample,
+      forceRefresh: Boolean(refresh)
+    });
+
+    return res.json({
+      success: true,
+      overview: bundle.overview
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Eroare la obținerea sintezei de monitorizare a calității datelor de preț.'
+    });
+  }
+});
+
+app.post('/api/admin/quality-monitoring/run', requireAdminAuth, adminQualityLimiter, async (req, res) => {
+  try {
+    const parsed = qualityMonitoringRunSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Parametri invalizi pentru rularea monitorizării.'
+      });
+    }
+
+    const { intervalDays, maxSample } = parsed.data;
+    const result = await PriceQualityMonitoringService.executeMonitoringRun({
+      intervalDays,
+      maxSampleLimit: maxSample,
+      triggeredBy: 'admin@cosulmeu.ro',
+      triggerType: 'manual',
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+    });
+
+    return res.json({
+      success: true,
+      run: result.run,
+      overview: result.bundle.overview,
+      auditLog: result.auditLog
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Eroare la executarea verificării de calitate a datelor.'
+    });
+  }
+});
+
+app.get('/api/admin/quality-monitoring/anomalies', requireAdminAuth, adminQualityLimiter, async (req, res) => {
+  try {
+    const parsed = qualityMonitoringAnomaliesQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Filtre invalide pentru anomalii.'
+      });
+    }
+
+    const q = parsed.data;
+    const bundle = await PriceQualityMonitoringService.getOverviewBundle({
+      intervalDays: q.intervalDays
+    });
+    const paginated = PriceQualityMonitoringService.filterAndPaginateAnomalies(bundle.anomalies, {
+      qualityStatus: q.qualityStatus,
+      storeId: q.storeId,
+      source: q.source,
+      productQuery: q.productQuery,
+      anomalyType: q.anomalyType,
+      severity: q.severity,
+      investigationStatus: q.investigationStatus,
+      fromDate: q.fromDate,
+      toDate: q.toDate,
+      page: q.page,
+      limit: q.limit
+    });
+
+    return res.json({
+      success: true,
+      ...paginated,
+      coverage: bundle.overview.coverage
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Eroare la listarea anomaliilor de calitate.'
+    });
+  }
+});
+
+app.get('/api/admin/quality-monitoring/records', requireAdminAuth, adminQualityLimiter, async (req, res) => {
+  try {
+    const parsed = qualityMonitoringRecordsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Filtre invalide pentru înregistrări clasificate.'
+      });
+    }
+
+    const q = parsed.data;
+    const bundle = await PriceQualityMonitoringService.getOverviewBundle({
+      intervalDays: q.intervalDays
+    });
+    const paginated = PriceQualityMonitoringService.filterAndPaginateRecords(bundle.records, {
+      recordType: q.recordType,
+      qualityStatus: q.qualityStatus,
+      storeId: q.storeId,
+      source: q.source,
+      productQuery: q.productQuery,
+      fromDate: q.fromDate,
+      toDate: q.toDate,
+      page: q.page,
+      limit: q.limit
+    });
+
+    return res.json({
+      success: true,
+      ...paginated,
+      coverage: bundle.overview.coverage
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Eroare la filtrarea înregistrărilor de preț.'
+    });
+  }
+});
+
+app.get('/api/admin/quality-monitoring/history', requireAdminAuth, adminQualityLimiter, async (req, res) => {
+  try {
+    const parsed = qualityMonitoringHistoryQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Parametri de paginare invalizi.'
+      });
+    }
+
+    const { page, limit } = parsed.data;
+    const runs = await PriceQualityMonitoringService.loadMonitoringRuns(200);
+    const total = runs.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * limit;
+
+    return res.json({
+      success: true,
+      items: runs.slice(start, start + limit),
+      total,
+      page: safePage,
+      limit,
+      totalPages
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Eroare la citirea istoricului de monitorizare.'
+    });
+  }
+});
+
+app.post('/api/admin/quality-monitoring/anomalies/:id/investigate', requireAdminAuth, adminQualityLimiter, async (req, res) => {
+  try {
+    const rawId = decodeURIComponent(String(req.params.id || '')).trim();
+    if (!rawId || rawId.length > 160) {
+      return res.status(400).json({
+        success: false,
+        error: 'Identificatorul anomaliei este obligatoriu și trebuie să fie valid.'
+      });
+    }
+
+    const parsed = qualityMonitoringInvestigateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Date invalide pentru investigarea anomaliei.'
+      });
+    }
+
+    const body = parsed.data;
+    const result = await PriceQualityMonitoringService.recordInvestigation({
+      anomalyId: rawId,
+      investigationStatus: body.investigationStatus,
+      note: body.note,
+      decision: body.decision ?? null,
+      investigatedBy: 'admin@cosulmeu.ro',
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress,
+      metadata: {
+        anomalyKey: body.anomalyKey || rawId,
+        anomalyType: body.anomalyType,
+        severity: body.severity,
+        targetType: body.targetType,
+        observationId: body.observationId,
+        offerId: body.offerId,
+        productId: body.productId,
+        storeId: body.storeId,
+        source: body.source
+      }
+    });
+
+    return res.json({
+      success: true,
+      investigation: result.investigation,
+      auditLog: result.auditLog
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Eroare la salvarea investigației administrative.'
+    });
+  }
+});
+
+app.get('/api/admin/quality-monitoring/export', requireAdminAuth, adminQualityLimiter, async (req, res) => {
+  try {
+    const parsed = qualityMonitoringExportQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Parametri invalizi pentru export raport.'
+      });
+    }
+
+    const q = parsed.data;
+    const bundle = await PriceQualityMonitoringService.getOverviewBundle({
+      intervalDays: q.intervalDays
+    });
+    const filtered = PriceQualityMonitoringService.filterAndPaginateAnomalies(bundle.anomalies, {
+      storeId: q.storeId,
+      source: q.source,
+      anomalyType: q.anomalyType,
+      severity: q.severity,
+      page: 1,
+      limit: 5000
+    });
+
+    if (process.env.COSUL_MEU_ISOLATED_TEST !== '1') {
+      await DatabaseService.logAdminActivity({
+        userEmail: 'admin@cosulmeu.ro',
+        action: 'quality_report_exported',
+        targetType: 'price_quality_monitoring',
+        targetId: `export-${q.format}`,
+        details: {
+          format: q.format,
+          intervalDays: q.intervalDays,
+          anomaliesExported: filtered.items.length
+        },
+        ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+      }).catch(() => {});
+    }
+
+    if (q.format === 'csv') {
+      const csvContent = PriceQualityMonitoringService.buildExportCsv(bundle.overview, filtered.items);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="cosul-meu-calitate-preturi-${new Date().toISOString().slice(0, 10)}.csv"`
+      );
+      return res.send(csvContent);
+    }
+
+    const jsonReport = PriceQualityMonitoringService.buildExportJson(bundle.overview, filtered.items);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="cosul-meu-calitate-preturi-${new Date().toISOString().slice(0, 10)}.json"`
+    );
+    return res.json({
+      success: true,
+      report: jsonReport
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Eroare la exportul raportului de calitate.'
+    });
   }
 });
 

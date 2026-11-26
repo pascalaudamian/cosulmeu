@@ -32,7 +32,8 @@ import {
   Edit2,
   Trash2,
   ArrowRightLeft,
-  Scale
+  Scale,
+  Eye
 } from 'lucide-react';
 import {
   PriceAlert,
@@ -58,6 +59,7 @@ import { STORES, PRODUCTS } from '../data/mockData.js';
 import { getSafeProductImageSrc } from '../utils/urlSecurity.js';
 import { formatPriceSourceLabel } from '../services/PriceHistoryService.js';
 import { ProductPriceTrend } from './ProductPriceTrend.js';
+import { QualityStatusBadge } from './ui/StateFeedback.js';
 import {
   buildCanonicalAliasIndex,
   collectProductIdsForCanonical,
@@ -138,6 +140,9 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
   const [alertTypeInput, setAlertTypeInput] = useState<PriceAlertType>('below_target');
   const [alertIntervalInput, setAlertIntervalInput] = useState<PriceHistoryInterval>(90);
   const [alertTargetPriceInput, setAlertTargetPriceInput] = useState<number>(5);
+  const [alertMinDropInput, setAlertMinDropInput] = useState<number>(5);
+  const [alertCooldownInput, setAlertCooldownInput] = useState<number>(24);
+  const [expandedAlertHistoryId, setExpandedAlertHistoryId] = useState<string | null>(null);
 
   // Fetch product data
   useEffect(() => {
@@ -375,17 +380,67 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
         ? data.comparison.lowestPrice
         : data.product.baseReferencePrice || 5;
     if (existing) {
+      const t = existing.alertType || 'below_target';
       setEditingAlert(existing);
-      setAlertTypeInput(existing.alertType || 'below_target');
+      setAlertTypeInput(t);
       setAlertIntervalInput(existing.intervalDays || 90);
       setAlertTargetPriceInput(existing.targetPrice > 0 ? existing.targetPrice : Math.max(0.1, Math.round(basePrice * 0.9 * 100) / 100));
+      setAlertMinDropInput(existing.minDropPercent ?? (t === 'product_watch' ? 5 : t === 'any_drop' ? 3 : 5));
+      setAlertCooldownInput(existing.cooldownHours ?? PriceAlertService.getDefaultCooldownHours(t));
     } else {
       setEditingAlert(null);
       setAlertTypeInput('below_target');
       setAlertIntervalInput(90);
       setAlertTargetPriceInput(Math.max(0.1, Math.round(basePrice * 0.9 * 100) / 100));
+      setAlertMinDropInput(5);
+      setAlertCooldownInput(24);
     }
     setShowAlertModal(true);
+  };
+
+  const handleSelectProductAlertType = (nextType: PriceAlertType) => {
+    setAlertTypeInput(nextType);
+    if (!editingAlert) {
+      if (nextType === 'product_watch') {
+        setAlertMinDropInput(5);
+        setAlertCooldownInput(72);
+      } else if (nextType === 'any_drop') {
+        setAlertMinDropInput(3);
+        setAlertCooldownInput(24);
+      } else {
+        setAlertCooldownInput(24);
+      }
+    }
+  };
+
+  const handleQuickWatchProduct = () => {
+    if (!data?.product || !onSaveProductAlert) return;
+    const existingWatch = productAlerts.find(a => a.alertType === 'product_watch');
+    if (existingWatch) {
+      if (onToggleProductAlert && !existingWatch.isActive) {
+        onToggleProductAlert(existingWatch.id);
+      }
+      return;
+    }
+    const lowestCurrent = data.comparison?.lowestPrice > 0 ? data.comparison.lowestPrice : 0;
+    const lowestStoreId = data.comparison?.offers?.[0]?.store?.id;
+    onSaveProductAlert({
+      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `alert-${Date.now()}`,
+      productId: data.product.id,
+      productName: `${data.product.name}${data.product.brand ? ` (${data.product.brand})` : ''}`,
+      targetPrice: 0,
+      currentLowestPrice: lowestCurrent,
+      lowestStoreId,
+      createdAt: new Date().toISOString().slice(0, 10),
+      isActive: true,
+      alertType: 'product_watch',
+      minDropPercent: 5,
+      cooldownHours: 72,
+      rearmState: 'armed',
+      triggerCycle: 0,
+      triggerHistory: [],
+      lastEvaluatedPrice: lowestCurrent > 0 ? lowestCurrent : undefined
+    });
   };
 
   const handleSaveProductAlertModal = (e: React.FormEvent) => {
@@ -396,25 +451,47 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
     const lowestCurrent = data.comparison?.lowestPrice > 0 ? data.comparison.lowestPrice : 0;
     const lowestStoreId = data.comparison?.offers?.[0]?.store?.id;
     const baseTarget = lowestCurrent > 0 ? lowestCurrent : data.product.baseReferencePrice || 1;
+    const effectiveMinDrop =
+      alertTypeInput === 'any_drop' || alertTypeInput === 'product_watch'
+        ? Math.max(0.1, Math.min(90, Number(alertMinDropInput) || PriceAlertService.getDefaultMinDropPercent(alertTypeInput)))
+        : undefined;
+    const effectiveCooldown = Math.max(0, Math.min(720, Math.round(Number(alertCooldownInput) || 0)));
 
     const nextAlert: PriceAlert = editingAlert
       ? {
           ...editingAlert,
           alertType: alertTypeInput,
           intervalDays: alertTypeInput === 'interval_low' ? alertIntervalInput : undefined,
-          targetPrice: alertTypeInput === 'below_target' ? alertTargetPriceInput : editingAlert.targetPrice || baseTarget
+          targetPrice:
+            alertTypeInput === 'below_target'
+              ? alertTargetPriceInput
+              : alertTypeInput === 'product_watch'
+                ? 0
+                : editingAlert.targetPrice || baseTarget,
+          minDropPercent: effectiveMinDrop,
+          cooldownHours: effectiveCooldown
         }
       : {
           id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `alert-${Date.now()}`,
           productId: data.product.id,
           productName: `${data.product.name}${data.product.brand ? ` (${data.product.brand})` : ''}`,
-          targetPrice: alertTypeInput === 'below_target' ? alertTargetPriceInput : Math.max(0.01, baseTarget),
+          targetPrice:
+            alertTypeInput === 'below_target'
+              ? alertTargetPriceInput
+              : alertTypeInput === 'product_watch'
+                ? 0
+                : Math.max(0.01, baseTarget),
           currentLowestPrice: lowestCurrent,
           lowestStoreId,
           createdAt: new Date().toISOString().slice(0, 10),
           isActive: true,
           alertType: alertTypeInput,
           intervalDays: alertTypeInput === 'interval_low' ? alertIntervalInput : undefined,
+          minDropPercent: effectiveMinDrop,
+          cooldownHours: effectiveCooldown,
+          rearmState: 'armed',
+          triggerCycle: 0,
+          triggerHistory: [],
           lastEvaluatedPrice: lowestCurrent > 0 ? lowestCurrent : undefined
         };
 
@@ -648,12 +725,13 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
           <div className="md:col-span-8 flex flex-col justify-between h-full">
             <div>
               <div className="flex flex-wrap items-center gap-2 mb-2">
-                <span
+                <button
+                  type="button"
                   onClick={() => onNavigateToCategory && onNavigateToCategory(product.category)}
-                  className="px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors"
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold cursor-pointer transition-colors"
                 >
                   {product.category}
-                </span>
+                </button>
                 {product.subcategory && (
                   <span className="px-2.5 py-0.5 rounded-md bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 text-xs font-medium">
                     {product.subcategory}
@@ -704,13 +782,32 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   )}
                 </div>
                 {comparison.maxSavingsAmount > 0 && (
-                  <span className="inline-block mt-1 text-xs font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 px-2 py-0.5 rounded-full">
+                  <span className="inline-block mt-1 text-xs font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 px-2.5 py-0.5 rounded-lg tabular-nums">
                     Economisești până la {PriceComparisonService.formatRon(comparison.maxSavingsAmount)} ({comparison.maxSavingsPercentage}%) între magazine
                   </span>
                 )}
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5">
+                {onSaveProductAlert && (
+                  <button
+                    type="button"
+                    onClick={handleQuickWatchProduct}
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border font-bold text-sm transition-colors cursor-pointer ${
+                      productAlerts.some(a => a.alertType === 'product_watch' && a.isActive)
+                        ? 'border-emerald-500 bg-emerald-100/80 dark:bg-emerald-950/70 text-emerald-900 dark:text-emerald-200'
+                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200'
+                    }`}
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>
+                      {productAlerts.some(a => a.alertType === 'product_watch' && a.isActive)
+                        ? 'Produs urmărit'
+                        : 'Urmărește produsul'}
+                    </span>
+                  </button>
+                )}
+
                 {(onSaveProductAlert || onCreateAlertForProduct) && (
                   <button
                     type="button"
@@ -725,7 +822,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 <button
                   type="button"
                   onClick={() => { void handleAddProductToList(); }}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition-all hover:scale-[1.02] cursor-pointer"
+                  className="inline-flex items-center gap-2 min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm shadow-sm shadow-emerald-600/20 transition-colors cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   <span>
@@ -739,58 +836,103 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
             {/* Alertele configurate pentru acest produs */}
             {productAlerts.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2">
+              <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
                 <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  Alertele tale active pentru acest produs ({productAlerts.filter(a => a.isActive).length}/{productAlerts.length})
+                  Alertele tale pentru acest produs ({productAlerts.filter(a => a.isActive).length}/{productAlerts.length} active)
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {productAlerts.map(alert => (
-                    <div
-                      key={alert.id}
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs tabular-nums ${
-                        alert.isActive
-                          ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/70 text-emerald-900 dark:text-emerald-200'
-                          : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'
-                      }`}
-                    >
-                      <span className="font-semibold">
-                        {PriceAlertService.getAlertTypeLabel(alert.alertType, alert.intervalDays)}
-                        {(alert.alertType || 'below_target') === 'below_target' &&
-                          ` (${PriceComparisonService.formatRon(alert.targetPrice)})`}
-                      </span>
-                      {!alert.isActive && <span className="text-[10px] font-bold">· Oprită</span>}
-                      {onToggleProductAlert && (
-                        <button
-                          type="button"
-                          onClick={() => onToggleProductAlert(alert.id)}
-                          className="p-1 rounded hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
-                          title={alert.isActive ? 'Oprește temporar alerta' : 'Reactivează alerta'}
-                        >
-                          {alert.isActive ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                        </button>
-                      )}
-                      {onSaveProductAlert && (
-                        <button
-                          type="button"
-                          onClick={() => openProductAlertModal(alert)}
-                          className="p-1 rounded hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
-                          title="Editează alerta"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                        </button>
-                      )}
-                      {onDeleteProductAlert && (
-                        <button
-                          type="button"
-                          onClick={() => onDeleteProductAlert(alert.id)}
-                          className="p-1 rounded text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 cursor-pointer"
-                          title="Șterge alerta"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                <div className="space-y-2">
+                  {productAlerts.map(alert => {
+                    const historyEvents = alert.triggerHistory || [];
+                    const isHistoryOpen = expandedAlertHistoryId === alert.id;
+                    return (
+                      <div
+                        key={alert.id}
+                        className={`p-3 rounded-xl border text-xs tabular-nums ${
+                          alert.isActive
+                            ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/70 text-emerald-900 dark:text-emerald-200'
+                            : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold">
+                              {PriceAlertService.getAlertTypeLabel(alert.alertType, alert.intervalDays)}
+                              {(alert.alertType || 'below_target') === 'below_target' &&
+                                ` (${PriceComparisonService.formatRon(alert.targetPrice)})`}
+                              {(alert.alertType === 'any_drop' || alert.alertType === 'product_watch') &&
+                                ` (-${alert.minDropPercent ?? PriceAlertService.getDefaultMinDropPercent(alert.alertType)}%)`}
+                            </span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/80 dark:bg-slate-900/70">
+                              {PriceAlertService.getRearmStateLabel(alert)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {historyEvents.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedAlertHistoryId(isHistoryOpen ? null : alert.id)}
+                                aria-expanded={isHistoryOpen}
+                                className="min-h-[34px] text-[11px] font-semibold px-2.5 py-1 rounded-lg hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
+                              >
+                                Istoric ({historyEvents.length})
+                              </button>
+                            )}
+                            {onToggleProductAlert && (
+                              <button
+                                type="button"
+                                onClick={() => onToggleProductAlert(alert.id)}
+                                aria-label={alert.isActive ? 'Oprește temporar alerta' : 'Reactivează alerta'}
+                                className="min-w-[36px] min-h-[36px] flex items-center justify-center p-1.5 rounded-lg hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
+                                title={alert.isActive ? 'Oprește temporar alerta' : 'Reactivează alerta'}
+                              >
+                                {alert.isActive ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                              </button>
+                            )}
+                            {onSaveProductAlert && (
+                              <button
+                                type="button"
+                                onClick={() => openProductAlertModal(alert)}
+                                aria-label="Editează alerta"
+                                className="min-w-[36px] min-h-[36px] flex items-center justify-center p-1.5 rounded-lg hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
+                                title="Editează alerta"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {onDeleteProductAlert && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteProductAlert(alert.id)}
+                                aria-label="Șterge alerta"
+                                className="min-w-[36px] min-h-[36px] flex items-center justify-center p-1.5 rounded-lg text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 cursor-pointer"
+                                title="Șterge alerta"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        {(alert.lastTriggerReasonRo || alert.lastSkippedReasonRo) && (
+                          <p className="text-[11px] opacity-85 mt-1">
+                            {alert.lastTriggerReasonRo || alert.lastSkippedReasonRo}
+                          </p>
+                        )}
+                        {isHistoryOpen && historyEvents.length > 0 && (
+                          <ul className="mt-2 pt-2 border-t border-emerald-200/60 dark:border-emerald-800/50 space-y-1">
+                            {historyEvents.slice(0, 6).map(ev => (
+                              <li key={ev.id} className="text-[10px] opacity-90">
+                                <strong>{new Date(ev.evaluatedAt).toLocaleString('ro-RO')}</strong>
+                                {ev.observedPrice != null && ev.observedPrice > 0
+                                  ? ` · ${PriceComparisonService.formatRon(ev.observedPrice)}`
+                                  : ''}
+                                {ev.storeName ? ` (${ev.storeName})` : ''}: {ev.reasonRo}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -859,12 +1001,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                             {item.store.name}
                           </span>
                           {isBest && (
-                            <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                            <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider">
                               Cel mai ieftin
                             </span>
                           )}
                           {item.isPromo && (
-                            <span className="bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-transparent dark:border-rose-800/60 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <span className="bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border border-transparent dark:border-rose-800/60 text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
                               <Tag className="w-2.5 h-2.5" /> Promoție activă
                             </span>
                           )}
@@ -924,34 +1066,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                         </div>
                       )}
 
-                      {/* Stare calitate și detalii verificare (fără supraîncărcare cu scor numeric) */}
-                      <div className="text-right shrink-0 space-y-0.5">
-                        <span
-                          className={`inline-flex items-center gap-1 text-xs font-semibold ${
-                            qualityAssessment.status === 'VERIFIED_RECENTLY'
-                              ? 'text-emerald-700 dark:text-emerald-400'
-                              : qualityAssessment.status === 'VERIFIED'
-                              ? 'text-sky-700 dark:text-sky-400'
-                              : qualityAssessment.status === 'STALE' || qualityAssessment.status === 'UNVERIFIED'
-                              ? 'text-amber-700 dark:text-amber-400'
-                              : 'text-rose-700 dark:text-rose-400'
-                          }`}
-                        >
-                          {qualityAssessment.status === 'VERIFIED_RECENTLY' || qualityAssessment.status === 'VERIFIED' ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                          ) : qualityAssessment.status === 'STALE' ? (
-                            <Clock className="w-3.5 h-3.5 shrink-0" />
-                          ) : qualityAssessment.status === 'UNVERIFIED' ? (
-                            <HelpCircle className="w-3.5 h-3.5 shrink-0" />
-                          ) : (
-                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                          )}
-                          <span>{qualityAssessment.labelRo}</span>
-                        </span>
+                      {/* Stare calitate și detalii verificare */}
+                      <div className="text-right shrink-0 space-y-1">
+                        <QualityStatusBadge status={qualityAssessment.status} compact />
                         <button
                           type="button"
                           onClick={() => setExpandedQualityKey(isQualityExpanded ? null : offerKey)}
-                          className="text-[11px] text-slate-500 dark:text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400 flex items-center justify-end gap-0.5 ml-auto cursor-pointer whitespace-nowrap"
+                          aria-expanded={isQualityExpanded}
+                          className="text-[11px] text-slate-500 dark:text-slate-400 hover:text-emerald-700 dark:hover:text-emerald-400 flex items-center justify-end gap-0.5 ml-auto cursor-pointer whitespace-nowrap min-h-[28px]"
                         >
                           <span>Detalii verificare</span>
                           {isQualityExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -1074,7 +1196,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                                 {alt.product.name}
                               </span>
                               {alt.isPrivateLabel && (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300">
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300">
                                   Marcă proprie
                                 </span>
                               )}
@@ -1096,7 +1218,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                         <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-700/70">
                           <div className="flex items-center gap-1.5 min-w-0">
                             {alt.isCheaperNormalized && alt.savingsPercent > 0 ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 tabular-nums">
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 tabular-nums">
                                 -{alt.savingsPercent.toFixed(0)}% / {alt.normalizedUnitLabel}
                               </span>
                             ) : (
@@ -1187,7 +1309,66 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
               </span>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+            {/* Mobile cards (< sm) */}
+            <div className="space-y-2.5 sm:hidden">
+              {sortedCleanObs.map((obs, idx) => {
+                const assessment =
+                  (obs.id && data.observationQualityById?.[obs.id]) ||
+                  (obs.id && localBatch.assessmentsById[obs.id]) ||
+                  localBatch.assessmentsById[`obs-${idx}`];
+                return (
+                  <div
+                    key={`mobile-obs-${obs.id || idx}`}
+                    className="p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 text-xs space-y-1.5 tabular-nums"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-900 dark:text-slate-100">
+                        {resolveDetailStoreName(obs.storeId)}
+                      </span>
+                      <span className="font-mono font-extrabold text-sm text-emerald-700 dark:text-emerald-400">
+                        {PriceComparisonService.formatRon(obs.price)}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                      <span>{obs.date} · {formatPriceSourceLabel(obs.source)}</span>
+                      {assessment && <QualityStatusBadge status={assessment.status} compact />}
+                    </div>
+                    {assessment && (assessment.reasons[0] || assessment.descriptionRo) && (
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {assessment.reasons[0] || assessment.descriptionRo}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+              {flaggedRows.slice(0, 10).map(flagged => (
+                <div
+                  key={`mobile-flagged-${flagged.id}`}
+                  className="p-3.5 rounded-2xl border border-rose-200 dark:border-rose-900/70 bg-rose-50/40 dark:bg-rose-950/20 text-xs space-y-1.5 tabular-nums"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-slate-900 dark:text-slate-100">
+                      {flagged.storeName || resolveDetailStoreName(flagged.storeId)}
+                    </span>
+                    <span className="font-mono font-bold text-rose-700 dark:text-rose-300">
+                      {Number.isFinite(flagged.price)
+                        ? `${flagged.price.toFixed(2)} ${flagged.currency || 'RON'}`
+                        : 'Preț invalid'}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                    <span>{flagged.date || 'Dată lipsă'} · {flagged.sourceLabel || formatPriceSourceLabel(flagged.source)}</span>
+                    <QualityStatusBadge status="SUSPICIOUS" compact />
+                  </div>
+                  <p className="text-[11px] text-rose-700 dark:text-rose-300">
+                    {flagged.qualityAssessment.reasons[0] || flagged.qualityAssessment.descriptionRo}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop/Tablet table (sm+) */}
+            <div className="hidden sm:block overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
               <table className="w-full text-left text-xs tabular-nums">
                 <thead className="bg-slate-50 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200 dark:border-slate-800">
                   <tr>
@@ -1223,10 +1404,8 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                         </td>
                         <td className="px-4 py-2.5">
                           {assessment ? (
-                            <div className="space-y-0.5">
-                              <span className={`font-semibold block ${renderStatusColorClass(assessment.status)}`}>
-                                {assessment.labelRo}
-                              </span>
+                            <div className="space-y-1">
+                              <QualityStatusBadge status={assessment.status} compact />
                               <span className="text-[11px] text-slate-500 dark:text-slate-400 block">
                                 {assessment.reasons[0] || assessment.descriptionRo}
                               </span>
@@ -1255,12 +1434,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                         {flagged.sourceLabel || formatPriceSourceLabel(flagged.source)}
                       </td>
                       <td className="px-4 py-2.5">
-                        <span className="font-semibold text-rose-700 dark:text-rose-400 block">
-                          {flagged.qualityAssessment.labelRo} (exclus din medii)
-                        </span>
-                        <span className="text-[11px] text-slate-600 dark:text-slate-400 block">
-                          {flagged.qualityAssessment.reasons[0] || flagged.qualityAssessment.descriptionRo}
-                        </span>
+                        <div className="space-y-1">
+                          <QualityStatusBadge status="SUSPICIOUS" compact />
+                          <span className="text-[11px] text-slate-600 dark:text-slate-400 block">
+                            {flagged.qualityAssessment.reasons[0] || flagged.qualityAssessment.descriptionRo}
+                          </span>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1273,16 +1452,23 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
       {/* MODAL: Raportează o Eroare */}
       {showReportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="report-error-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-xs animate-in fade-in"
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
               <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-bold text-base">
                 <AlertTriangle className="w-5 h-5" />
-                <span>Raportează o eroare de preț sau date</span>
+                <span id="report-error-modal-title">Raportează o eroare de preț sau date</span>
               </div>
               <button
+                type="button"
+                aria-label="Închide fereastra de raportare"
                 onClick={() => setShowReportModal(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1296,8 +1482,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             ) : (
               <form onSubmit={handleSubmitErrorReport} className="space-y-4 text-xs">
                 <div>
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">Produs selectat</label>
+                  <label htmlFor="report-product-name" className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                    Produs selectat
+                  </label>
                   <input
+                    id="report-product-name"
                     type="text"
                     disabled
                     value={product.name}
@@ -1305,10 +1494,13 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">Tipul problemei *</label>
+                    <label htmlFor="report-error-type" className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                      Tipul problemei *
+                    </label>
                     <select
+                      id="report-error-type"
                       value={reportErrorType}
                       onChange={e => setReportErrorType(e.target.value)}
                       className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
@@ -1322,8 +1514,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   </div>
 
                   <div>
-                    <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">Magazinul vizat</label>
+                    <label htmlFor="report-store-id" className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                      Magazinul vizat
+                    </label>
                     <select
+                      id="report-store-id"
                       value={reportStoreId}
                       onChange={e => setReportStoreId(e.target.value)}
                       className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
@@ -1337,10 +1532,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                  <label htmlFor="report-observed-price" className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
                     Prețul real observat (lei, opțional)
                   </label>
                   <input
+                    id="report-observed-price"
                     type="number"
                     step="0.01"
                     placeholder="Ex: 7.49"
@@ -1351,8 +1547,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">Detalii suplimentare *</label>
+                  <label htmlFor="report-details-text" className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                    Detalii suplimentare *
+                  </label>
                   <textarea
+                    id="report-details-text"
                     rows={3}
                     required
                     placeholder="Ex: La magazinul Lidl din Militari prețul este 7.49 lei, nu 6.49 lei."
@@ -1363,8 +1562,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">Email-ul tău (opțional, pentru confirmare)</label>
+                  <label htmlFor="report-email-input" className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                    Email-ul tău (opțional, pentru confirmare)
+                  </label>
                   <input
+                    id="report-email-input"
                     type="email"
                     placeholder="nume@exemplu.ro"
                     value={reportEmail}
@@ -1377,14 +1579,14 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowReportModal(false)}
-                    className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                    className="min-h-[40px] px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
                   >
                     Anulează
                   </button>
                   <button
                     type="submit"
                     disabled={isSubmittingReport}
-                    className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold transition-colors disabled:opacity-50 cursor-pointer"
+                    className="min-h-[40px] px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     {isSubmittingReport ? 'Se trimite...' : 'Trimite raportul'}
                   </button>
@@ -1397,20 +1599,26 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
       {/* MODAL: Setează / Editează Alertă de Preț pentru Produs */}
       {showAlertModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/80 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="product-alert-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-slate-950/80 backdrop-blur-xs animate-in fade-in"
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
               <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-bold text-base">
                 <Bell className="w-5 h-5" />
-                <span>{editingAlert ? 'Editează alerta de preț' : 'Setează alertă de preț'}</span>
+                <span id="product-alert-modal-title">{editingAlert ? 'Editează alerta de preț' : 'Setează alertă de preț'}</span>
               </div>
               <button
                 type="button"
+                aria-label="Închide fereastra de alertă"
                 onClick={() => {
                   setShowAlertModal(false);
                   setEditingAlert(null);
                 }}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1.5 rounded-lg cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1421,14 +1629,15 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
             </p>
 
             <form onSubmit={handleSaveProductAlertModal} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
+              <fieldset className="space-y-2">
+                <legend className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
                   Tip alertă
-                </label>
+                </legend>
                 {[
                   { type: 'below_target' as PriceAlertType, label: 'Preț maxim dorit (RON)' },
-                  { type: 'any_drop' as PriceAlertType, label: 'Alertă la reducere față de ultimul preț verificat' },
-                  { type: 'interval_low' as PriceAlertType, label: 'Alertă la cel mai mic preț observat în interval' }
+                  { type: 'any_drop' as PriceAlertType, label: 'Scădere de preț față de ultimul reper verificat' },
+                  { type: 'interval_low' as PriceAlertType, label: 'Alertă la cel mai mic preț observat în interval' },
+                  { type: 'product_watch' as PriceAlertType, label: 'Urmărire produs (scăderi relevante fără prag fix)' }
                 ].map(item => (
                   <label
                     key={item.type}
@@ -1442,20 +1651,21 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                       type="radio"
                       name="productAlertType"
                       checked={alertTypeInput === item.type}
-                      onChange={() => setAlertTypeInput(item.type)}
+                      onChange={() => handleSelectProductAlertType(item.type)}
                     />
                     <span>{item.label}</span>
                   </label>
                 ))}
-              </div>
+              </fieldset>
 
               {alertTypeInput === 'below_target' && (
                 <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                  <label htmlFor="product-alert-target-price" className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
                     Preț maxim dorit (lei)
                   </label>
                   <div className="relative">
                     <input
+                      id="product-alert-target-price"
                       type="number"
                       step="0.05"
                       min="0.1"
@@ -1475,10 +1685,11 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
 
               {alertTypeInput === 'interval_low' && (
                 <div>
-                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    Interval de referință
+                  <label htmlFor="product-alert-interval" className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                    Interval de referință (observații verificate)
                   </label>
                   <select
+                    id="product-alert-interval"
                     value={alertIntervalInput}
                     onChange={e => setAlertIntervalInput(Number(e.target.value) as PriceHistoryInterval)}
                     className="w-full px-3 py-2.5 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100"
@@ -1490,6 +1701,41 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({
                   </select>
                 </div>
               )}
+
+              {(alertTypeInput === 'any_drop' || alertTypeInput === 'product_watch') && (
+                <div>
+                  <label htmlFor="product-alert-min-drop" className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                    Scădere minimă pentru notificare (%)
+                  </label>
+                  <input
+                    id="product-alert-min-drop"
+                    type="number"
+                    step="0.5"
+                    min="0.1"
+                    max="90"
+                    value={alertMinDropInput}
+                    onChange={e => setAlertMinDropInput(parseFloat(e.target.value) || 0.1)}
+                    className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-slate-100 tabular-nums"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="product-alert-cooldown" className="text-xs font-semibold text-slate-700 dark:text-slate-300 block mb-1">
+                  Fereastră anti-spam între notificări
+                </label>
+                <select
+                  id="product-alert-cooldown"
+                  value={alertCooldownInput}
+                  onChange={e => setAlertCooldownInput(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-slate-100"
+                >
+                  <option value={24}>24 ore (standard)</option>
+                  <option value={48}>48 ore</option>
+                  <option value={72}>72 ore (recomandat pentru urmărire)</option>
+                  <option value={168}>7 zile (168 ore)</option>
+                </select>
+              </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button

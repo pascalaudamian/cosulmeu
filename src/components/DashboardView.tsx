@@ -5,7 +5,6 @@ import {
   Receipt,
   Eye,
   ArrowRight,
-  Sparkles,
   Camera,
   PlusCircle,
   Clock,
@@ -17,6 +16,7 @@ import {
 import { UserProfile, ShoppingList, Receipt as ReceiptType, Product, ProductOffer, Store } from '../types.js';
 import { PriceComparisonService } from '../services/PriceComparisonService.js';
 import { DashboardKpiDrilldownModal } from './DashboardKpiDrilldownModal.js';
+import { ErrorState, LoadingState } from './ui/StateFeedback.js';
 import type {
   DashboardData,
   DashboardImportResult,
@@ -155,11 +155,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Quick Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2.5 shrink-0">
           <button
             type="button"
             onClick={() => onNavigate('products')}
-            className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap"
+            className="min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap"
           >
             <Eye className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             <span>Catalog Produse</span>
@@ -167,7 +167,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <button
             type="button"
             onClick={() => onNavigate('scan-receipt')}
-            className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap border border-transparent dark:border-slate-700"
+            className="min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap border border-transparent dark:border-slate-700"
           >
             <Camera className="w-4 h-4 text-emerald-400" />
             <span>Scanează bon</span>
@@ -175,19 +175,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <button
             type="button"
             onClick={() => onNavigate('compare')}
-            className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap"
+            className="min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap"
           >
-            <Sparkles className="w-4 h-4" />
             <span>Compară coșul</span>
+            <ArrowRight className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {(dashboardLoading || dashboardError) && (
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {dashboardLoading && <span role="status" className="text-slate-500 dark:text-slate-400">Se încarcă datele contului…</span>}
-          {dashboardError && <span role="alert" className="text-rose-700 dark:text-rose-400 font-medium">Datele Supabase nu au putut fi încărcate. Reîncarcă pagina pentru a încerca din nou.</span>}
-        </div>
+      {dashboardLoading && (
+        <LoadingState variant="inline" message="Se încarcă datele contului…" />
+      )}
+      {dashboardError && (
+        <ErrorState
+          compact
+          variant="partial"
+          message="Datele Supabase nu au putut fi încărcate. Reîncarcă pagina pentru a încerca din nou."
+          onRetry={typeof window !== 'undefined' ? () => window.location.reload() : undefined}
+        />
       )}
 
       {(canImportLocalData || importResult || importError) && (
