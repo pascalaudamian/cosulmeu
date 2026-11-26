@@ -9320,6 +9320,13 @@ app.get('/api/health', (req, res) => {
 if (!isProd && process.env.NODE_ENV !== 'test') {
   const { createServer: createViteServer } = await import('vite');
   const vite = await createViteServer({
+    // Keep lazy-loaded UI and the renderer on one React module instance.
+    resolve: {
+      dedupe: ['react', 'react-dom'],
+    },
+    optimizeDeps: {
+      include: ['react', 'react-dom', 'react-dom/client'],
+    },
     server: {
       middlewareMode: true,
       port: 3000,
