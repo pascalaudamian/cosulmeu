@@ -11,8 +11,7 @@ import {
   ProductOffer,
   VerificationStatus
 } from '../types.ts';
-import { getPool, fetchAllSupabaseRows } from '../db/index.ts';
-import { supabase } from '../lib/supabase.ts';
+import { getPool, fetchAllSupabaseRows, getServerSupabaseClient } from '../db/index.ts';
 import { StorageService } from './StorageService.ts';
 import { PriceExtractor } from '../indexing/catalog/PriceExtractor.ts';
 import { STORES } from '../data/mockData.ts';
@@ -180,24 +179,25 @@ export class PriceAuditService {
       }
 
       try {
+        const sb = getServerSupabaseClient();
         const [offersRes, productsRes, storesRes, stagingRes, docsRes] = await Promise.all([
-          fetchAllSupabaseRows<RawOfferRow>((from, to) => supabase.from('product_offers').select('*').range(from, to)),
+          fetchAllSupabaseRows<RawOfferRow>((from, to) => sb.from('product_offers').select('*').range(from, to)),
           fetchAllSupabaseRows<RawProductRow>((from, to) =>
-            supabase
+            sb
               .from('products')
               .select('id, canonical_product_id, name, brand, package_weight_or_volume, package_unit, normalized_unit, base_reference_price')
               .range(from, to)
           ),
-          supabase.from('stores').select('id, name'),
+          sb.from('stores').select('id, name'),
           fetchAllSupabaseRows<RawStagingRow>((from, to) =>
-            supabase
+            sb
               .from('catalog_extracted_offers')
               .select('id, document_id, retailer_id, matched_product_id, raw_title, normal_price, promo_price, effective_price, package_quantity, package_unit, created_at')
               .order('created_at', { ascending: false })
               .range(from, to)
           ),
           fetchAllSupabaseRows<RawDocRow>((from, to) =>
-            supabase.from('catalog_documents').select('id, title, document_url').range(from, to)
+            sb.from('catalog_documents').select('id, title, document_url').range(from, to)
           )
         ]);
 
@@ -939,13 +939,14 @@ export class PriceAuditService {
     }
 
     // Supabase REST update path
+    const sb = getServerSupabaseClient();
     for (const work of validWorkItems) {
       try {
         if (work.req.action === 'fix_price' && work.req.newPrice) {
           const newPrice = work.req.newPrice;
           const origPrice = work.newNormalPrice && work.newNormalPrice > newPrice ? work.newNormalPrice : null;
 
-          const { error: offErr } = await supabase
+          const { error: offErr } = await sb
             .from('product_offers')
             .update({
               price: newPrice,
@@ -968,13 +969,13 @@ export class PriceAuditService {
           }
           affectedOffersCount++;
 
-          const { error: prodErr } = await supabase
+          const { error: prodErr } = await sb
             .from('products')
             .update({ base_reference_price: newPrice, updated_at: nowIso })
             .eq('id', work.canonicalProductId);
           if (!prodErr) updatedProductsCount++;
 
-          const { data: stgUpdated } = await supabase
+          const { data: stgUpdated } = await sb
             .from('catalog_extracted_offers')
             .update({
               effective_price: newPrice,
@@ -988,7 +989,7 @@ export class PriceAuditService {
           if (Array.isArray(stgUpdated)) updatedStagingCount += stgUpdated.length;
 
           // IMPORTANT: promotions nu are coloana updated_at
-          const { data: prmUpdated } = await supabase
+          const { data: prmUpdated } = await sb
             .from('promotions')
             .update({
               normal_price: work.newNormalPrice ?? null,
@@ -999,7 +1000,7 @@ export class PriceAuditService {
             .select('id');
           if (Array.isArray(prmUpdated)) updatedPromotionsCount += prmUpdated.length;
         } else if (work.req.action === 'isolate') {
-          const { error: offErr } = await supabase
+          const { error: offErr } = await sb
             .from('product_offers')
             .update({
               verification_status: 'isolated',
@@ -1014,7 +1015,7 @@ export class PriceAuditService {
           }
           affectedOffersCount++;
         } else if (work.req.action === 'verify') {
-          const { error: offErr } = await supabase
+          const { error: offErr } = await sb
             .from('product_offers')
             .update({
               verification_status: 'verified',
@@ -1036,7 +1037,7 @@ export class PriceAuditService {
     }
 
     try {
-      const { error: logErr } = await supabase.from('admin_audit_logs').insert({
+      const { error: logErr } = await sb.from('admin_audit_logs').insert({
         id: `audit-pa-${Date.now()}`,
         user_email: userEmail,
         action: 'price_audit_remediation',

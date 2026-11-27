@@ -223,7 +223,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       })
     : null;
 
-  const currentRole = profile.role || (user?.user_metadata?.is_admin ? 'admin' : 'user');
+  const currentRole = profile.role === 'admin' ? 'admin' : 'user';
   const avatarSrc = profile.avatarUrl || profile.avatar_url;
 
   const activeTheme: ThemeMode = themeMode || profile.theme || 'light';

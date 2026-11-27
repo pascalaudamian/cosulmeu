@@ -33,7 +33,35 @@ import {
 } from '../data/mockData.ts';
 import { ProductMatcher } from '../services/ProductMatcher.ts';
 import { mapRetailerCategoryToStandard } from '../data/categories.ts';
-import { supabase } from '../lib/supabase.ts';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { supabase as anonSupabase } from '../lib/supabase.ts';
+
+let _serverSupabaseClient: SupabaseClient | null = null;
+let _serverSupabaseKeyUsed = '';
+
+export function getServerSupabaseClient(): SupabaseClient {
+  if (typeof window !== 'undefined') return anonSupabase;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || '';
+  if (!serviceRoleKey) {
+    return anonSupabase;
+  }
+  const url = process.env.VITE_SUPABASE_URL?.trim() || 'https://bwanbgbimktluajvwzsj.supabase.co';
+  if (!_serverSupabaseClient || _serverSupabaseKeyUsed !== serviceRoleKey) {
+    _serverSupabaseKeyUsed = serviceRoleKey;
+    _serverSupabaseClient = createClient(url, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+  }
+  return _serverSupabaseClient;
+}
+
+const supabase = new Proxy(anonSupabase, {
+  get(_target, prop, receiver) {
+    const activeClient = getServerSupabaseClient() as any;
+    const value = Reflect.get(activeClient, prop, receiver);
+    return typeof value === 'function' ? value.bind(activeClient) : value;
+  }
+});
 import { PriceExtractor } from '../indexing/catalog/PriceExtractor.ts';
 import {
   buildCanonicalAliasIndex,

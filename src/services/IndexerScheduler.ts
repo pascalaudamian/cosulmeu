@@ -34,34 +34,44 @@ export class IndexerScheduler {
   // Fallback mutex în memorie pentru medii fără PostgreSQL activ (ex: modul demo_memory)
   private static isMemoryLockHeld = false;
 
+  private static sanitizeLockId(lockId: number): number {
+    const safeId = Number(lockId);
+    if (!Number.isSafeInteger(safeId) || safeId < 0 || safeId > 2147483647) {
+      throw new Error('Identificator advisory lock invalid.');
+    }
+    return safeId;
+  }
+
   /**
    * Execută explicit interogarea de blocare consultativă în PostgreSQL.
    * Asigură că un singur proces/worker poate rula sarcina la un moment dat.
    */
   static async acquireAdvisoryLock(pg: { query: (sql: string, params?: any[]) => Promise<any> }, lockId = 1): Promise<void> {
-    // Apel specific cerut de arhitectura de sincronizare sigură
-    await pg.query(`SELECT pg_advisory_lock(${lockId})`);
+    const safeLockId = this.sanitizeLockId(lockId);
+    await pg.query(`SELECT pg_advisory_lock(${safeLockId})`);
   }
 
   /**
    * Eliberează blocarea consultativă în PostgreSQL
    */
   static async releaseAdvisoryLock(pg: { query: (sql: string, params?: any[]) => Promise<any> }, lockId = 1): Promise<void> {
-    await pg.query(`SELECT pg_advisory_unlock(${lockId})`);
+    const safeLockId = this.sanitizeLockId(lockId);
+    await pg.query(`SELECT pg_advisory_unlock(${safeLockId})`);
   }
 
   /**
    * Execută o funcție de lucru protejată de un PostgreSQL advisory lock (sau fallback în memorie)
    */
   static async runWithAdvisoryLock<T>(workerFn: () => Promise<T>, lockId = 1): Promise<T> {
+    const safeLockId = this.sanitizeLockId(lockId);
     const pool = getPool();
 
     if (pool) {
       const client = await pool.connect();
       let lockAcquired = false;
       try {
-        // Apel standard PostgreSQL advisory lock
-        await client.query(`SELECT pg_advisory_lock(${lockId})`);
+        // Apel parametrizat PostgreSQL advisory lock
+        await client.query('SELECT pg_advisory_lock($1::bigint)', [safeLockId]);
         lockAcquired = true;
         this.isExecuting = true;
         return await workerFn();
@@ -69,7 +79,7 @@ export class IndexerScheduler {
         this.isExecuting = false;
         if (lockAcquired) {
           try {
-            await client.query(`SELECT pg_advisory_unlock(${lockId})`);
+            await client.query('SELECT pg_advisory_unlock($1::bigint)', [safeLockId]);
           } catch (unlockErr: any) {
             console.warn('⚠️ Eroare la eliberarea advisory lock în PostgreSQL:', unlockErr.message);
           }

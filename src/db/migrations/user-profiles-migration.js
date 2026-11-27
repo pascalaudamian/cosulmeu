@@ -62,41 +62,53 @@ export async function runUserProfilesMigration() {
       ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     `);
 
-    // 2. Protecție role împotriva modificărilor neautorizate
+    // 2. Protecție role împotriva modificărilor neautorizate (INSERT & UPDATE)
     await client.query(`
       CREATE OR REPLACE FUNCTION public.protect_profile_role()
-      RETURNS trigger AS $$
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public
+      AS $$
+      DECLARE
+        is_privileged boolean := (
+          current_user IN ('service_role', 'postgres', 'supabase_admin')
+          OR COALESCE(auth.jwt() ->> 'role', '') = 'service_role'
+        );
       BEGIN
-        IF NEW.role IS DISTINCT FROM OLD.role THEN
-          -- Numai service_role poate modifica rolul utilizatorului
-          IF current_user <> 'service_role' AND COALESCE(auth.jwt() ->> 'role', '') <> 'service_role' THEN
+        IF TG_OP = 'INSERT' THEN
+          IF NOT is_privileged THEN
+            NEW.role := 'user';
+          END IF;
+        ELSIF TG_OP = 'UPDATE' THEN
+          IF NEW.role IS DISTINCT FROM OLD.role AND NOT is_privileged THEN
             NEW.role := OLD.role;
           END IF;
         END IF;
         NEW.updated_at := NOW();
         RETURN NEW;
       END;
-      $$ LANGUAGE plpgsql SECURITY DEFINER;
+      $$;
 
       DROP TRIGGER IF EXISTS trg_protect_profile_role ON public.profiles;
       CREATE TRIGGER trg_protect_profile_role
-      BEFORE UPDATE ON public.profiles
+      BEFORE INSERT OR UPDATE ON public.profiles
       FOR EACH ROW EXECUTE FUNCTION public.protect_profile_role();
     `);
 
-    // 3. Trigger automat de creare profil la înregistrare în auth.users
+    // 3. Trigger automat de creare profil la înregistrare în auth.users (fără escaladare din metadata)
     await client.query(`
       CREATE OR REPLACE FUNCTION public.handle_new_user_profile()
-      RETURNS trigger AS $$
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path = public
+      AS $$
       DECLARE
         initial_role VARCHAR(16) := 'user';
         initial_username TEXT;
       BEGIN
-        -- Dacă utilizatorul are specificat emailul admin-ului sau is_admin în metadata
-        IF new.email = 'pascalau.stefan@gmail.com' OR (new.raw_user_meta_data ->> 'is_admin')::boolean = true THEN
-          initial_role := 'admin';
-        END IF;
-
+        -- Rolul inițial este întotdeauna 'user'. Promovarea la 'admin' se face exclusiv server-side prin service_role.
         initial_username := COALESCE(
           new.raw_user_meta_data ->> 'username',
           split_part(new.email, '@', 1) || '_' || substr(md5(random()::text), 1, 4)
@@ -131,7 +143,7 @@ export async function runUserProfilesMigration() {
         ) ON CONFLICT (id) DO UPDATE SET
           display_name = COALESCE(EXCLUDED.display_name, profiles.display_name),
           username = COALESCE(profiles.username, EXCLUDED.username),
-          role = CASE WHEN profiles.role = 'admin' THEN 'admin' ELSE EXCLUDED.role END,
+          role = profiles.role,
           updated_at = NOW();
 
         INSERT INTO public.user_preferences (user_id, language) 
@@ -140,7 +152,7 @@ export async function runUserProfilesMigration() {
 
         RETURN new;
       END;
-      $$ LANGUAGE plpgsql SECURITY DEFINER;
+      $$;
 
       DROP TRIGGER IF EXISTS on_auth_user_created_profile ON auth.users;
       CREATE TRIGGER on_auth_user_created_profile
@@ -160,7 +172,10 @@ export async function runUserProfilesMigration() {
       DROP POLICY IF EXISTS profiles_insert_policy ON public.profiles;
       CREATE POLICY profiles_insert_policy ON public.profiles
         FOR INSERT
-        WITH CHECK (auth.uid() = id OR auth.role() = 'service_role');
+        WITH CHECK (
+          (auth.uid() = id AND COALESCE(role, 'user') = 'user')
+          OR auth.role() = 'service_role'
+        );
 
       DROP POLICY IF EXISTS profiles_update_policy ON public.profiles;
       CREATE POLICY profiles_update_policy ON public.profiles
@@ -220,19 +235,19 @@ export async function runUserProfilesMigration() {
         );
     `);
 
-    // Sincronizare utilizatori auth existenți cu profiles
+    // Sincronizare utilizatori auth existenți cu profiles (fără promovare automată la admin)
     await client.query(`
       INSERT INTO public.profiles (id, display_name, username, role, city, preferred_language)
       SELECT 
         u.id,
         COALESCE(u.raw_user_meta_data ->> 'display_name', split_part(u.email, '@', 1)),
         split_part(u.email, '@', 1) || '_' || substr(u.id::text, 1, 4),
-        CASE WHEN u.email = 'pascalau.stefan@gmail.com' THEN 'admin' ELSE 'user' END,
+        'user',
         'București',
         'ro'
       FROM auth.users u
       ON CONFLICT (id) DO UPDATE SET
-        role = CASE WHEN EXCLUDED.id IN (SELECT id FROM auth.users WHERE email = 'pascalau.stefan@gmail.com') THEN 'admin' ELSE profiles.role END;
+        role = profiles.role;
     `);
 
     await client.query('COMMIT');

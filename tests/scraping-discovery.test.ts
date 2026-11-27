@@ -205,8 +205,10 @@ async function runTests() {
     assert.strictEqual(monData.stats.totalRetailersCount, 8);
     pass('GET /api/indexing/monitor returnează 200 OK și include 8 retaileri');
 
-    // GET /api/indexing/receipt-candidates
-    const candRes = await fetch(`http://localhost:${port}/api/indexing/receipt-candidates`);
+    // GET /api/indexing/receipt-candidates (protejat admin din FAZA 7)
+    const candRes = await fetch(`http://localhost:${port}/api/indexing/receipt-candidates`, {
+      headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` }
+    });
     assert.strictEqual(candRes.status, 200);
     const candData = await candRes.json();
     assert.strictEqual(candData.success, true);

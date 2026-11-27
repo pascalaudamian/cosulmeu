@@ -1670,16 +1670,16 @@ export class PriceQualityMonitoringService {
         }
       }
 
-      // Supabase read-only bounded fallback
+      // Supabase read-only bounded fallback (folosește service_role când este disponibil pe server)
       try {
-        const { supabase } = await import('../lib/supabase.js');
-        const { DatabaseService } = await import('../db/index.js');
-        if (supabase) {
+        const { DatabaseService, getServerSupabaseClient } = await import('../db/index.js');
+        const serverSupabase = getServerSupabaseClient();
+        if (serverSupabase) {
           const [products, stores, offers, obsRes] = await Promise.all([
             DatabaseService.getProducts(),
             DatabaseService.getStores(),
             DatabaseService.getOffers(),
-            supabase
+            serverSupabase
               .from('price_observations')
               .select('*', { count: 'exact' })
               .gte('date', cutoffIso)

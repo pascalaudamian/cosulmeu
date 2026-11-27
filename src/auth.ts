@@ -24,8 +24,12 @@ export function parseSessionCookie(header?: string) {
   return value?.slice(COOKIE_NAME.length + 1) || null;
 }
 
-export function sessionCookie(token: string) {
-  return `${COOKIE_NAME}=${token}; Max-Age=${SESSION_TTL_SECONDS}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+export function sessionCookie(token: string, secure = true) {
+  return `${COOKIE_NAME}=${token}; Max-Age=${SESSION_TTL_SECONDS}; Path=/; HttpOnly;${secure ? ' Secure;' : ''} SameSite=Lax`;
+}
+
+export function clearSessionCookie(secure = true) {
+  return `${COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly;${secure ? ' Secure;' : ''} SameSite=Lax`;
 }
 
 export { COOKIE_NAME, SESSION_TTL_SECONDS };

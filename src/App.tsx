@@ -429,11 +429,7 @@ export default function App() {
   };
   const localImportCounts = countLocalDashboardData(localDashboardSnapshot);
 
-  const isAdmin = Boolean(
-    userProfile.role === 'admin' ||
-    user?.user_metadata?.is_admin === true ||
-    user?.email === 'pascalau.stefan@gmail.com'
-  );
+  const isAdmin = Boolean(userProfile.role === 'admin');
 
   useEffect(() => {
     if (!user) {
@@ -494,7 +490,7 @@ export default function App() {
           preferredLanguage: data.preferred_language || 'ro',
           theme: resolvedTheme,
           preferredStoreId: data.preferred_store_id || undefined,
-          role: (data.role as 'user' | 'admin') || (userEmail === 'pascalau.stefan@gmail.com' ? 'admin' : 'user'),
+          role: data.role === 'admin' ? 'admin' : 'user',
           monthlySavingsGoal: typeof preferences.monthlySavingsGoal === 'number' ? preferences.monthlySavingsGoal : 350,
           notificationsEnabled: typeof preferences.notificationsEnabled === 'boolean' ? preferences.notificationsEnabled : false,
           optionalNotificationsEnabled: Boolean(gdprPrefs?.optional_notifications_enabled),
@@ -518,7 +514,7 @@ export default function App() {
       } else {
         const defaultName = user.user_metadata?.display_name || (userEmail ? userEmail.split('@')[0] : 'Utilizator');
         const defaultUsername = user.user_metadata?.username || undefined;
-        const defaultRole: 'user' | 'admin' = (userEmail === 'pascalau.stefan@gmail.com' || user.user_metadata?.is_admin) ? 'admin' : 'user';
+        const defaultRole: 'user' | 'admin' = 'user';
 
         const newProfileRow = {
           id: userId,

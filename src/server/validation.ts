@@ -831,4 +831,144 @@ export const qualityMonitoringExportQuerySchema = z.object({
   severity: qualityMonitoringSeverityFilterSchema.default('all')
 });
 
+// =========================================================================
+// FAZA 7: Security, Auth & Admin API Hardening Validation Schemas
+// =========================================================================
+
+export const safeIdentifierSchema = z
+  .string()
+  .trim()
+  .min(1, 'Identificatorul este obligatoriu.')
+  .max(128, 'Identificatorul depășește lungimea maximă.')
+  .refine(val => !/[\r\n\0<>]/.test(val), {
+    message: 'Identificatorul conține caractere nepermise.'
+  });
+
+export const authRegisterSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Adresa de email este invalidă.').max(160),
+  password: z
+    .string()
+    .min(12, 'Parola trebuie să aibă cel puțin 12 caractere.')
+    .max(200, 'Parola depășește lungimea maximă permisă.'),
+  displayName: z.string().trim().min(1).max(120).optional()
+});
+
+export const authLoginSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Email sau parolă invalidă.').max(160),
+  password: z.string().min(1, 'Email sau parolă invalidă.').max(200)
+});
+
+export const productErrorReportSchema = z.object({
+  productId: z.string().trim().min(1, 'ID-ul produsului este obligatoriu.').max(64),
+  productName: z.string().trim().min(1, 'Denumirea produsului este obligatorie.').max(200),
+  storeId: z.string().trim().max(64).optional().nullable(),
+  errorType: z.enum(['price_mismatch', 'wrong_product', 'wrong_category', 'expired_promo', 'other'], {
+    message: 'Tipul erorii este invalid.'
+  }),
+  reportedPrice: z.coerce
+    .number()
+    .positive('Prețul raportat trebuie să fie > 0.')
+    .max(100000)
+    .optional()
+    .nullable(),
+  details: z
+    .string()
+    .trim()
+    .min(3, 'Detaliile raportării sunt obligatorii.')
+    .max(1000, 'Detaliile nu pot depăși 1000 de caractere.'),
+  reporterEmail: z.string().trim().email('Adresa de email este invalidă.').max(160).optional().nullable()
+});
+
+export const indexingCollectNowSchema = z.object({
+  retailerId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9_-]+$/i, 'Identificatorul retailerului este invalid.')
+    .default('lidl')
+});
+
+export const indexingScheduleConfigSchema = z.object({
+  targetHour: z.coerce.number().int().min(0, 'targetHour trebuie să fie între 0 și 23.').max(23).optional(),
+  targetMinute: z.coerce.number().int().min(0, 'targetMinute trebuie să fie între 0 și 59.').max(59).optional(),
+  timezone: z.string().trim().min(2).max(64).optional(),
+  checkIntervalMs: z.coerce.number().int().min(1000).max(86_400_000).optional()
+});
+
+export const qualityAnomalyResolveSchema = z.object({
+  resolution: z.enum(['resolved_approved', 'resolved_rejected'], {
+    message: 'Rezoluție invalidă. Permis: resolved_approved sau resolved_rejected.'
+  })
+});
+
+export const adminAuditLogCreateSchema = z.object({
+  action: z.string().trim().min(1).max(120).default('admin_action'),
+  targetType: z.string().trim().min(1).max(80).default('system'),
+  targetId: z.string().trim().max(160).optional().nullable(),
+  details: z.record(z.string(), z.any()).optional()
+});
+
+export const adminMatchCorrectionSchema = z.object({
+  candidateId: z.string().trim().min(1, 'candidateId este obligatoriu.').max(120),
+  correctedProductId: z.string().trim().min(1, 'correctedProductId este obligatoriu.').max(120),
+  reason: z.string().trim().min(2, 'Motivul corectării este obligatoriu.').max(500)
+});
+
+export const adminScheduleCreateSchema = z.object({
+  name: z.string().trim().min(2, 'Numele programării este obligatoriu.').max(160),
+  retailerIds: z.array(z.string().trim().min(1).max(64)).max(50).default([]),
+  scheduledAt: z.string().trim().min(4, 'Data programată este obligatorie.').max(64),
+  timezone: z.string().trim().min(2).max(64).default('Europe/Bucharest'),
+  alertEmail: z.string().trim().email('Adresa de email de alertă este invalidă.').max(160).optional().nullable(),
+  enabled: z.boolean().default(true),
+  scheduleType: z.enum(['once', 'daily']).default('once')
+});
+
+export const adminScheduleUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(160).optional(),
+  retailerIds: z.array(z.string().trim().min(1).max(64)).max(50).optional(),
+  scheduledAt: z.string().trim().min(4).max(64).optional(),
+  timezone: z.string().trim().min(2).max(64).optional(),
+  alertEmail: z.string().trim().email().max(160).optional().nullable(),
+  enabled: z.boolean().optional(),
+  scheduleType: z.enum(['once', 'daily']).optional()
+});
+
+export const adminStagingBulkReviewSchema = z.object({
+  offerIds: z
+    .array(z.string().trim().min(1).max(128))
+    .min(1, 'Selectați cel puțin o ofertă pentru procesare.')
+    .max(1000, 'Nu se pot procesa mai mult de 1000 de oferte simultan.'),
+  action: z.enum(['approve', 'reject'], {
+    message: 'Acțiunea trebuie să fie "approve" sau "reject".'
+  }),
+  rejectionReason: z.string().trim().max(500).optional().nullable()
+});
+
+export const adminStagingSingleReviewSchema = z.object({
+  action: z.enum(['approve', 'reject'], {
+    message: 'Acțiune invalidă. Este necesar "approve" sau "reject".'
+  }),
+  matchedProductId: z.string().trim().max(120).optional().nullable(),
+  rejectionReason: z.string().trim().max(500).optional().nullable()
+});
+
+export const adminProductsBulkDeleteSchema = z.object({
+  ids: z
+    .array(z.string().trim().min(1).max(128))
+    .min(1, 'Lista de ID-uri de produse este obligatorie.')
+    .max(500, 'Se pot șterge cel mult 500 de produse într-un lot.')
+});
+
+export const adminCatalogSourceStatusSchema = z.object({
+  status: z.enum(['active', 'pending_authorization', 'disabled', 'error'])
+});
+
+export const adminUserRoleUpdateSchema = z.object({
+  role: z.enum(['user', 'admin'], {
+    message: 'Rolul trebuie să fie "user" sau "admin".'
+  }),
+  reason: z.string().trim().max(300).optional()
+});
 

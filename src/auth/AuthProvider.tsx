@@ -102,8 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               first_name: firstName || null,
               last_name: lastName || null,
               username: customUsername,
-              marketing_consent: explicitMarketingConsent,
-              is_admin: userEmail === 'pascalau.stefan@gmail.com'
+              marketing_consent: explicitMarketingConsent
             },
             emailRedirectTo:
               import.meta.env.VITE_SUPABASE_REDIRECT_URL || `${window.location.origin}/auth/callback`

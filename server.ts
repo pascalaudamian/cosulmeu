@@ -26,7 +26,7 @@ import { CatalogStagingManager } from './src/indexing/catalog/CatalogStagingMana
 import { CatalogSource, CatalogDocument } from './src/indexing/catalog/catalogTypes.ts';
 import { Product, ProductOffer, Receipt, Store, PriceAlert, PriceAlertType, PriceAlertRearmState, PriceAlertTriggerEvent, PriceDataQualityStatus, InAppPriceNotification, RetailerProductRecord } from './src/types.ts';
 import { createHash } from 'node:crypto';
-import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
+import { createSessionToken, hashSecret, verifySecret, parseSessionCookie, sessionCookie, clearSessionCookie, SESSION_TTL_SECONDS } from './src/auth.ts';
 import { validatePublicHttpUrl } from './src/utils/urlSecurity.ts';
 import { PriceAuditService } from './src/services/PriceAuditService.ts';
 import {
@@ -38,6 +38,17 @@ import {
   validateReceiptMath
 } from './src/services/ReceiptParserEngine.ts';
 import {
+  adminAuditLogCreateSchema,
+  adminCatalogSourceStatusSchema,
+  adminMatchCorrectionSchema,
+  adminProductsBulkDeleteSchema,
+  adminScheduleCreateSchema,
+  adminScheduleUpdateSchema,
+  adminStagingBulkReviewSchema,
+  adminStagingSingleReviewSchema,
+  adminUserRoleUpdateSchema,
+  authLoginSchema,
+  authRegisterSchema,
   basketOptimizeRequestSchema,
   gdprAdminRequestUpdateSchema,
   gdprConsentRecordSchema,
@@ -45,6 +56,8 @@ import {
   gdprProfileUpdateSchema,
   gdprRequestCreateSchema,
   gdprWithdrawConsentSchema,
+  indexingCollectNowSchema,
+  indexingScheduleConfigSchema,
   parseReceiptTextRequestSchema,
   priceAlertCreateSchema,
   priceAlertsFromListSchema,
@@ -53,6 +66,9 @@ import {
   priceAuditRemediationRequestSchema,
   priceHistoryProductParamSchema,
   priceHistoryQuerySchema,
+  productErrorReportSchema,
+  qualityAnomalyResolveSchema,
+  safeIdentifierSchema,
   saveReceiptRequestSchema,
   scanReceiptRequestSchema,
   shadowMatchingPersistSchema,
@@ -139,7 +155,104 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const isProd = process.env.NODE_ENV === 'production';
 
-app.use(express.json({ limit: '25mb' }));
+app.set('trust proxy', (process.env.VERCEL || process.env.TRUST_PROXY === 'true') ? 1 : false);
+app.disable('x-powered-by');
+
+const defaultJsonParser = express.json({ limit: '1mb' });
+const receiptJsonParser = express.json({ limit: '25mb' });
+const adminImportJsonParser = express.json({ limit: '6mb' });
+
+app.use((req, res, next) => {
+  if (req.path === '/api/scan-receipt' || req.path === '/api/receipts/save') {
+    return receiptJsonParser(req, res, next);
+  }
+  if (
+    req.path === '/api/admin/validate-file' ||
+    (req.path.startsWith('/api/admin/sources/') && req.path.endsWith('/import'))
+  ) {
+    return adminImportJsonParser(req, res, next);
+  }
+  return defaultJsonParser(req, res, next);
+});
+
+const ALLOWED_CORS_ORIGINS = new Set<string>([
+  'https://cosulmeu.online',
+  'https://www.cosulmeu.online',
+  ...(process.env.APP_URL ? [process.env.APP_URL.trim()] : []),
+  ...(process.env.CORS_ALLOWED_ORIGINS
+    ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
+    : []),
+  ...(process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
+    : [])
+]);
+
+function isAllowedOrigin(origin: string): boolean {
+  if (ALLOWED_CORS_ORIGINS.has(origin)) return true;
+  if (!isProd) {
+    try {
+      const parsed = new URL(origin);
+      if (
+        (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+        (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1')
+      ) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function isHttpsRequest(req: express.Request): boolean {
+  if (req.secure) return true;
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return proto === 'https' || isProd;
+}
+
+// Security headers & strict CORS enforcement
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  if (isHttpsRequest(req)) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  if (req.path !== '/api/images/proxy') {
+    const scriptSrc = isProd ? "'self'" : "'self' 'unsafe-inline'";
+    res.setHeader(
+      'Content-Security-Policy',
+      `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://generativelanguage.googleapis.com; frame-ancestors 'self' https://aistudio.google.com https://*.google.com; object-src 'none'; base-uri 'self'; form-action 'self'`
+    );
+  }
+
+  const originHeader = req.headers.origin;
+  if (typeof originHeader === 'string' && originHeader.trim()) {
+    const cleanOrigin = originHeader.trim();
+    if (!isAllowedOrigin(cleanOrigin)) {
+      if (req.path.startsWith('/api/') || req.method === 'OPTIONS') {
+        return res.status(403).json({
+          success: false,
+          code: 'CORS_ORIGIN_FORBIDDEN',
+          error: 'Origine CORS neautorizată.'
+        });
+      }
+    } else {
+      res.setHeader('Access-Control-Allow-Origin', cleanOrigin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+      if (req.method === 'OPTIONS') {
+        return res.status(204).end();
+      }
+    }
+  }
+
+  next();
+});
 
 // Canonical domain redirect: cosulmeu.vercel.app -> https://cosulmeu.online
 app.use((req, res, next) => {
@@ -151,26 +264,65 @@ app.use((req, res, next) => {
   next();
 });
 
-// Lightweight in-memory sliding-window rate limiter for public write/compute routes
-function createRateLimiter(options: { windowMs: number; maxRequests: number; messageRo: string }) {
+function getClientIp(req: express.Request): string {
+  // Rely on Express req.ip (bound to trust proxy = 1) to avoid spoofable X-Forwarded-For bypasses
+  const rawIp = req.ip || req.socket?.remoteAddress || 'unknown';
+  return String(rawIp).trim() || 'unknown';
+}
+
+function timingSafeTokenEqual(provided: string, expected: string): boolean {
+  if (!provided || !expected) return false;
+  const providedDigest = createHash('sha256').update(provided).digest();
+  const expectedDigest = createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(providedDigest, expectedDigest);
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Bounded in-memory sliding-window rate limiter (prunes expired windows instead of clearing all active trackers)
+function createRateLimiter(options: { windowMs: number; maxRequests: number; messageRo: string; keyPrefix?: string }) {
   const hits = new Map<string, number[]>();
+  const MAX_TRACKED_KEYS = 5000;
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (process.env.NODE_ENV === 'test' && req.headers['x-enforce-rate-limit'] !== 'true') {
       return next();
     }
     const now = Date.now();
-    const ipHeader = req.headers['x-forwarded-for'];
-    const clientIp =
-      (Array.isArray(ipHeader) ? ipHeader[0] : typeof ipHeader === 'string' ? ipHeader.split(',')[0] : '') ||
-      req.ip ||
-      'unknown';
-    const key = `${clientIp.trim()}:${req.path}`;
+    const clientIp = getClientIp(req);
+    const authHeader = req.headers.authorization;
+    const authSuffix =
+      typeof authHeader === 'string' && authHeader.startsWith('Bearer ') && authHeader.length > 12
+        ? `:u:${createHash('sha256').update(authHeader.slice(7)).digest('hex').slice(0, 12)}`
+        : '';
+    const key = `${options.keyPrefix || 'rl'}:${clientIp}${authSuffix}:${req.path}`;
     const windowStart = now - options.windowMs;
     const recent = (hits.get(key) || []).filter(ts => ts > windowStart);
 
-    if (hits.size > 2000) {
-      // Bound map growth deterministically
-      hits.clear();
+    if (hits.size >= MAX_TRACKED_KEYS) {
+      for (const [k, timestamps] of hits.entries()) {
+        const valid = timestamps.filter(ts => ts > windowStart);
+        if (valid.length === 0) {
+          hits.delete(k);
+        } else {
+          hits.set(k, valid);
+        }
+      }
+      if (hits.size >= MAX_TRACKED_KEYS) {
+        const overflow = hits.size - Math.floor(MAX_TRACKED_KEYS * 0.8);
+        let removed = 0;
+        for (const k of hits.keys()) {
+          hits.delete(k);
+          removed++;
+          if (removed >= overflow) break;
+        }
+      }
     }
 
     if (recent.length >= options.maxRequests) {
@@ -193,19 +345,50 @@ function createRateLimiter(options: { windowMs: number; maxRequests: number; mes
 const publicComputeLimiter = createRateLimiter({
   windowMs: 60_000,
   maxRequests: 90,
+  keyPrefix: 'compute',
   messageRo: 'Prea multe cereri într-un timp scurt. Reîncearcă peste câteva secunde.'
 });
 
 const publicReportLimiter = createRateLimiter({
   windowMs: 60_000,
   maxRequests: 25,
+  keyPrefix: 'report',
   messageRo: 'Ai trimis prea multe raportări consecutive. Te rugăm să aștepți un minut.'
 });
 
 const adminQualityLimiter = createRateLimiter({
   windowMs: 60_000,
   maxRequests: 60,
+  keyPrefix: 'admin_quality',
   messageRo: 'Prea multe interogări pe monitorizarea calității. Reîncearcă în câteva secunde.'
+});
+
+const authStrictLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 15,
+  keyPrefix: 'auth',
+  messageRo: 'Prea multe încercări de autentificare. Te rugăm să aștepți un minut.'
+});
+
+const receiptComputeLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 25,
+  keyPrefix: 'receipts',
+  messageRo: 'Prea multe cereri de procesare bonuri într-un minut. Reîncearcă în curând.'
+});
+
+const userWriteLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 45,
+  keyPrefix: 'user_write',
+  messageRo: 'Prea multe acțiuni consecutive. Reîncearcă peste câteva secunde.'
+});
+
+const imageProxyLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 90,
+  keyPrefix: 'img_proxy',
+  messageRo: 'Prea multe cereri către proxy-ul de imagini. Reîncearcă în curând.'
 });
 
 // Lazy non-blocking database initialization if configured
@@ -303,7 +486,7 @@ async function loadCatalogProductsForReceipts(): Promise<Product[]> {
 }
 
 // Receipt OCR & Structured Extraction 2.0 endpoint
-app.post('/api/scan-receipt', publicComputeLimiter, async (req, res) => {
+app.post('/api/scan-receipt', receiptComputeLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   try {
     const parsedReq = scanReceiptRequestSchema.safeParse(req.body);
@@ -492,7 +675,7 @@ REGULI CRITICE:
 });
 
 // Deterministic structured parsing endpoint for raw OCR text (including multi-page receipts)
-app.post('/api/receipts/parse-text', async (req, res) => {
+app.post('/api/receipts/parse-text', receiptComputeLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   try {
     const parsedReq = parseReceiptTextRequestSchema.safeParse(req.body);
@@ -525,7 +708,7 @@ app.post('/api/receipts/parse-text', async (req, res) => {
 });
 
 // Authenticated receipt persistence & duplicate verification
-app.post('/api/receipts/save', async (req, res) => {
+app.post('/api/receipts/save', receiptComputeLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   try {
     const auth = await getAuthenticatedSupabaseUser(req);
@@ -874,6 +1057,10 @@ app.get('/api/receipts/:id/image', async (req, res) => {
   }
 
   const receiptId = req.params.id;
+  if (!receiptId || !UUID_STRICT_RE.test(receiptId)) {
+    return res.status(400).json({ success: false, error: 'Identificator bon invalid.' });
+  }
+
   const { data: row, error } = await auth.userClient
     .from('receipts')
     .select('id,user_id,image_path,extracted_data')
@@ -923,6 +1110,10 @@ app.delete('/api/receipts/:id', async (req, res) => {
   }
 
   const receiptId = req.params.id;
+  if (!receiptId || !UUID_STRICT_RE.test(receiptId)) {
+    return res.status(400).json({ success: false, error: 'Identificator bon invalid.' });
+  }
+
   const { data: row } = await auth.userClient
     .from('receipts')
     .select('id,user_id,image_path,extracted_data')
@@ -975,7 +1166,11 @@ const requireAdminAuth = (req: express.Request, res: express.Response, next: exp
   }
 
   const token = authHeader.slice(7).trim();
-  const isValid = token === ADMIN_API_KEY || (!isProd && token === DEFAULT_DEV_ADMIN_KEY);
+  const hasExplicitEnvKey = Boolean(process.env.ADMIN_API_KEY && process.env.ADMIN_API_KEY.trim());
+  const isValid =
+    timingSafeTokenEqual(token, ADMIN_API_KEY) ||
+    (!isProd && !hasExplicitEnvKey && timingSafeTokenEqual(token, DEFAULT_DEV_ADMIN_KEY));
+
   if (!token || !isValid) {
     return res.status(403).json({ error: 'Acces interzis. Token administrativ invalid.' });
   }
@@ -1558,7 +1753,7 @@ app.get('/api/gdpr/my-data', async (req, res) => {
 });
 
 // 3. Rectify own profile, contact details, communication preferences or restriction flag
-app.patch('/api/gdpr/profile', async (req, res) => {
+app.patch('/api/gdpr/profile', userWriteLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   const auth = await getAuthenticatedSupabaseUser(req);
   if (!auth) {
@@ -1696,7 +1891,7 @@ app.patch('/api/gdpr/profile', async (req, res) => {
 });
 
 // 4. Export own GDPR data in JSON or CSV (Auth required)
-app.get('/api/gdpr/export', async (req, res) => {
+app.get('/api/gdpr/export', userWriteLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   const auth = await getAuthenticatedSupabaseUser(req);
   if (!auth) {
@@ -1818,7 +2013,7 @@ app.get('/api/gdpr/requests', async (req, res) => {
   });
 });
 
-app.post('/api/gdpr/requests', async (req, res) => {
+app.post('/api/gdpr/requests', userWriteLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   const auth = await getAuthenticatedSupabaseUser(req);
   if (!auth) {
@@ -1886,7 +2081,7 @@ app.post('/api/gdpr/requests', async (req, res) => {
 });
 
 // 6. Withdraw optional consents (Auth required)
-app.post('/api/gdpr/withdraw-consents', async (req, res) => {
+app.post('/api/gdpr/withdraw-consents', userWriteLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   const auth = await getAuthenticatedSupabaseUser(req);
   if (!auth) {
@@ -1971,7 +2166,7 @@ app.post('/api/gdpr/withdraw-consents', async (req, res) => {
 });
 
 // 7. Permanent Account Deletion („Șterge contul”) with reauthentication & private storage cleanup
-app.post('/api/gdpr/delete-account', async (req, res) => {
+app.post('/api/gdpr/delete-account', authStrictLimiter, async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   const auth = await getAuthenticatedSupabaseUser(req);
   if (!auth) {
@@ -2148,53 +2343,105 @@ app.patch('/api/admin/gdpr/requests/:id', requireAdminAuth, async (req, res) => 
   });
 });
 
+  const DUMMY_PASSWORD_HASH = hashSecret('cosul-meu-timing-normalization-dummy-secret');
+
   // User authentication API. Passwords and administrator keys are stored only as hashes.
-  app.post('/api/auth/register', async (req, res) => {
+  app.post('/api/auth/register', authStrictLimiter, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
     try {
-      const { email, password, displayName } = req.body ?? {};
-      if (typeof email !== 'string' || !/^\S+@\S+\.\S+$/.test(email) || typeof password !== 'string' || password.length < 12) {
-        return res.status(400).json({ error: 'Email invalid sau parola trebuie să aibă cel puțin 12 caractere.' });
+      const parsed = authRegisterSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: parsed.error.issues[0]?.message || 'Email invalid sau parola trebuie să aibă cel puțin 12 caractere.'
+        });
       }
+      const { email, password, displayName } = parsed.data;
       const pool = getPool();
       if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
+      const resolvedDisplay = displayName || email.split('@')[0];
       const result = await pool.query(
         'INSERT INTO app_users (email, display_name, password_hash) VALUES ($1, $2, $3) RETURNING id, email, display_name, role',
-        [email.trim().toLowerCase(), typeof displayName === 'string' && displayName.trim() ? displayName.trim() : email.split('@')[0], hashSecret(password)]
+        [email, resolvedDisplay, hashSecret(password)]
       );
       const token = createSessionToken();
-      await pool.query('INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + ($3 * interval \'1 second\'))', [createHash('sha256').update(token).digest('hex'), result.rows[0].id, SESSION_TTL_SECONDS]);
-      return res.status(201).setHeader('Set-Cookie', sessionCookie(token)).json({ user: result.rows[0] });
+      await pool.query(
+        'INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + ($3 * interval \'1 second\'))',
+        [createHash('sha256').update(token).digest('hex'), result.rows[0].id, SESSION_TTL_SECONDS]
+      );
+      return res
+        .status(201)
+        .setHeader('Set-Cookie', sessionCookie(token, isHttpsRequest(req)))
+        .json({ user: result.rows[0] });
     } catch (error: any) {
       if (error?.code === '23505') return res.status(409).json({ error: 'Există deja un cont cu această adresă.' });
-      console.error('[auth] register failed', error);
+      console.error('[auth] register failed');
       return res.status(500).json({ error: 'Înregistrarea nu a putut fi finalizată.' });
     }
   });
 
-  app.post('/api/auth/login', async (req, res) => {
+  app.post('/api/auth/login', authStrictLimiter, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
     try {
-      const { email, password } = req.body ?? {};
+      const parsed = authLoginSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Email sau parolă invalidă.' });
+      }
+      const { email, password } = parsed.data;
       const pool = getPool();
       if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
-      const result = await pool.query('SELECT id, email, display_name, role, password_hash FROM app_users WHERE email = $1 AND is_active = true', [String(email ?? '').trim().toLowerCase()]);
+      const result = await pool.query(
+        'SELECT id, email, display_name, role, password_hash FROM app_users WHERE email = $1 AND is_active = true',
+        [email]
+      );
       const user = result.rows[0];
-      if (!user || typeof password !== 'string' || !verifySecret(password, user.password_hash)) return res.status(401).json({ error: 'Email sau parolă invalidă.' });
+      // Run scrypt even when user doesn't exist to avoid email enumeration timing side-channel
+      const passwordValid = verifySecret(password, user ? user.password_hash : DUMMY_PASSWORD_HASH);
+      if (!user || !passwordValid) {
+        return res.status(401).json({ error: 'Email sau parolă invalidă.' });
+      }
       const token = createSessionToken();
-      await pool.query('INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + ($3 * interval \'1 second\'))', [createHash('sha256').update(token).digest('hex'), user.id, SESSION_TTL_SECONDS]);
+      await pool.query(
+        'INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + ($3 * interval \'1 second\'))',
+        [createHash('sha256').update(token).digest('hex'), user.id, SESSION_TTL_SECONDS]
+      );
       const { password_hash: _passwordHash, ...safeUser } = user;
-      return res.setHeader('Set-Cookie', sessionCookie(token)).json({ user: safeUser });
-    } catch (error) {
-      console.error('[auth] login failed', error);
+      return res.setHeader('Set-Cookie', sessionCookie(token, isHttpsRequest(req))).json({ user: safeUser });
+    } catch {
+      console.error('[auth] login failed');
       return res.status(500).json({ error: 'Autentificarea nu a putut fi finalizată.' });
     }
   });
 
-  app.get('/api/auth/me', async (req, res) => {
+  app.post('/api/auth/logout', authStrictLimiter, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    try {
+      const token = parseSessionCookie(req.headers.cookie);
+      const pool = getPool();
+      if (token && pool) {
+        await pool.query('DELETE FROM app_sessions WHERE token_hash = $1', [
+          createHash('sha256').update(token).digest('hex')
+        ]);
+      }
+      return res
+        .setHeader('Set-Cookie', clearSessionCookie(isHttpsRequest(req)))
+        .json({ success: true });
+    } catch {
+      return res
+        .setHeader('Set-Cookie', clearSessionCookie(isHttpsRequest(req)))
+        .json({ success: true });
+    }
+  });
+
+  app.get('/api/auth/me', authStrictLimiter, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
     const token = parseSessionCookie(req.headers.cookie);
     if (!token) return res.status(401).json({ error: 'Sesiune lipsă.' });
     const pool = getPool();
     if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
-    const result = await pool.query('SELECT u.id, u.email, u.display_name, u.role FROM app_sessions s JOIN app_users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now() AND u.is_active = true', [createHash('sha256').update(token).digest('hex')]);
+    const result = await pool.query(
+      'SELECT u.id, u.email, u.display_name, u.role FROM app_sessions s JOIN app_users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now() AND u.is_active = true',
+      [createHash('sha256').update(token).digest('hex')]
+    );
     if (!result.rows[0]) return res.status(401).json({ error: 'Sesiune invalidă.' });
     return res.json({ user: result.rows[0] });
   });
@@ -2207,6 +2454,75 @@ app.patch('/api/admin/gdpr/requests/:id', requireAdminAuth, async (req, res) => 
     authorized: true,
   });
 });
+
+  // Authorized Admin Role Promotion / Revocation (server-side service_role only)
+  app.patch('/api/admin/users/:userId/role', requireAdminAuth, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    const targetUserId = String(req.params.userId || '').trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetUserId)) {
+      return res.status(400).json({ success: false, error: 'ID utilizator invalid (este necesar un UUID valid).' });
+    }
+
+    const parsed = adminUserRoleUpdateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        error: parsed.error.issues[0]?.message || 'Date invalide pentru modificarea rolului.'
+      });
+    }
+
+    const adminClient = getSupabaseAdminClient();
+    const pool = getPool();
+    if (!adminClient && !pool) {
+      return res.status(503).json({
+        success: false,
+        error: 'SUPABASE_SERVICE_ROLE_KEY sau conexiunea PostgreSQL este necesară pe server pentru administrarea rolurilor.'
+      });
+    }
+
+    let updatedProfile: { id: string; role: string; updated_at?: string } | null = null;
+    if (adminClient) {
+      const { data, error } = await adminClient
+        .from('profiles')
+        .update({ role: parsed.data.role, updated_at: new Date().toISOString() })
+        .eq('id', targetUserId)
+        .select('id, role, updated_at')
+        .maybeSingle();
+
+      if (error) {
+        return res.status(500).json({ success: false, error: 'Nu am putut actualiza rolul utilizatorului.' });
+      }
+      if (!data) {
+        return res.status(404).json({ success: false, error: 'Profilul utilizatorului nu a fost găsit.' });
+      }
+      updatedProfile = data;
+    } else if (pool) {
+      const pgRes = await pool.query(
+        'UPDATE public.profiles SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING id, role, updated_at',
+        [parsed.data.role, targetUserId]
+      );
+      if (pgRes.rows.length === 0) {
+        return res.status(404).json({ success: false, error: 'Profilul utilizatorului nu a fost găsit.' });
+      }
+      updatedProfile = pgRes.rows[0];
+    }
+
+    if (pool) {
+      await pool.query('UPDATE app_users SET role = $1, updated_at = NOW() WHERE id = $2', [parsed.data.role, targetUserId]).catch(() => {});
+    }
+
+    await DatabaseService.logAdminActivity({
+      userEmail: 'admin@cosulmeu.ro',
+      userId: targetUserId,
+      action: parsed.data.role === 'admin' ? 'admin_role_promoted' : 'admin_role_revoked',
+      targetType: 'profile_role',
+      targetId: targetUserId,
+      details: { newRole: parsed.data.role, reason: parsed.data.reason || null },
+      ipAddress: getClientIp(req)
+    }).catch(() => {});
+
+    return res.json({ success: true, profile: updatedProfile });
+  });
 
 // Admin Sources Info Endpoint
 app.get('/api/admin/sources-info', requireAdminAuth, (req, res) => {
@@ -2308,7 +2624,7 @@ app.get('/api/stores', handleGetStores);
 app.get('/api/catalog/stores', handleGetStores);
 
 // Secure Image Proxy endpoint (previne SSRF, blochează SVG/MIME nevalid și limitează dimensiunea în streaming)
-app.get('/api/images/proxy', async (req, res) => {
+app.get('/api/images/proxy', imageProxyLimiter, async (req, res) => {
   try {
     const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
     if (!rawUrl) {
@@ -2707,26 +3023,26 @@ app.post('/api/basket/optimize', publicComputeLimiter, async (req, res) => {
     }
 
     if (listId && UUID_STRICT_RE.test(listId)) {
+      if (!auth) {
+        return res.status(401).json({
+          success: false,
+          error: 'Autentificarea este obligatorie pentru a optimiza o listă salvată în cont.'
+        });
+      }
       if (resolvedItems.length === 0) {
-        if (!auth) {
-          return res.status(401).json({
-            success: false,
-            error: 'Autentificarea este obligatorie pentru a optimiza o listă salvată în cont.'
-          });
-        }
         const ownedResult = await loadOwnedShoppingListItemsForOptimization({ auth, listId });
         if (ownedResult.ok === false) {
           return res.status(ownedResult.status).json({ success: false, error: ownedResult.error });
         }
         resolvedListName = resolvedListName || ownedResult.listName;
         resolvedItems = ownedResult.items;
-      } else if (auth) {
+      } else {
         // Previne folosirea unui listId străin chiar și când sunt transmise articole inline (permite owner/membri partajați)
         const access = await resolveSharedListRoleAndMeta({ auth, listId });
-        if (access.ok === false && access.status === 403) {
-          return res.status(403).json({
+        if (access.ok === false) {
+          return res.status(access.status).json({
             success: false,
-            error: 'Acces interzis: nu poți accesa lista altui utilizator.'
+            error: access.error
           });
         }
       }
@@ -3230,7 +3546,7 @@ app.get('/api/alerts', async (req, res) => {
   }
 });
 
-app.post('/api/alerts', async (req, res) => {
+app.post('/api/alerts', userWriteLimiter, async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const auth = await getAuthenticatedSupabaseUser(req);
@@ -3247,6 +3563,15 @@ app.post('/api/alerts', async (req, res) => {
     }
 
     const { productId, alertType, targetPrice, intervalDays, minDropPercent, cooldownHours, sourceListId } = parsed.data;
+    if (sourceListId) {
+      const listAccess = await resolveSharedListRoleAndMeta({ auth, listId: sourceListId });
+      if (listAccess.ok === false) {
+        return res.status(listAccess.status).json({
+          success: false,
+          error: listAccess.error
+        });
+      }
+    }
     const useDbCatalog = isPostgresConfigured() || process.env.COSUL_MEU_ISOLATED_TEST === '1';
     const [products, offers, existingRes, profileMeta, aliasIndex] = await Promise.all([
       useDbCatalog ? DatabaseService.getProducts() : Promise.resolve(StorageService.getAllProducts()),
@@ -3418,7 +3743,7 @@ app.post('/api/alerts', async (req, res) => {
   }
 });
 
-app.post('/api/alerts/from-list/:listId', async (req, res) => {
+app.post('/api/alerts/from-list/:listId', userWriteLimiter, async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const auth = await getAuthenticatedSupabaseUser(req);
@@ -3557,7 +3882,7 @@ app.post('/api/alerts/from-list/:listId', async (req, res) => {
   }
 });
 
-app.patch('/api/alerts/:id', async (req, res) => {
+app.patch('/api/alerts/:id', userWriteLimiter, async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const auth = await getAuthenticatedSupabaseUser(req);
@@ -3716,7 +4041,7 @@ app.patch('/api/alerts/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/alerts/:id', async (req, res) => {
+app.delete('/api/alerts/:id', userWriteLimiter, async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const auth = await getAuthenticatedSupabaseUser(req);
@@ -3772,7 +4097,7 @@ app.delete('/api/alerts/:id', async (req, res) => {
   }
 });
 
-app.post('/api/alerts/evaluate', async (req, res) => {
+app.post('/api/alerts/evaluate', userWriteLimiter, async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const auth = await getAuthenticatedSupabaseUser(req);
@@ -4474,21 +4799,23 @@ app.get('/api/products/:id', async (req, res) => {
 // POST /api/products/report-error - Semnalare eroare de către utilizator
 app.post('/api/products/report-error', publicReportLimiter, async (req, res) => {
   try {
+    const parsed = productErrorReportSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: parsed.error.issues[0]?.message || 'Date invalide pentru raportul de eroare.'
+      });
+    }
+
     const {
-      productId,
+      productId: rawProductId,
       productName,
       storeId,
       errorType,
       reportedPrice,
       details,
       reporterEmail
-    } = req.body;
+    } = parsed.data;
 
-    if (!productId || !productName || !errorType || !details) {
-      return res.status(400).json({ error: 'Date incomplete pentru raportul de eroare.' });
-    }
-
-    const rawProductId = String(productId).trim();
     const rawAliasIndex = await loadServerProductAliasIndex();
     const effectiveAliasIndex =
       !isPostgresConfigured() && rawAliasIndex.parentById.size === 0
@@ -4505,15 +4832,15 @@ app.post('/api/products/report-error', publicReportLimiter, async (req, res) => 
     const wasAlias = canonicalProductId !== rawProductId;
 
     const report = {
-      id: `err-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      id: `err-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
       productId: canonicalProductId,
       ...(wasAlias ? { originalProductId: rawProductId } : {}),
       productName,
-      storeId,
+      storeId: storeId || undefined,
       errorType,
-      reportedPrice: reportedPrice ? parseFloat(reportedPrice) : undefined,
+      reportedPrice: reportedPrice ?? undefined,
       details,
-      reporterEmail,
+      reporterEmail: reporterEmail || undefined,
       status: 'pending' as const,
       createdAt: new Date().toISOString()
     };
@@ -4542,7 +4869,7 @@ app.post('/api/products/report-error', publicReportLimiter, async (req, res) => 
       message: 'Raportul de eroare a fost înregistrat cu succes. Mulțumim pentru sprijinul în menținerea acurateței prețurilor!',
       reportId: report.id
     });
-  } catch (err: any) {
+  } catch {
     res.status(500).json({ error: 'Eroare la înregistrarea raportului.' });
   }
 });
@@ -4550,17 +4877,20 @@ app.post('/api/products/report-error', publicReportLimiter, async (req, res) => 
 // POST /api/admin/match-correction - Corectare sau separare grupuri de matching din panoul admin (DB tranzacțional + audit fără alterarea price_observations)
 app.post('/api/admin/match-correction', requireAdminAuth, async (req, res) => {
   try {
-    const { candidateId, correctedProductId, reason } = req.body || {};
-    if (!candidateId || !correctedProductId || !reason) {
-      return res.status(400).json({ error: 'Câmpurile candidateId, correctedProductId și reason sunt obligatorii.' });
+    const parsed = adminMatchCorrectionSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: parsed.error.issues[0]?.message || 'Câmpurile candidateId, correctedProductId și reason sunt obligatorii.'
+      });
     }
+    const { candidateId, correctedProductId, reason } = parsed.data;
 
     const result = await DatabaseService.correctProductMatch({
-      candidateId: String(candidateId),
-      correctedProductId: String(correctedProductId),
-      reason: String(reason),
+      candidateId,
+      correctedProductId,
+      reason,
       performedBy: 'admin',
-      ipAddress: req.ip
+      ipAddress: getClientIp(req)
     });
 
     if (!result.success) {
@@ -4577,7 +4907,7 @@ app.post('/api/admin/match-correction', requireAdminAuth, async (req, res) => {
       correctedProductId: result.correctedProductId,
       message: 'Asocierea a fost corectată, persistată și jurnalizată în audit.'
     });
-  } catch (err: any) {
+  } catch {
     res.status(500).json({ error: 'Eroare la corectarea asocierii.' });
   }
 });
@@ -4789,11 +5119,14 @@ app.get('/api/indexing/status', (req, res) => {
 // 3. Declanșare colectare sau dry-run pentru un retailer (Protejat Admin)
 app.post('/api/indexing/retailers/:id/run', requireAdminAuth, async (req, res) => {
   try {
-    const { id } = req.params;
-    const { dryRun = false, payload } = req.body;
+    const idParsed = safeIdentifierSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ success: false, error: 'Identificatorul retailerului este invalid.' });
+    }
+    const { dryRun = false, payload } = req.body || {};
 
-    const result = await IndexingScheduler.runRetailerJob(id, {
-      dryRun,
+    const result = await IndexingScheduler.runRetailerJob(idParsed.data, {
+      dryRun: Boolean(dryRun),
       payload,
       triggeredBy: 'admin_dashboard',
     });
@@ -4803,9 +5136,10 @@ app.post('/api/indexing/retailers/:id/run', requireAdminAuth, async (req, res) =
       result,
     });
   } catch (err: any) {
+    console.error('Eroare execuție job indexare:', err?.message);
     res.status(400).json({
       success: false,
-      error: err.message || 'Eroare la execuția jobului de indexare.',
+      error: 'Eroare la execuția jobului de indexare.',
     });
   }
 });
@@ -4863,8 +5197,8 @@ app.get('/api/indexing/monitor', (req, res) => {
   }
 });
 
-// 7. Obținere Candidați Descoperiți de pe Bonuri Fiscale
-app.get('/api/indexing/receipt-candidates', (req, res) => {
+// 7. Obținere Candidați Descoperiți de pe Bonuri Fiscale (Protejat Admin)
+app.get('/api/indexing/receipt-candidates', requireAdminAuth, (req, res) => {
   try {
     const candidates = StorageService.getReceiptProducts();
     res.json({
@@ -4881,14 +5215,17 @@ app.get('/api/indexing/receipt-candidates', (req, res) => {
 // 8. Declanșare Căutare Țintită pentru Produsele de pe Bonuri (Protejat Admin)
 app.post('/api/indexing/receipt-candidates/discover', requireAdminAuth, async (req, res) => {
   try {
-    const { dryRun = false, maxItems = 10 } = req.body;
+    const dryRun = Boolean(req.body?.dryRun);
+    const maxItemsRaw = Number(req.body?.maxItems ?? 10);
+    const maxItems = Number.isFinite(maxItemsRaw) ? Math.min(Math.max(1, Math.trunc(maxItemsRaw)), 50) : 10;
     const result = await CollectionWorker.discoverPendingReceiptProducts({ dryRun, maxItems });
     res.json({
       success: true,
       result,
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Eroare la procesarea căutării țintite pe bonuri.' });
+    console.error('Eroare discover receipt-candidates:', err?.message);
+    res.status(500).json({ error: 'Eroare la procesarea căutării țintite pe bonuri.' });
   }
 });
 
@@ -4909,21 +5246,14 @@ app.get('/api/indexing/promotions', (req, res) => {
 // 10. Configurare Oră și Interval Programare Scheduler (Protejat Admin)
 app.post('/api/indexing/schedule/config', requireAdminAuth, (req, res) => {
   try {
-    const { targetHour, targetMinute, timezone, checkIntervalMs } = req.body;
-
-    if (targetHour !== undefined && (targetHour < 0 || targetHour > 23)) {
-      return res.status(400).json({ error: 'targetHour trebuie să fie între 0 și 23.' });
-    }
-    if (targetMinute !== undefined && (targetMinute < 0 || targetMinute > 59)) {
-      return res.status(400).json({ error: 'targetMinute trebuie să fie între 0 și 59.' });
+    const parsed = indexingScheduleConfigSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: parsed.error.issues[0]?.message || 'Configurație scheduler invalidă.'
+      });
     }
 
-    IndexerScheduler.configure({
-      targetHour,
-      targetMinute,
-      timezone,
-      checkIntervalMs
-    });
+    IndexerScheduler.configure(parsed.data);
 
     const status = IndexerScheduler.getStatus();
     res.json({
@@ -4940,8 +5270,8 @@ app.post('/api/indexing/schedule/config', requireAdminAuth, (req, res) => {
 // PRICE QUALITY MONITOR & FRESHNESS SCORE ENDPOINTS
 // ============================================================================
 
-// GET /api/quality/overview - Privire generală calitatea indexului și grafice
-app.get('/api/quality/overview', (req, res) => {
+// GET /api/quality/overview - Privire generală calitatea indexului și grafice (Protejat Admin)
+app.get('/api/quality/overview', requireAdminAuth, (req, res) => {
   try {
     // Scanăm oportunitățile pentru a asigura sincronizarea anomaliilor
     PriceQualityMonitor.scanAndRecordAnomalies();
@@ -4951,12 +5281,13 @@ app.get('/api/quality/overview', (req, res) => {
       overview
     });
   } catch (err: any) {
-    res.status(500).json({ error: 'Eroare la generarea sintezei calității indexului.', details: err.message });
+    console.error('Eroare /api/quality/overview:', err?.message);
+    res.status(500).json({ error: 'Eroare la generarea sintezei calității indexului.' });
   }
 });
 
-// GET /api/quality/retailers - Metrici detaliate per retailer
-app.get('/api/quality/retailers', (req, res) => {
+// GET /api/quality/retailers - Metrici detaliate per retailer (Protejat Admin)
+app.get('/api/quality/retailers', requireAdminAuth, (req, res) => {
   try {
     const metrics = PriceQualityMonitor.getRetailerQualityMetrics();
     res.json({
@@ -4968,25 +5299,27 @@ app.get('/api/quality/retailers', (req, res) => {
   }
 });
 
-// GET /api/quality/anomalies - Lista anomaliilor detectate
-app.get('/api/quality/anomalies', async (req, res) => {
+// GET /api/quality/anomalies - Lista anomaliilor detectate (Protejat Admin)
+app.get('/api/quality/anomalies', requireAdminAuth, async (req, res) => {
   try {
-    const { status, retailerId, severity } = req.query;
+    const status = typeof req.query.status === 'string' && req.query.status.trim() ? req.query.status.trim().slice(0, 64) : undefined;
+    const retailerId = typeof req.query.retailerId === 'string' && req.query.retailerId.trim() ? req.query.retailerId.trim().slice(0, 64) : undefined;
+    const severity = typeof req.query.severity === 'string' && req.query.severity.trim() ? req.query.severity.trim().slice(0, 32) : undefined;
     const pool = getPool();
 
     if (pool) {
       try {
         const conditions: string[] = [];
         const values: any[] = [];
-        if (status && typeof status === 'string') {
+        if (status) {
           values.push(status);
           conditions.push(`status = $${values.length}`);
         }
-        if (retailerId && typeof retailerId === 'string') {
+        if (retailerId) {
           values.push(retailerId);
           conditions.push(`retailer_id = $${values.length}`);
         }
-        if (severity && typeof severity === 'string') {
+        if (severity) {
           values.push(severity);
           conditions.push(`severity = $${values.length}`);
         }
@@ -5000,7 +5333,8 @@ app.get('/api/quality/anomalies', async (req, res) => {
                   details, status, detected_at as "detectedAt", reviewed_at as "reviewedAt", 
                   reviewed_by as "reviewedBy"
            FROM quality_anomalies ${whereClause} 
-           ORDER BY detected_at DESC`
+           ORDER BY detected_at DESC`,
+          values
         );
         if (dbRes.rows.length > 0) {
           return res.json({
@@ -5016,13 +5350,13 @@ app.get('/api/quality/anomalies', async (req, res) => {
 
     let anomalies = StorageService.getQualityAnomalies();
 
-    if (status && typeof status === 'string') {
+    if (status) {
       anomalies = anomalies.filter(a => a.status === status);
     }
-    if (retailerId && typeof retailerId === 'string') {
+    if (retailerId) {
       anomalies = anomalies.filter(a => a.retailerId === retailerId);
     }
-    if (severity && typeof severity === 'string') {
+    if (severity) {
       anomalies = anomalies.filter(a => a.severity === severity);
     }
 
@@ -5045,16 +5379,16 @@ app.post('/api/quality/anomalies/:id/resolve', requireAdminAuth, async (req, res
       });
     }
 
-    const { id } = req.params;
-    const { resolution } = req.body; // 'resolved_approved' | 'resolved_rejected'
-
-    if (!id || typeof id !== 'string') {
+    const idParsed = safeIdentifierSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
       return res.status(400).json({ error: 'ID-ul anomaliei este obligatoriu.' });
     }
-
-    if (resolution !== 'resolved_approved' && resolution !== 'resolved_rejected') {
+    const bodyParsed = qualityAnomalyResolveSchema.safeParse(req.body || {});
+    if (!bodyParsed.success) {
       return res.status(400).json({ error: 'Rezoluție invalidă. Permis: resolved_approved sau resolved_rejected.' });
     }
+    const id = idParsed.data;
+    const { resolution } = bodyParsed.data;
 
     StorageService.updateQualityAnomalyStatus(id, resolution, 'admin');
 
@@ -5098,8 +5432,8 @@ app.post('/api/quality/anomalies/:id/resolve', requireAdminAuth, async (req, res
   }
 });
 
-// GET /api/quality/queue - Coada de recolectare și reverificare
-app.get('/api/quality/queue', async (req, res) => {
+// GET /api/quality/queue - Coada de recolectare și reverificare (Protejat Admin)
+app.get('/api/quality/queue', requireAdminAuth, async (req, res) => {
   try {
     const pool = getPool();
     if (pool) {
@@ -5178,8 +5512,8 @@ app.post('/api/quality/queue/run', requireAdminAuth, async (req, res) => {
   }
 });
 
-// GET /api/quality/reports - Lista rapoartelor zilnice de calitate
-app.get('/api/quality/reports', async (req, res) => {
+// GET /api/quality/reports - Lista rapoartelor zilnice de calitate (Protejat Admin)
+app.get('/api/quality/reports', requireAdminAuth, async (req, res) => {
   try {
     const pool = getPool();
     if (pool) {
@@ -5242,8 +5576,8 @@ app.post('/api/quality/reports/generate', requireAdminAuth, (req, res) => {
   }
 });
 
-// GET /api/quality/config - Configurație praguri prospețime și ponderi calitate
-app.get('/api/quality/config', (req, res) => {
+// GET /api/quality/config - Configurație praguri prospețime și ponderi calitate (Protejat Admin)
+app.get('/api/quality/config', requireAdminAuth, (req, res) => {
   try {
     const config = PriceQualityMonitor.getConfig();
     res.json({
@@ -5658,13 +5992,13 @@ const sendScheduleAlert = async (params: {
       body: JSON.stringify({
         from: 'Coșul Meu Alerte <alerte@cosulmeu.ro>',
         to: [recipient],
-        subject: `[Coșul Meu] Alertă Publicare Catalog: ${params.scheduleName} (${params.status.toUpperCase()})`,
+        subject: `[Coșul Meu] Alertă Publicare Catalog: ${String(params.scheduleName).replace(/[\r\n]/g, ' ')} (${params.status.toUpperCase()})`,
         html: `
           <h2>Raport Execuție Programare Catalog</h2>
-          <p><strong>Programare:</strong> ${params.scheduleName} (${params.scheduleId})</p>
-          <p><strong>Status:</strong> ${params.status.toUpperCase()}</p>
-          <p><strong>Oferte publicate:</strong> ${params.publishedCount}</p>
-          ${params.errors.length > 0 ? `<p><strong>Erori raportate:</strong></p><ul>${params.errors.map(e => `<li>${e}</li>`).join('')}</ul>` : ''}
+          <p><strong>Programare:</strong> ${escapeHtml(params.scheduleName)} (${escapeHtml(params.scheduleId)})</p>
+          <p><strong>Status:</strong> ${escapeHtml(params.status.toUpperCase())}</p>
+          <p><strong>Oferte publicate:</strong> ${Number(params.publishedCount) || 0}</p>
+          ${params.errors.length > 0 ? `<p><strong>Erori raportate:</strong></p><ul>${params.errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>` : ''}
           <p><small>Generat automat de Coșul Meu la ${new Date().toISOString()}</small></p>
         `
       })
@@ -5889,7 +6223,8 @@ app.get('/api/admin/catalog-publish-schedules', requireAdminAuth, async (_req, r
     `);
     return res.json({ schedules: result.rows });
   } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+    console.error('Eroare GET catalog-publish-schedules:', error?.message);
+    return res.status(500).json({ error: 'Eroare internă la obținerea programărilor.' });
   }
 });
 
@@ -5897,19 +6232,19 @@ app.post('/api/admin/catalog-publish-schedules', requireAdminAuth, async (req, r
   try {
     const pool = getPool();
     if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
+    const parsed = adminScheduleCreateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Date programare invalide.' });
+    }
     const {
       name,
-      retailerIds = [],
+      retailerIds,
       scheduledAt,
-      timezone = 'Europe/Bucharest',
+      timezone,
       alertEmail,
-      enabled = true,
-      scheduleType = 'once'
-    } = req.body || {};
-
-    if (!name || !scheduledAt) {
-      return res.status(400).json({ error: 'Numele și data programată sunt obligatorii.' });
-    }
+      enabled,
+      scheduleType
+    } = parsed.data;
 
     const result = await pool.query(
       `INSERT INTO catalog_publish_schedules (name, retailer_ids, scheduled_at, timezone, alert_email, enabled, next_run_at, schedule_type)
@@ -5919,16 +6254,18 @@ app.post('/api/admin/catalog-publish-schedules', requireAdminAuth, async (req, r
     );
 
     await DatabaseService.logAdminActivity({
-      userEmail: req.body?.userEmail || 'admin@cosulmeu.ro',
+      userEmail: 'admin@cosulmeu.ro',
       action: 'create_publish_schedule',
       targetType: 'catalog_publish_schedule',
       targetId: result.rows[0].id,
-      details: { name, retailerIds, scheduledAt, timezone, scheduleType }
+      details: { name, retailerIds, scheduledAt, timezone, scheduleType },
+      ipAddress: getClientIp(req)
     });
 
     return res.status(201).json({ schedule: result.rows[0] });
   } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+    console.error('Eroare POST catalog-publish-schedules:', error?.message);
+    return res.status(500).json({ error: 'Eroare internă la crearea programării.' });
   }
 });
 
@@ -5936,7 +6273,15 @@ app.patch('/api/admin/catalog-publish-schedules/:id', requireAdminAuth, async (r
   try {
     const pool = getPool();
     if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
-    const { name, retailerIds, scheduledAt, timezone, alertEmail, enabled, scheduleType } = req.body || {};
+    const idParsed = safeIdentifierSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ error: 'ID programare invalid.' });
+    }
+    const parsed = adminScheduleUpdateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Date actualizare programare invalide.' });
+    }
+    const { name, retailerIds, scheduledAt, timezone, alertEmail, enabled, scheduleType } = parsed.data;
     const result = await pool.query(
       `UPDATE catalog_publish_schedules
        SET name = COALESCE($2, name),
@@ -5950,20 +6295,25 @@ app.patch('/api/admin/catalog-publish-schedules/:id', requireAdminAuth, async (r
            updated_at = NOW()
        WHERE id = $1
        RETURNING id, name, retailer_ids AS "retailerIds", scheduled_at AS "scheduledAt", timezone, enabled, alert_email AS "alertEmail", last_status AS "lastStatus", last_error AS "lastError", schedule_type AS "scheduleType"`,
-      [req.params.id, name || null, retailerIds || null, scheduledAt || null, timezone || null, alertEmail || null, typeof enabled === 'boolean' ? enabled : null, scheduleType || null]
+      [idParsed.data, name || null, retailerIds || null, scheduledAt || null, timezone || null, alertEmail || null, typeof enabled === 'boolean' ? enabled : null, scheduleType || null]
     );
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: 'Programarea nu există.' });
+    }
 
     await DatabaseService.logAdminActivity({
-      userEmail: req.body?.userEmail || 'admin@cosulmeu.ro',
+      userEmail: 'admin@cosulmeu.ro',
       action: 'update_publish_schedule',
       targetType: 'catalog_publish_schedule',
-      targetId: req.params.id,
-      details: { updates: req.body }
+      targetId: idParsed.data,
+      details: { updates: parsed.data },
+      ipAddress: getClientIp(req)
     });
 
     return res.json({ schedule: result.rows[0] });
   } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+    console.error('Eroare PATCH catalog-publish-schedules:', error?.message);
+    return res.status(500).json({ error: 'Eroare internă la actualizarea programării.' });
   }
 });
 
@@ -5971,12 +6321,17 @@ app.post('/api/admin/catalog-publish-schedules/:id/run', requireAdminAuth, async
   try {
     const pool = getPool();
     if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
-    const result = await pool.query(`SELECT * FROM catalog_publish_schedules WHERE id = $1`, [req.params.id]);
+    const idParsed = safeIdentifierSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ error: 'ID programare invalid.' });
+    }
+    const result = await pool.query(`SELECT * FROM catalog_publish_schedules WHERE id = $1`, [idParsed.data]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Programarea nu există.' });
-    const execution = await runCatalogPublishSchedule(result.rows[0], 'manual', req.body?.userEmail);
+    const execution = await runCatalogPublishSchedule(result.rows[0], 'manual', 'admin@cosulmeu.ro');
     return res.json(execution);
   } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+    console.error('Eroare RUN catalog-publish-schedules:', error?.message);
+    return res.status(500).json({ error: 'Eroare internă la executarea programării.' });
   }
 });
 
@@ -5984,28 +6339,46 @@ app.delete('/api/admin/catalog-publish-schedules/:id', requireAdminAuth, async (
   try {
     const pool = getPool();
     if (!pool) return res.status(503).json({ error: 'Baza de date nu este configurată.' });
-    await pool.query('DELETE FROM catalog_publish_schedules WHERE id = $1', [req.params.id]);
+    const idParsed = safeIdentifierSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ error: 'ID programare invalid.' });
+    }
+    await pool.query('DELETE FROM catalog_publish_schedules WHERE id = $1', [idParsed.data]);
     await DatabaseService.logAdminActivity({
-      userEmail: req.body?.userEmail || 'admin@cosulmeu.ro',
+      userEmail: 'admin@cosulmeu.ro',
       action: 'delete_publish_schedule',
       targetType: 'catalog_publish_schedule',
-      targetId: req.params.id
+      targetId: idParsed.data,
+      ipAddress: getClientIp(req)
     });
     return res.status(204).end();
   } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+    console.error('Eroare DELETE catalog-publish-schedules:', error?.message);
+    return res.status(500).json({ error: 'Eroare internă la ștergerea programării.' });
   }
 });
 
 const handleCronPublish = async (req: express.Request, res: express.Response) => {
+  const configuredCronSecret = process.env.CRON_SECRET?.trim();
+  const configuredAdminSecret = process.env.ADMIN_API_KEY?.trim();
+
+  if (isProd && !configuredCronSecret && !configuredAdminSecret) {
+    return res.status(500).json({
+      error: 'Eroare critică de configurare securitate: CRON_SECRET sau ADMIN_API_KEY este obligatoriu în producție.'
+    });
+  }
+
   const allowedSecrets = [
-    process.env.CRON_SECRET,
-    process.env.ADMIN_API_KEY,
-    'cosul-meu-admin-secret-2026'
+    configuredCronSecret,
+    configuredAdminSecret,
+    !isProd && !configuredCronSecret && !configuredAdminSecret ? ADMIN_API_KEY : ''
   ].filter(Boolean) as string[];
 
   const authHeader = req.headers.authorization;
-  const isAuthorized = allowedSecrets.some(secret => authHeader === `Bearer ${secret}`);
+  const providedToken = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7).trim()
+    : '';
+  const isAuthorized = Boolean(providedToken) && allowedSecrets.some(secret => timingSafeTokenEqual(providedToken, secret));
 
   if (!isAuthorized) {
     return res.status(401).json({ error: 'Unauthorized: CRON_SECRET lipsă sau invalid' });
@@ -6025,7 +6398,8 @@ const handleCronPublish = async (req: express.Request, res: express.Response) =>
         const runRes = await runCatalogPublishSchedule(schedule, 'cron');
         runs.push({ id: schedule.id, name: schedule.name, ...runRes });
       } catch (error: any) {
-        runs.push({ id: schedule.id, name: schedule.name, success: false, error: error.message });
+        console.error('Eroare cron publish schedule:', schedule.id, error?.message);
+        runs.push({ id: schedule.id, name: schedule.name, success: false, error: 'Execuția programării a eșuat.' });
       }
     }
     return res.json({
@@ -6036,7 +6410,8 @@ const handleCronPublish = async (req: express.Request, res: express.Response) =>
       runs
     });
   } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+    console.error('Eroare handleCronPublish:', error?.message);
+    return res.status(500).json({ error: 'Eroare internă la rularea cron-ului de publicare.' });
   }
 };
 
@@ -6057,8 +6432,10 @@ app.get('/api/admin/operational-dashboard', requireAdminAuth, async (req, res) =
 // 1.2 Audit Logs administrative
 app.get('/api/admin/audit-logs', requireAdminAuth, async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit as string || '50', 10);
-    const offset = parseInt(req.query.offset as string || '0', 10);
+    const rawLimit = parseInt(String(req.query.limit ?? '50'), 10);
+    const rawOffset = parseInt(String(req.query.offset ?? '0'), 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
+    const offset = Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : 0;
     const logs = await DatabaseService.getAdminAuditLogs(limit, offset);
     res.json({ success: true, logs, count: logs.length });
   } catch (err: any) {
@@ -6068,14 +6445,18 @@ app.get('/api/admin/audit-logs', requireAdminAuth, async (req, res) => {
 
 app.post('/api/admin/audit-logs', requireAdminAuth, async (req, res) => {
   try {
-    const { action, targetType, targetId, details, userEmail } = req.body;
+    const parsed = adminAuditLogCreateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Date invalide pentru logul de audit.' });
+    }
+    const { action, targetType, targetId, details } = parsed.data;
     const logItem = await DatabaseService.logAdminActivity({
-      userEmail: userEmail || 'admin@cosulmeu.ro',
-      action: action || 'admin_action',
-      targetType: targetType || 'system',
-      targetId,
+      userEmail: 'admin@cosulmeu.ro',
+      action,
+      targetType,
+      targetId: targetId ?? undefined,
       details: details || {},
-      ipAddress: (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress
+      ipAddress: getClientIp(req)
     });
     res.json({ success: true, logItem });
   } catch (err: any) {
@@ -6250,7 +6631,8 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
       }
       persistedOfficialUrl = savedRow.official_url || undefined;
     } else {
-      const { error: storeError } = await supabase.from('stores').insert({
+      const sbAdmin = getSupabaseAdminClient() || supabase;
+      const { error: storeError } = await sbAdmin.from('stores').insert({
         id: newStore.id,
         name: newStore.name,
         slug: newStore.slug,
@@ -6266,7 +6648,7 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
       });
       if (storeError) throw storeError;
 
-      const { data: savedRow, error: readBackError } = await supabase
+      const { data: savedRow, error: readBackError } = await sbAdmin
         .from('stores')
         .select('id, name, slug, chain, brand_color, accent_color, store_type, official_url')
         .eq('id', newStore.id)
@@ -6338,8 +6720,8 @@ app.post('/api/admin/retailers', requireAdminAuth, async (req, res) => {
     if (err?.code === '23505') {
       return res.status(409).json({ error: 'Există deja un retailer cu acest identificator sau slug.' });
     }
-    console.error('Eroare adăugare retailer:', err);
-    res.status(500).json({ error: err?.message || 'Eroare la adăugarea retailerului.' });
+    console.error('Eroare adăugare retailer:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la adăugarea retailerului.' });
   }
 });
 
@@ -6499,8 +6881,8 @@ app.put('/api/admin/retailers/:id', requireAdminAuth, async (req, res) => {
 
     return res.json({ success: true, retailer, message: `Retailerul "${name}" a fost actualizat cu succes.` });
   } catch (err: any) {
-    console.error('Eroare actualizare retailer:', err);
-    return res.status(500).json({ error: err?.message || 'Eroare la actualizarea retailerului.' });
+    console.error('Eroare actualizare retailer:', err?.message);
+    return res.status(500).json({ error: 'Eroare internă la actualizarea retailerului.' });
   }
 });
 
@@ -6513,9 +6895,10 @@ app.get('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, res
       return res.json({ success: true, sources: result.rows, count: result.rows.length });
     }
 
-    // Fallback la Supabase REST
+    // Fallback la Supabase REST (preferă service_role pe server)
     try {
-      const { data, error } = await supabase.from('catalog_sources').select('*').order('retailer_id', { ascending: true });
+      const sbAdmin = getSupabaseAdminClient() || supabase;
+      const { data, error } = await sbAdmin.from('catalog_sources').select('*').order('retailer_id', { ascending: true });
       if (!error && data && data.length > 0) {
         const mapped = data.map(r => ({
           id: r.id,
@@ -6609,7 +6992,8 @@ app.post('/api/admin/catalog-importer/sources', requireAdminAuth, async (req, re
         [newSource.id, newSource.retailerId, newSource.name, newSource.catalogUrl, newSource.format, newSource.status, newSource.updateFrequencyDays, newSource.authRequired, newSource.legalStatusNotice]
       );
     } else {
-      const { error: sourceError } = await supabase.from('catalog_sources').upsert({
+      const sbAdmin = getSupabaseAdminClient() || supabase;
+      const { error: sourceError } = await sbAdmin.from('catalog_sources').upsert({
         id: newSource.id,
         retailer_id: newSource.retailerId,
         name: newSource.name,
@@ -6646,7 +7030,8 @@ app.delete('/api/admin/catalog-importer/sources/:id', requireAdminAuth, async (r
     if (pool) {
       await pool.query('DELETE FROM catalog_sources WHERE id = $1', [id]);
     } else {
-      const { error } = await supabase.from('catalog_sources').delete().eq('id', id);
+      const sbAdmin = getSupabaseAdminClient() || supabase;
+      const { error } = await sbAdmin.from('catalog_sources').delete().eq('id', id);
       if (error) throw error;
     }
 
@@ -6662,16 +7047,21 @@ app.delete('/api/admin/catalog-importer/sources/:id', requireAdminAuth, async (r
 // 4. Modificare stare sursă (activare / pauză)
 app.patch('/api/admin/catalog-importer/sources/:id/status', requireAdminAuth, async (req, res) => {
   try {
-    const { status } = req.body;
-    if (!['active', 'pending_authorization', 'disabled', 'error'].includes(status)) {
+    const idParsed = safeIdentifierSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ error: 'ID sursă invalid.' });
+    }
+    const bodyParsed = adminCatalogSourceStatusSchema.safeParse(req.body || {});
+    if (!bodyParsed.success) {
       return res.status(400).json({ error: 'Status invalid.' });
     }
-    const updated = StorageService.updateCatalogSource(req.params.id, { status });
+    const { status } = bodyParsed.data;
+    const updated = StorageService.updateCatalogSource(idParsed.data, { status });
     if (!updated) {
       return res.status(404).json({ error: 'Sursa nu a fost găsită.' });
     }
     const pool = getPool();
-    if (pool) await pool.query('UPDATE catalog_sources SET status = $1 WHERE id = $2', [status, req.params.id]);
+    if (pool) await pool.query('UPDATE catalog_sources SET status = $1 WHERE id = $2', [status, idParsed.data]);
     res.json({ success: true, source: updated });
   } catch (err: any) {
     res.status(500).json({ error: 'Eroare la actualizarea stării sursei.' });
@@ -6831,7 +7221,8 @@ app.post('/api/admin/catalog-importer/documents/:id/reprocess', requireAdminAuth
       message: `Documentul „${doc.title}” a fost reprocesat cu succes: ${result.run.totalRawExtracted} oferte extrase.`
     });
   } catch (err: any) {
-    res.status(500).json({ error: `Eroare la reprocesarea documentului: ${err.message}` });
+    console.error('Eroare reprocesare document:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la reprocesarea documentului.' });
   }
 });
 
@@ -6897,7 +7288,8 @@ app.post('/api/admin/catalog-importer/run-pilot', requireAdminAuth, async (req, 
       result: pilotResult
     });
   } catch (err: any) {
-    res.status(500).json({ error: `Eroare la rularea importului pilot: ${err.message}` });
+    console.error('Eroare run-pilot:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la rularea importului pilot.' });
   }
 });
 
@@ -6907,7 +7299,8 @@ app.get('/api/admin/catalog-importer/active-sources', requireAdminAuth, async (r
     const sources = await CatalogStagingManager.getActiveCatalogSources();
     res.json({ success: true, sources, count: sources.length });
   } catch (err: any) {
-    res.status(500).json({ error: `Eroare la obținerea surselor active: ${err.message}` });
+    console.error('Eroare active-sources:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la obținerea surselor active.' });
   }
 });
 
@@ -6925,7 +7318,8 @@ app.post('/api/admin/catalog-importer/run-active', requireAdminAuth, async (req,
       result
     });
   } catch (err: any) {
-    res.status(500).json({ error: `Eroare la rularea surselor active: ${err.message}` });
+    console.error('Eroare run-active:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la rularea surselor active.' });
   }
 });
 
@@ -6972,13 +7366,14 @@ app.get('/api/admin/catalog-importer/db-check', requireAdminAuth, async (req, re
       checkedAt: new Date().toISOString()
     });
   } catch (err: any) {
+    console.error('Eroare db-check:', err?.message);
     res.json({
       success: true,
       connected: false,
       configured: true,
       mode: 'connection_failed',
       statusLabel: 'Eroare Conexiune',
-      warning: `Conexiunea PostgreSQL a eșuat: ${err.message}`,
+      warning: 'Conexiunea PostgreSQL a eșuat. Verificați configurația bazei de date.',
       checkedAt: new Date().toISOString()
     });
   }
@@ -6987,8 +7382,12 @@ app.get('/api/admin/catalog-importer/db-check', requireAdminAuth, async (req, re
 // 8. Procesare document specific
 app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, async (req, res) => {
   try {
-    const { id } = req.params;
-    const { autoPublish = false } = req.body;
+    const idParsed = safeIdentifierSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ error: 'ID document invalid.' });
+    }
+    const id = idParsed.data;
+    const { autoPublish = false } = req.body || {};
     const docs = StorageService.getCatalogDocuments();
     const doc = docs.find(d => d.id === id);
 
@@ -6997,7 +7396,7 @@ app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, a
     }
 
     const result = await CatalogStagingManager.executeImportForDocument(doc, {
-      autoPublishValidated: autoPublish
+      autoPublishValidated: Boolean(autoPublish)
     });
 
     res.json({
@@ -7007,7 +7406,8 @@ app.post('/api/admin/catalog-importer/process-document/:id', requireAdminAuth, a
       message: `Procesare document finalizată (${result.run.totalRawExtracted} oferte extrase).`
     });
   } catch (err: any) {
-    res.status(500).json({ error: `Eroare la procesarea documentului: ${err.message}` });
+    console.error('Eroare process-document:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la procesarea documentului.' });
   }
 });
 
@@ -7046,22 +7446,20 @@ app.get('/api/admin/catalog-importer/staging', requireAdminAuth, async (req, res
 // 9.1. Aprobare & Validare sau respingere în masă a ofertelor din Staging (Bulk Review)
 app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, async (req, res) => {
   try {
-    const { offerIds, action, rejectionReason } = req.body;
-    if (!Array.isArray(offerIds) || offerIds.length === 0) {
-      return res.status(400).json({ error: 'Selectați cel puțin o ofertă pentru procesare.' });
+    const parsed = adminStagingBulkReviewSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Date invalide pentru procesarea în lot.' });
     }
-    if (!['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ error: 'Acțiunea trebuie să fie "approve" sau "reject".' });
-    }
+    const { offerIds, action, rejectionReason } = parsed.data;
 
-    const userEmail = (req.body?.userEmail as string) || 'admin@cosulmeu.ro';
-    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
+    const userEmail = 'admin@cosulmeu.ro';
+    const ipAddress = getClientIp(req);
 
     if (isPostgresConfigured() && getPool()) {
       const result = await DatabaseService.bulkReviewStagingOffers({
         offerIds,
         action,
-        rejectionReason,
+        rejectionReason: rejectionReason ?? undefined,
         userEmail,
         ipAddress
       });
@@ -7206,8 +7604,8 @@ app.post('/api/admin/catalog-importer/staging/bulk-review', requireAdminAuth, as
         : `${rejectedCount} oferte au fost respinse.`
     });
   } catch (err: any) {
-    console.error('Eroare bulk-review staging:', err.message);
-    res.status(500).json({ error: err.message || 'Eroare la procesarea în lot a ofertelor.' });
+    console.error('Eroare bulk-review staging:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la procesarea în lot a ofertelor.' });
   }
 });
 
@@ -7274,21 +7672,25 @@ app.get('/api/admin/catalog-importer/items-without-price', requireAdminAuth, asy
 // 10. Validare, aprobare sau respingere manuală ofertă individuală din Staging
 app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, async (req, res) => {
   try {
-    const { id } = req.params;
-    const { action, matchedProductId, rejectionReason } = req.body;
-    const userEmail = (req.body?.userEmail as string) || 'admin@cosulmeu.ro';
-    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress;
-
-    if (!['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ error: 'Acțiune invalidă. Este necesar "approve" sau "reject".' });
+    const idParsed = safeIdentifierSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ error: 'Identificatorul ofertei este invalid.' });
     }
+    const bodyParsed = adminStagingSingleReviewSchema.safeParse(req.body || {});
+    if (!bodyParsed.success) {
+      return res.status(400).json({ error: bodyParsed.error.issues[0]?.message || 'Date invalide pentru revizuirea ofertei.' });
+    }
+    const id = idParsed.data;
+    const { action, matchedProductId, rejectionReason } = bodyParsed.data;
+    const userEmail = 'admin@cosulmeu.ro';
+    const ipAddress = getClientIp(req);
 
     if (isPostgresConfigured() && getPool()) {
       const result = await DatabaseService.reviewSingleStagingOffer({
         offerId: id,
         action,
-        matchedProductId,
-        rejectionReason,
+        matchedProductId: matchedProductId ?? undefined,
+        rejectionReason: rejectionReason ?? undefined,
         userEmail,
         ipAddress
       });
@@ -7402,7 +7804,8 @@ app.post('/api/admin/catalog-importer/staging/:id/review', requireAdminAuth, asy
       });
     }
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Eroare la revizuirea ofertei.' });
+    console.error('Eroare revizuire ofertă staging:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la revizuirea ofertei.' });
   }
 });
 
@@ -7479,7 +7882,8 @@ app.post('/api/admin/catalog-importer/publish-validated', requireAdminAuth, asyn
         : `Publicarea a fost finalizată cu avertismente: ${pubResult.errors.join('; ')}`
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Eroare la publicarea ofertelor validate.' });
+    console.error('Eroare publish-validated:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la publicarea ofertelor validate.' });
   }
 });
 
@@ -7648,10 +8052,11 @@ app.delete('/api/admin/products/:id', requireAdminAuth, async (req, res) => {
 // 13.3 Ștergere / Delistare produse în masă (Bulk Delete fail-safe)
 app.post('/api/admin/products/bulk-delete', requireAdminAuth, async (req, res) => {
   try {
-    const { ids } = req.body;
-    if (!Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ error: 'Lista de ID-uri de produse este obligatorie.' });
+    const parsed = adminProductsBulkDeleteSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Lista de ID-uri de produse este obligatorie.' });
     }
+    const { ids } = parsed.data;
     const result = await DatabaseService.deleteProducts(ids);
     if (result.partialModification) {
       return res.status(500).json({
@@ -8061,25 +8466,31 @@ app.post('/api/admin/import/run-retailer/:retailerId', requireAdminAuth, async (
 
     res.json({ success: result.success, result, message });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Eroare la rularea importului pentru retailer.' });
+    console.error('Eroare import retailer:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la rularea importului pentru retailer.' });
   }
 });
 
 // 13.6 Reîncercare sigură eroare de procesare
 app.post('/api/admin/errors/:id/retry', requireAdminAuth, async (req, res) => {
   try {
-    const { id } = req.params;
-    const { userEmail } = req.body;
+    const idParsed = safeIdentifierSchema.safeParse(req.params.id);
+    if (!idParsed.success) {
+      return res.status(400).json({ error: 'Identificator eroare invalid.' });
+    }
+    const id = idParsed.data;
+    const userEmail = 'admin@cosulmeu.ro';
 
     const errors = StorageService.getCatalogImportErrors();
     const errItem = errors.find(e => e.id === id);
 
     await DatabaseService.logAdminActivity({
-      userEmail: userEmail || 'admin@cosulmeu.ro',
+      userEmail,
       action: 'retry_processing_error',
       targetType: 'catalog_import_error',
       targetId: id,
-      details: { errorId: id, retailerId: errItem?.retailerId, stage: errItem?.stage }
+      details: { errorId: id, retailerId: errItem?.retailerId, stage: errItem?.stage },
+      ipAddress: getClientIp(req)
     });
 
     if (errItem?.retailerId) {
@@ -8089,21 +8500,27 @@ app.post('/api/admin/errors/:id/retry', requireAdminAuth, async (req, res) => {
 
     res.json({ success: true, message: 'Operațiunea de retry a fost recepționată.' });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Eroare la executarea reîncercării.' });
+    console.error('Eroare retry processing:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la executarea reîncercării.' });
   }
 });
 
-// 14. Colectare imediată indexare prețuri
-app.post('/api/indexing/collect-now', async (req, res) => {
+// 14. Colectare imediată indexare prețuri (Protejat Admin)
+app.post('/api/indexing/collect-now', requireAdminAuth, async (req, res) => {
   try {
-    const { retailerId = 'lidl' } = req.body;
+    const parsed = indexingCollectNowSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Identificatorul retailerului este invalid.' });
+    }
+    const { retailerId } = parsed.data;
     const result = await IndexingScheduler.runRetailerJob(retailerId, {
       triggeredBy: 'api_collect_now'
     });
     invalidateCatalogOptimizationCache();
     res.json({ success: true, result });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Eroare la declanșarea colectării.' });
+    console.error('Eroare collect-now:', err?.message);
+    res.status(500).json({ error: 'Eroare internă la declanșarea colectării.' });
   }
 });
 
@@ -8493,7 +8910,7 @@ app.get('/api/catalog/barcode/:code', publicComputeLimiter, async (req, res) => 
   }
 });
 
-app.post('/api/products/suggestions', publicComputeLimiter, async (req, res) => {
+app.post('/api/products/suggestions', publicReportLimiter, async (req, res) => {
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const parsed = barcodeSuggestionCreateSchema.safeParse(req.body);
@@ -8539,6 +8956,9 @@ app.post('/api/products/suggestions', publicComputeLimiter, async (req, res) => 
     }
 
     if (!persistedInDb) {
+      if (inMemoryBarcodeSuggestions.length >= 5000) {
+        inMemoryBarcodeSuggestions.shift();
+      }
       inMemoryBarcodeSuggestions.push(suggestionRecord);
     }
 

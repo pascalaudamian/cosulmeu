@@ -306,7 +306,9 @@ async function runTests() {
 
   try {
     // GET /api/quality/overview
-    const overRes = await fetch(`http://localhost:${port}/api/quality/overview`);
+    const overRes = await fetch(`http://localhost:${port}/api/quality/overview`, {
+      headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` }
+    });
     assert.strictEqual(overRes.status, 200);
     const overData = await overRes.json();
     assert.strictEqual(overData.success, true);
@@ -314,7 +316,9 @@ async function runTests() {
     pass('GET /api/quality/overview returnează 200 OK cu datele celor 8 retaileri');
 
     // GET /api/quality/retailers
-    const retRes = await fetch(`http://localhost:${port}/api/quality/retailers`);
+    const retRes = await fetch(`http://localhost:${port}/api/quality/retailers`, {
+      headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` }
+    });
     assert.strictEqual(retRes.status, 200);
     const retData = await retRes.json();
     assert.strictEqual(retData.success, true);
@@ -322,7 +326,9 @@ async function runTests() {
     pass('GET /api/quality/retailers returnează toți cei 8 retaileri cu indicatori');
 
     // GET /api/quality/anomalies
-    const anomRes = await fetch(`http://localhost:${port}/api/quality/anomalies`);
+    const anomRes = await fetch(`http://localhost:${port}/api/quality/anomalies`, {
+      headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` }
+    });
     assert.strictEqual(anomRes.status, 200);
     const anomData = await anomRes.json();
     assert.strictEqual(anomData.success, true);
