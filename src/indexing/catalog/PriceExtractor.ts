@@ -281,6 +281,9 @@ export class PriceExtractor {
     const str = String(raw).replace(/\u00a0/g, ' ').trim();
     if (!str) return null;
 
+    if (/^[-−–]\s*\d/.test(str)) {
+      return null;
+    }
     if (UNIT_ATTACHED_NUMBER_RE.test(str) && !/\b(?:lei|ron)\b/i.test(str)) {
       return null;
     }

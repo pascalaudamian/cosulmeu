@@ -1,36 +1,44 @@
-# This workflow will run tests using node and then publish a package to GitHub Packages when a release is created
-# For more information see: https://docs.github.com/en/actions/publishing-packages/publishing-nodejs-packages
+# CI workflow aligned with bun.lock and V1 test suites (non-destructive)
 
-name: Node.js Package
+name: CI & Package Verification
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   release:
     types: [created]
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - run: npm ci
-      - run: npm test
-
-  publish-gpr:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 20
-          registry-url: https://npm.pkg.github.com/
-      - run: npm ci
-      - run: npm publish
+          bun-version: 1.4.4
+      - name: Install dependencies reproducibly (bun.lock)
+        run: bun install --frozen-lockfile
+      - name: TypeScript typecheck
+        run: bun run lint
+      - name: Production Vite build
+        run: bun run build
+      - name: Run isolated V1 & security test suites
         env:
-          NODE_AUTH_TOKEN: ${{secrets.GITHUB_TOKEN}}
+          NODE_ENV: test
+          COSUL_MEU_ISOLATED_TEST: '1'
+        run: bun run test
+      - name: Report live PostgreSQL test requirement (non-destructive)
+        if: always()
+        run: |
+          echo "=== Raport separat teste PostgreSQL LIVE ==="
+          if [ -z "${{ secrets.STAGING_DATABASE_URL }}" ]; then
+            echo "SKIPPED: STAGING_DATABASE_URL nu este configurat în CI; testele live PostgreSQL (RLS/triggeri) nu se execută pe producție."
+          else
+            DATABASE_URL="${{ secrets.STAGING_DATABASE_URL }}" NODE_ENV=test bun run test:live-pg
+          fi
+

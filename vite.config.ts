@@ -1,14 +1,30 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import {defineConfig, loadEnv} from 'vite';
 
-export default defineConfig(({ command }) => {
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const supabaseUrl =
+    env.VITE_SUPABASE_URL ||
+    env.NEXT_PUBLIC_cosulmeuSUPABASE_URL ||
+    env.SUPABASE_URL ||
+    '';
+  const supabaseAnonKey =
+    env.VITE_SUPABASE_ANON_KEY ||
+    env.NEXT_PUBLIC_cosulmeuSUPABASE_ANON_KEY ||
+    env.SUPABASE_ANON_KEY ||
+    '';
+  const supabaseRedirectUrl =
+    env.VITE_SUPABASE_REDIRECT_URL ||
+    env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL ||
+    '';
+
   return {
     define: {
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(process.env.NEXT_PUBLIC_cosulmeuSUPABASE_URL || process.env.SUPABASE_URL),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(process.env.NEXT_PUBLIC_cosulmeuSUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY),
-      'import.meta.env.VITE_SUPABASE_REDIRECT_URL': JSON.stringify(process.env.NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL || ''),
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supabaseAnonKey),
+      'import.meta.env.VITE_SUPABASE_REDIRECT_URL': JSON.stringify(supabaseRedirectUrl),
     },
     plugins: [react(), tailwindcss()],
     resolve: {

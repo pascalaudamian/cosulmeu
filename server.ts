@@ -178,7 +178,11 @@ app.use((req, res, next) => {
 const ALLOWED_CORS_ORIGINS = new Set<string>([
   'https://cosulmeu.online',
   'https://www.cosulmeu.online',
+  ...(process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL.trim()}`] : []),
   ...(process.env.APP_URL ? [process.env.APP_URL.trim()] : []),
+  ...(process.env.ALLOWED_ORIGIN
+    ? process.env.ALLOWED_ORIGIN.split(',').map(s => s.trim()).filter(Boolean)
+    : []),
   ...(process.env.CORS_ALLOWED_ORIGINS
     ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
     : []),
@@ -211,6 +215,8 @@ function isHttpsRequest(req: express.Request): boolean {
   return proto === 'https' || isProd;
 }
 
+const DARK_MODE_INIT_SCRIPT_HASH = "'sha256-7DUp6drkr3Ri2Ia+TtgXbgBtMcZZdhyhhkggdBV51WM='";
+
 // Security headers & strict CORS enforcement
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -221,10 +227,10 @@ app.use((req, res, next) => {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
   if (req.path !== '/api/images/proxy') {
-    const scriptSrc = isProd ? "'self'" : "'self' 'unsafe-inline'";
+    const scriptSrc = isProd ? `'self' ${DARK_MODE_INIT_SCRIPT_HASH}` : "'self' 'unsafe-inline'";
     res.setHeader(
       'Content-Security-Policy',
-      `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://generativelanguage.googleapis.com; frame-ancestors 'self' https://aistudio.google.com https://*.google.com; object-src 'none'; base-uri 'self'; form-action 'self'`
+      `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://generativelanguage.googleapis.com; frame-ancestors 'self' https://aistudio.google.com https://*.google.com; object-src 'none'; base-uri 'self'; form-action 'self'`
     );
   }
 
@@ -391,8 +397,16 @@ const imageProxyLimiter = createRateLimiter({
   messageRo: 'Prea multe cereri către proxy-ul de imagini. Reîncearcă în curând.'
 });
 
-// Lazy non-blocking database initialization if configured
-if (isPostgresConfigured() && process.env.NODE_ENV !== 'test') {
+function isIsolatedTestMode(): boolean {
+  return process.env.COSUL_MEU_ISOLATED_TEST === '1';
+}
+
+function isLiveDbMode(): boolean {
+  return !isIsolatedTestMode() && isPostgresConfigured();
+}
+
+// Lazy non-blocking database initialization if configured (skip in test and serverless ephemeral invocations)
+if (isLiveDbMode() && process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
   DatabaseService.initializeSchemaAndSeed()
     .then(ok => {
       if (ok) console.log('✅ PostgreSQL: Schema și catalog inițializate cu succes.');
@@ -418,9 +432,14 @@ if (apiKey) {
 }
 
 const SUPABASE_URL =
-  process.env.VITE_SUPABASE_URL || 'https://bwanbgbimktluajvwzsj.supabase.co';
+  process.env.SUPABASE_URL?.trim() ||
+  process.env.VITE_SUPABASE_URL?.trim() ||
+  process.env.NEXT_PUBLIC_cosulmeuSUPABASE_URL?.trim() ||
+  'https://bwanbgbimktluajvwzsj.supabase.co';
 const SUPABASE_ANON_KEY =
-  process.env.VITE_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_ANON_KEY?.trim() ||
+  process.env.VITE_SUPABASE_ANON_KEY?.trim() ||
+  process.env.NEXT_PUBLIC_cosulmeuSUPABASE_ANON_KEY?.trim() ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ3YW5iZ2JpbWt0bHVhanZ3enNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3OTM0ODQsImV4cCI6MjEwOTM2OTQ4NH0.dHSKcUjqitbWOBmV_aG5IjWM5L7nTilVML0DOomd9gs';
 
 async function getAuthenticatedSupabaseUser(req: express.Request) {
@@ -2775,7 +2794,7 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
     const equivalentIds = new Set(collectProductIdsForCanonical(canonicalProductId, aliasIndex));
     equivalentIds.add(canonicalProductId);
 
-    const [observations, offers, stores] = isPostgresConfigured()
+    const [observations, offers, stores] = isLiveDbMode()
       ? await Promise.all([
           DatabaseService.getPriceObservations(canonicalProductId, { days: 365, limit: 5000 }),
           DatabaseService.getOffers(),
@@ -2795,7 +2814,7 @@ app.get('/api/catalog/history/:productId', async (req, res) => {
     }
 
     const matchedProduct =
-      (isPostgresConfigured() ? undefined : StorageService.getAllProducts().find(p => p.id === canonicalProductId)) ||
+      (isLiveDbMode() ? undefined : StorageService.getAllProducts().find(p => p.id === canonicalProductId)) ||
       undefined;
 
     const fullStats = PriceHistoryService.getProductPriceStats(canonicalProductId, {
@@ -2921,7 +2940,7 @@ app.post('/api/catalog/compare', publicComputeLimiter, async (req, res) => {
     const { items = [], options = {} } = req.body || {};
     const [aliasMap, catalogPair] = await Promise.all([
       loadServerProductAliasIndex(),
-      isPostgresConfigured()
+      isLiveDbMode()
         ? Promise.all([DatabaseService.getProducts(), DatabaseService.getOffers(), DatabaseService.getStores()])
         : Promise.resolve([StorageService.getAllProducts(), StorageService.getProductOffers(), STORES] as const)
     ]);
@@ -3050,7 +3069,7 @@ app.post('/api/basket/optimize', publicComputeLimiter, async (req, res) => {
 
     const [rawAliasIndex, dataset] = await Promise.all([
       loadServerProductAliasIndex(),
-      isPostgresConfigured()
+      isLiveDbMode()
         ? DatabaseService.getOptimizationDataset(resolvedItems)
         : Promise.resolve({
             products: StorageService.getAllProducts(),
@@ -3142,7 +3161,7 @@ app.get('/api/basket/optimize/:listId', publicComputeLimiter, async (req, res) =
 
     const [rawAliasIndex, dataset] = await Promise.all([
       loadServerProductAliasIndex(),
-      isPostgresConfigured()
+      isLiveDbMode()
         ? DatabaseService.getOptimizationDataset(ownedResult.items)
         : Promise.resolve({
             products: StorageService.getAllProducts(),
@@ -4173,7 +4192,7 @@ app.post('/api/alerts/evaluate', userWriteLimiter, async (req, res) => {
 
       const observationsByProduct = await Promise.all(
         observationProductIds.map(canonicalPid => {
-          if (isPostgresConfigured()) {
+          if (isLiveDbMode()) {
             return DatabaseService.getPriceObservations(canonicalPid);
           }
           const equiv = new Set(collectProductIdsForCanonical(canonicalPid, aliasIndex));
@@ -4818,7 +4837,7 @@ app.post('/api/products/report-error', publicReportLimiter, async (req, res) => 
 
     const rawAliasIndex = await loadServerProductAliasIndex();
     const effectiveAliasIndex =
-      !isPostgresConfigured() && rawAliasIndex.parentById.size === 0
+      !isLiveDbMode() && rawAliasIndex.parentById.size === 0
         ? mergeCanonicalAliasSources(rawAliasIndex, StorageService.getAllProducts())
         : rawAliasIndex;
     const detail = resolveCanonicalProductDetail(rawProductId, effectiveAliasIndex);
@@ -4976,7 +4995,7 @@ app.post('/api/admin/sources/:sourceId/import', requireAdminAuth, async (req, re
 
   const adapter = new FileImportAdapter(sourceId, `Import ${sourceId}`, storeId);
   const valResult = adapter.validateRecords(rawRecords);
-  const productsForMatching = isPostgresConfigured()
+  const productsForMatching = isLiveDbMode()
   ? await DatabaseService.getProducts()
   : StorageService.getAllProducts();
   const normResult = adapter.normalize(valResult.valid, storeId, productsForMatching);
@@ -5084,8 +5103,8 @@ app.post('/api/admin/sources/:sourceId/import', requireAdminAuth, async (req, re
 // MOTOR HIBRID DE INDEXARE A PREȚURILOR (7 RETAILERI ROMÂNIA)
 // ============================================================================
 
-// Pornire scheduler de colectare automată în fundal (evită pornirea în teste)
-if (process.env.NODE_ENV !== 'test') {
+// Pornire scheduler de colectare automată în fundal (evită pornirea în teste și în serverless Vercel)
+if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
   IndexingScheduler.startScheduler();
 }
 
@@ -8538,7 +8557,7 @@ async function loadV2CatalogDataset(includeObservations = false): Promise<{
   aliasMap: CanonicalAliasIndex;
   retailerProducts: RetailerProductRecord[];
 }> {
-  if (isPostgresConfigured()) {
+  if (isLiveDbMode()) {
     try {
       const [products, offers, stores, observations, aliasMap, retailerProducts] = await Promise.all([
         DatabaseService.getProducts(),
@@ -9736,29 +9755,20 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Vite Middleware integration (active in dev, skipped during test)
-if (!isProd && process.env.NODE_ENV !== 'test') {
-  const { createServer: createViteServer } = await import('vite');
-  const vite = await createViteServer({
-    // Keep lazy-loaded UI and the renderer on one React module instance.
-    resolve: {
-      dedupe: ['react', 'react-dom'],
-    },
-    optimizeDeps: {
-      include: ['react', 'react-dom', 'react-dom/client'],
-    },
-    server: {
-      middlewareMode: true,
-      port: 3000,
-      host: '0.0.0.0',
-    },
-    appType: 'spa',
+// Fallback JSON 404 pentru orice rută /api/* necunoscută (nu este capturată de SPA fallback)
+app.use('/api', (_req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'Endpoint API inexistent.'
   });
-  app.use(vite.middlewares);
-} else if (isProd) {
-  app.use(express.static(path.resolve(__dirname, 'dist')));
-  app.get('*', (req, res) => {
-    res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+});
+
+// În producție non-serverless (Express standalone), servește static dist/ și SPA fallback
+if (isProd && !process.env.VERCEL) {
+  const distDir = path.resolve(__dirname, 'dist');
+  app.use(express.static(distDir));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(distDir, 'index.html'));
   });
 }
 
@@ -9767,9 +9777,36 @@ const isMainModule = Boolean(
   (fileURLToPath(import.meta.url) === process.argv[1] || process.argv[1].endsWith('server.ts'))
 );
 
-if (isMainModule && process.env.NODE_ENV !== 'test') {
+async function startStandaloneServer() {
+  if (!isProd && process.env.NODE_ENV !== 'test') {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      // Keep lazy-loaded UI and the renderer on one React module instance.
+      resolve: {
+        dedupe: ['react', 'react-dom'],
+      },
+      optimizeDeps: {
+        include: ['react', 'react-dom', 'react-dom/client'],
+      },
+      server: {
+        middlewareMode: true,
+        port: 3000,
+        host: '0.0.0.0',
+      },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  }
+
   app.listen(PORT, () => {
     console.log(`Server Coșul Meu pornit pe http://localhost:${PORT}`);
+  });
+}
+
+if (isMainModule && process.env.NODE_ENV !== 'test') {
+  startStandaloneServer().catch(err => {
+    console.error('Eroare la pornirea serverului:', err);
+    process.exit(1);
   });
 }
 

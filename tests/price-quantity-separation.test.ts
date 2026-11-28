@@ -22,6 +22,9 @@ describe('Separare Preț vs Cantitate, Validare Pre-Publicare și Audit Administ
   let baseUrl = '';
   let adminToken = '';
 
+  const recentIso = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const recentDate = recentIso.slice(0, 10);
+
   const seedTestCatalogInMemory = () => {
     const products: Product[] = [
       {
@@ -81,11 +84,11 @@ describe('Separare Preț vs Cantitate, Validare Pre-Publicare și Audit Administ
         unitPriceMeasure: 'lei/l',
         isPromo: false,
         loyaltyCardRequired: false,
-        observationDate: '2026-11-15',
+        observationDate: recentDate,
         source: 'verified',
         confidenceLevel: 'high',
         verificationStatus: 'pending',
-        lastChecked: '2026-11-15T10:00:00Z'
+        lastChecked: recentIso
       },
       {
         id: 'off-test-ccm-isolated',
@@ -96,13 +99,13 @@ describe('Separare Preț vs Cantitate, Validare Pre-Publicare și Audit Administ
         unitPriceMeasure: 'lei/buc',
         isPromo: false,
         loyaltyCardRequired: false,
-        observationDate: '2026-11-15',
+        observationDate: recentDate,
         source: 'verified',
         confidenceLevel: 'low',
         verificationStatus: 'isolated',
         isFlaggedAnomaly: true,
         anomalyReason: 'Text extras din raport sustenabilitate CCM / Taxonomie UE.',
-        lastChecked: '2026-11-15T10:00:00Z'
+        lastChecked: recentIso
       },
       {
         id: 'off-test-amigo-valid',
@@ -113,11 +116,11 @@ describe('Separare Preț vs Cantitate, Validare Pre-Publicare și Audit Administ
         unitPriceMeasure: 'lei/kg',
         isPromo: false,
         loyaltyCardRequired: false,
-        observationDate: '2026-11-15',
+        observationDate: recentDate,
         source: 'verified',
         confidenceLevel: 'high',
         verificationStatus: 'verified',
-        lastChecked: '2026-11-15T10:00:00Z'
+        lastChecked: recentIso
       },
       {
         id: 'off-test-pulpe-valid',
@@ -128,11 +131,11 @@ describe('Separare Preț vs Cantitate, Validare Pre-Publicare și Audit Administ
         unitPriceMeasure: 'lei/kg',
         isPromo: true,
         loyaltyCardRequired: false,
-        observationDate: '2026-11-15',
+        observationDate: recentDate,
         source: 'verified',
         confidenceLevel: 'high',
         verificationStatus: 'verified',
-        lastChecked: '2026-11-15T10:00:00Z'
+        lastChecked: recentIso
       }
     ];
 

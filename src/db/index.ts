@@ -45,7 +45,11 @@ export function getServerSupabaseClient(): SupabaseClient {
   if (!serviceRoleKey) {
     return anonSupabase;
   }
-  const url = process.env.VITE_SUPABASE_URL?.trim() || 'https://bwanbgbimktluajvwzsj.supabase.co';
+  const url =
+    process.env.SUPABASE_URL?.trim() ||
+    process.env.VITE_SUPABASE_URL?.trim() ||
+    process.env.NEXT_PUBLIC_cosulmeuSUPABASE_URL?.trim() ||
+    'https://bwanbgbimktluajvwzsj.supabase.co';
   if (!_serverSupabaseClient || _serverSupabaseKeyUsed !== serviceRoleKey) {
     _serverSupabaseKeyUsed = serviceRoleKey;
     _serverSupabaseClient = createClient(url, serviceRoleKey, {
@@ -1068,6 +1072,10 @@ export class DatabaseService {
 
   // --- STORES ---
   static async getStores(): Promise<Store[]> {
+    if (process.env.COSUL_MEU_ISOLATED_TEST === '1') {
+      return STORES;
+    }
+
     const normalizeStoreKey = (value: string): string =>
       value.toLowerCase().replace(/^store-/, '').replace(/-chain$/, '').trim();
 

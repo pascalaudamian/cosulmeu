@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "bun@1.4.4",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
@@ -10,7 +14,10 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/receipt-validator.test.ts && tsx tests/calc.test.ts && tsx tests/sources.test.ts && tsx tests/e2e-import.test.ts && tsx tests/security.test.ts && tsx tests/database.test.ts && tsx tests/indexing.test.ts && tsx tests/indexer-scheduler.test.ts && tsx tests/scraping-discovery.test.ts && tsx tests/price-quality-monitor.test.ts && tsx tests/products-catalog.test.ts && tsx tests/acceptance-audit.test.ts && tsx tests/catalog-importer.test.ts && tsx tests/incremental-sync.test.ts && tsx tests/user-profiles.test.ts && tsx tests/admin-dashboard.test.ts && tsx tests/scheduler-compatibility.test.ts && tsx tests/product-identity.test.ts && tsx tests/staging-publish-flow.test.ts && tsx tests/v1-roadmap.test.ts && tsx tests/basket-optimizer-complete.test.ts && tsx tests/price-comparator-audit.test.ts && tsx tests/faza0-canonical-integrity.test.ts && tsx tests/faza1a-normalization-audit.test.ts && tsx tests/faza1b-shadow-matching.test.ts && tsx tests/faza2-human-review.test.ts"
+    "test:node": "NODE_ENV=test tsx --test tests/faza8-v1-e2e-validation.test.ts tests/faza7-security-hardening.test.ts tests/faza7-1-security-closure.test.ts tests/faza10-predeployment.test.ts tests/price-quantity-separation.test.ts tests/gdpr-cookie-consent.test.ts tests/legal-routes.test.ts",
+    "test:v1": "NODE_ENV=test tsx tests/faza0-canonical-integrity.test.ts && tsx tests/faza1a-normalization-audit.test.ts && tsx tests/faza1b-shadow-matching.test.ts && tsx tests/faza2-human-review.test.ts && tsx tests/faza21-single-store-optimizer.test.ts && tsx tests/faza22-multi-store-optimizer.test.ts && tsx tests/faza31-price-history.test.ts && tsx tests/faza32-price-quality.test.ts && tsx tests/faza4-price-alerts.test.ts && tsx tests/faza5-price-quality-monitoring.test.ts && tsx tests/faza6-ux-ui-design-system.test.ts && tsx tests/v1-roadmap.test.ts && tsx tests/security.test.ts && tsx tests/basket-optimizer-complete.test.ts && tsx tests/price-comparator-audit.test.ts && tsx tests/price-history-alerts.test.ts",
+    "test:live-pg": "node -e \"if (!process.env.DATABASE_URL && !process.env.SUPABASE_DB_URL) { console.log('[SKIP LIVE PG] DATABASE_URL/SUPABASE_DB_URL nu este configurat; testele live PostgreSQL sunt raportate separat și nu se execută fără staging DB.'); process.exit(0); }\" && ( [ -z \"$DATABASE_URL\" ] && [ -z \"$SUPABASE_DB_URL\" ] || (NODE_ENV=test tsx --test tests/faza7-1-security-closure.test.ts && tsx tests/database.test.ts) )",
+    "test": "bun run test:node && bun run test:v1"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
